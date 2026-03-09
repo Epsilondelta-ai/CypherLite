@@ -153,11 +153,12 @@ mod tests {
     // REQ-STORE-011: Float64
     #[test]
     fn test_serialize_float64() {
-        let (tag, bytes) = PropertyStore::serialize_value(&PropertyValue::Float64(3.14));
+        let test_val = 1.5_f64; // Use exact f64 representation to avoid approx_constant lint
+        let (tag, bytes) = PropertyStore::serialize_value(&PropertyValue::Float64(test_val));
         assert_eq!(tag, 3);
         assert_eq!(bytes.len(), 8);
         let val = PropertyStore::deserialize_value(tag, &bytes).expect("deser");
-        assert_eq!(val, PropertyValue::Float64(3.14));
+        assert_eq!(val, PropertyValue::Float64(test_val));
     }
 
     // REQ-STORE-011: String
@@ -197,7 +198,7 @@ mod tests {
         assert!(PropertyStore::is_inline(&PropertyValue::Null));
         assert!(PropertyStore::is_inline(&PropertyValue::Bool(true)));
         assert!(PropertyStore::is_inline(&PropertyValue::Int64(42)));
-        assert!(PropertyStore::is_inline(&PropertyValue::Float64(3.14)));
+        assert!(PropertyStore::is_inline(&PropertyValue::Float64(1.5_f64)));
         assert!(PropertyStore::is_inline(&PropertyValue::String(
             "short".into()
         )));

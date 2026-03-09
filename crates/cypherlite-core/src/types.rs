@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(PropertyValue::Null.type_tag(), 0);
         assert_eq!(PropertyValue::Bool(true).type_tag(), 1);
         assert_eq!(PropertyValue::Int64(42).type_tag(), 2);
-        assert_eq!(PropertyValue::Float64(3.14).type_tag(), 3);
+        assert_eq!(PropertyValue::Float64(1.5_f64).type_tag(), 3);
         assert_eq!(PropertyValue::String("hello".into()).type_tag(), 4);
         assert_eq!(PropertyValue::Bytes(vec![1, 2, 3]).type_tag(), 5);
         assert_eq!(PropertyValue::Array(vec![]).type_tag(), 6);
@@ -225,7 +225,7 @@ mod tests {
             PropertyValue::Null,
             PropertyValue::Bool(true),
             PropertyValue::Int64(-999),
-            PropertyValue::Float64(2.718),
+            PropertyValue::Float64(2.5_f64),
             PropertyValue::String("test".into()),
             PropertyValue::Bytes(vec![0xDE, 0xAD]),
             PropertyValue::Array(vec![PropertyValue::Int64(1), PropertyValue::Null]),

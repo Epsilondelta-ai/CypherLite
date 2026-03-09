@@ -11,5 +11,4 @@
 - Phase 2.9 complete: @MX tags (1 WARN, 1 ANCHOR, 2 NOTE)
 - Phase 2.10 complete: simplify (BufferPool fix_swapped_frame helper, PropertyStore deser fix, WalReader is_none_or)
 - Phase 3 complete: git init, branch=feature/SPEC-DB-001-storage-engine, commit=c3d48f6
-- Phase 4 (sync): SPEC status updated to completed, dependency versions corrected (dashmap 6, thiserror 2, MSRV 1.84+), Implementation Notes added, clippy fixes applied (3 approx_constant warnings resolved), coverage 96.82%
-- Status: DONE (sync complete 2026-03-10)
+- Status: DONE

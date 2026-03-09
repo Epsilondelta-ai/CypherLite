@@ -148,7 +148,7 @@ fn test_all_property_types() {
             (0, PropertyValue::Null),
             (1, PropertyValue::Bool(true)),
             (2, PropertyValue::Int64(-42)),
-            (3, PropertyValue::Float64(3.14)),
+            (3, PropertyValue::Float64(1.5_f64)),
             (4, PropertyValue::String("hello".into())),
             (5, PropertyValue::Bytes(vec![0xDE, 0xAD])),
             (

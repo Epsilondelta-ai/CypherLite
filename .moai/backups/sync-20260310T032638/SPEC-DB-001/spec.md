@@ -1,7 +1,7 @@
 ---
 id: SPEC-DB-001
 version: "1.0.0"
-status: completed
+status: draft
 created: "2026-03-10"
 updated: "2026-03-10"
 author: epsilondelta
@@ -52,9 +52,9 @@ lifecycle: spec-anchored
 |----------|------|------|
 | `parking_lot` | 0.12 | RwLock, Mutex |
 | `crossbeam` | 0.8 | 채널, 동시성 유틸리티 |
-| `dashmap` | 6 | WAL 인덱스용 동시 해시맵 (spec v5에서 업그레이드, 성능 개선) |
+| `dashmap` | 5 | WAL 인덱스용 동시 해시맵 |
 | `bincode` | 1 | 이진 직렬화 |
-| `thiserror` | 2 | 에러 타입 정의 (spec v1에서 업그레이드) |
+| `thiserror` | 1 | 에러 타입 정의 |
 | `tempfile` | 3 | 테스트용 임시 파일 |
 | `criterion` | 0.5 | 벤치마크 |
 | `proptest` | 1 | 속성 기반 테스트 |
@@ -281,45 +281,3 @@ lifecycle: spec-anchored
 | REQ-STORE-* | `cypherlite-storage::btree` | `tests/unit/btree_tests.rs`, `tests/integration/crud_tests.rs` |
 | REQ-WAL-* | `cypherlite-storage::wal` | `tests/unit/wal_tests.rs`, `tests/integration/recovery_tests.rs` |
 | REQ-TX-* | `cypherlite-storage::transaction` | `tests/integration/acid_compliance.rs` |
-
----
-
-## 5. Implementation Notes
-
-### 5.1 Dependency Divergence from Original Spec
-
-The following dependency versions were changed during the strategy review phase (Phase 1, manager-strategy):
-
-| Dependency | Spec Version | Actual Version | Reason |
-|------------|-------------|----------------|--------|
-| `dashmap` | 5 | 6 | Performance improvements in v6; API-compatible upgrade |
-| `thiserror` | 1 | 2 | Cleaner derive macro in v2; no breaking changes for this usage |
-
-**MSRV**: Rust 1.84+ (original spec stated Rust 1.70+). The actual implementation uses features available in 1.84+ (e.g., `Option::is_none_or`). The minimum supported Rust version was updated during Phase 2B (TDD implementation).
-
-### 5.2 Implementation Status
-
-- **Total tests**: 207 (36 unit in cypherlite-core, 146 unit in cypherlite-storage, 25 integration)
-- **Test coverage**: 96.82% line coverage (target: 85%)
-- **TRUST 5**: All gates passed (Tested, Readable, Unified, Secured, Trackable)
-- **MSRV**: Rust 1.84+
-
-### 5.3 MX Annotations
-
-| Tag | File | Description |
-|-----|------|-------------|
-| `@MX:WARN` | `src/transaction/mvcc.rs:48` | Uses unsafe transmute to extend MutexGuard lifetime to 'static |
-| `@MX:ANCHOR` | `src/wal/checkpoint.rs:13` | Critical data-integrity path: WAL -> main file flush |
-| `@MX:NOTE` | `src/wal/recovery.rs:15` | Recovery resets the WAL after replay |
-| `@MX:NOTE` | `src/wal/mod.rs:115` | Checksum is wrapping-add of frame_number, page_number, db_size |
-
-### 5.4 I/O Model
-
-Synchronous I/O (no async/await) was chosen, following SQLite's single-process embedded model. This decision was approved during strategy review to minimize complexity while meeting Phase 1 performance targets.
-
-### 5.5 Simplifications Applied (Phase 2.10)
-
-During the simplify phase, the following improvements were applied:
-- `BufferPool`: extracted `fix_swapped_frame` helper to reduce code duplication
-- `PropertyStore`: fixed deserialization edge case
-- `WalReader`: used `Option::is_none_or` for cleaner conditional logic
