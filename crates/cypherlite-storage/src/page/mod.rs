@@ -1,0 +1,260 @@
+pub mod buffer_pool;
+pub mod page_manager;
+
+/// Page size constant: 4096 bytes.
+pub const PAGE_SIZE: usize = 4096;
+
+/// Magic bytes for CypherLite database files: "CYLT" (0x43594C54).
+pub const MAGIC: u32 = 0x4359_4C54;
+
+/// Current database format version.
+pub const FORMAT_VERSION: u32 = 1;
+
+/// Header page is always at page 0.
+pub const HEADER_PAGE_ID: u32 = 0;
+
+/// Free Space Map is always at page 1.
+pub const FSM_PAGE_ID: u32 = 1;
+
+/// First data page index.
+pub const FIRST_DATA_PAGE: u32 = 2;
+
+/// Maximum pages trackable by a single FSM page (4096 * 8 bits).
+pub const FSM_MAX_PAGES: u32 = PAGE_SIZE as u32 * 8;
+
+/// Types of pages in the database file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PageType {
+    Header = 0,
+    FreeSpaceMap = 1,
+    BTreeInterior = 2,
+    BTreeLeaf = 3,
+    Overflow = 4,
+    Data = 5,
+}
+
+/// 32-byte header at the start of each data page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageHeader {
+    pub page_type: u8,
+    pub flags: u8,
+    pub free_start: u16,
+    pub free_end: u16,
+    pub overflow_page: u32,
+    pub item_count: u16,
+    // Remaining bytes pad to 32 bytes total
+    pub _reserved: [u8; 20],
+}
+
+impl PageHeader {
+    /// Size of the page header in bytes.
+    pub const SIZE: usize = 32;
+
+    /// Creates a new page header with the given type.
+    pub fn new(page_type: PageType) -> Self {
+        Self {
+            page_type: page_type as u8,
+            flags: 0,
+            free_start: Self::SIZE as u16,
+            free_end: PAGE_SIZE as u16,
+            overflow_page: 0,
+            item_count: 0,
+            _reserved: [0u8; 20],
+        }
+    }
+
+    /// Serialize page header into the first 32 bytes of a buffer.
+    pub fn write_to(&self, buf: &mut [u8]) {
+        debug_assert!(buf.len() >= Self::SIZE);
+        buf[0] = self.page_type;
+        buf[1] = self.flags;
+        buf[2..4].copy_from_slice(&self.free_start.to_le_bytes());
+        buf[4..6].copy_from_slice(&self.free_end.to_le_bytes());
+        buf[6..10].copy_from_slice(&self.overflow_page.to_le_bytes());
+        buf[10..12].copy_from_slice(&self.item_count.to_le_bytes());
+        buf[12..32].copy_from_slice(&self._reserved);
+    }
+
+    /// Deserialize page header from the first 32 bytes of a buffer.
+    pub fn read_from(buf: &[u8]) -> Self {
+        debug_assert!(buf.len() >= Self::SIZE);
+        let mut reserved = [0u8; 20];
+        reserved.copy_from_slice(&buf[12..32]);
+        Self {
+            page_type: buf[0],
+            flags: buf[1],
+            free_start: u16::from_le_bytes([buf[2], buf[3]]),
+            free_end: u16::from_le_bytes([buf[4], buf[5]]),
+            overflow_page: u32::from_le_bytes([buf[6], buf[7], buf[8], buf[9]]),
+            item_count: u16::from_le_bytes([buf[10], buf[11]]),
+            _reserved: reserved,
+        }
+    }
+}
+
+/// Database file header stored at page 0.
+#[derive(Debug, Clone)]
+pub struct DatabaseHeader {
+    pub magic: u32,
+    pub version: u32,
+    pub page_count: u32,
+    pub root_node_page: u32,
+    pub root_edge_page: u32,
+    pub next_node_id: u64,
+    pub next_edge_id: u64,
+}
+
+impl DatabaseHeader {
+    pub fn new() -> Self {
+        Self {
+            magic: MAGIC,
+            version: FORMAT_VERSION,
+            page_count: FIRST_DATA_PAGE,
+            root_node_page: 0,
+            root_edge_page: 0,
+            next_node_id: 1,
+            next_edge_id: 1,
+        }
+    }
+
+    /// Serialize the database header into a 4096-byte page.
+    pub fn to_page(&self) -> [u8; PAGE_SIZE] {
+        let mut page = [0u8; PAGE_SIZE];
+        page[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        page[4..8].copy_from_slice(&self.version.to_le_bytes());
+        page[8..12].copy_from_slice(&self.page_count.to_le_bytes());
+        page[12..16].copy_from_slice(&self.root_node_page.to_le_bytes());
+        page[16..20].copy_from_slice(&self.root_edge_page.to_le_bytes());
+        page[20..28].copy_from_slice(&self.next_node_id.to_le_bytes());
+        page[28..36].copy_from_slice(&self.next_edge_id.to_le_bytes());
+        page
+    }
+
+    /// Deserialize the database header from a 4096-byte page.
+    pub fn from_page(page: &[u8; PAGE_SIZE]) -> Self {
+        Self {
+            magic: u32::from_le_bytes([page[0], page[1], page[2], page[3]]),
+            version: u32::from_le_bytes([page[4], page[5], page[6], page[7]]),
+            page_count: u32::from_le_bytes([page[8], page[9], page[10], page[11]]),
+            root_node_page: u32::from_le_bytes([page[12], page[13], page[14], page[15]]),
+            root_edge_page: u32::from_le_bytes([page[16], page[17], page[18], page[19]]),
+            next_node_id: u64::from_le_bytes([
+                page[20], page[21], page[22], page[23], page[24], page[25], page[26], page[27],
+            ]),
+            next_edge_id: u64::from_le_bytes([
+                page[28], page[29], page[30], page[31], page[32], page[33], page[34], page[35],
+            ]),
+        }
+    }
+}
+
+impl Default for DatabaseHeader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // REQ-PAGE-001: 4KB page size
+    #[test]
+    fn test_page_size_is_4096() {
+        assert_eq!(PAGE_SIZE, 4096);
+    }
+
+    // REQ-PAGE-002: Magic is CYLT (0x43594C54)
+    #[test]
+    fn test_magic_bytes() {
+        assert_eq!(MAGIC, 0x4359_4C54);
+        let bytes = MAGIC.to_be_bytes();
+        assert_eq!(&bytes, b"CYLT");
+    }
+
+    // REQ-PAGE-002: Header at page 0
+    #[test]
+    fn test_header_page_id_is_zero() {
+        assert_eq!(HEADER_PAGE_ID, 0);
+    }
+
+    // REQ-PAGE-003: FSM at page 1
+    #[test]
+    fn test_fsm_page_id_is_one() {
+        assert_eq!(FSM_PAGE_ID, 1);
+    }
+
+    // REQ-PAGE-006: PageHeader is 32 bytes
+    #[test]
+    fn test_page_header_size_is_32() {
+        assert_eq!(PageHeader::SIZE, 32);
+    }
+
+    #[test]
+    fn test_page_header_new() {
+        let hdr = PageHeader::new(PageType::BTreeLeaf);
+        assert_eq!(hdr.page_type, PageType::BTreeLeaf as u8);
+        assert_eq!(hdr.free_start, 32);
+        assert_eq!(hdr.free_end, 4096);
+        assert_eq!(hdr.item_count, 0);
+    }
+
+    #[test]
+    fn test_page_header_roundtrip() {
+        let hdr = PageHeader::new(PageType::BTreeInterior);
+        let mut buf = [0u8; PAGE_SIZE];
+        hdr.write_to(&mut buf);
+        let decoded = PageHeader::read_from(&buf);
+        assert_eq!(hdr, decoded);
+    }
+
+    // REQ-PAGE-002: DatabaseHeader contains magic, version, root pointer, page count
+    #[test]
+    fn test_database_header_new() {
+        let hdr = DatabaseHeader::new();
+        assert_eq!(hdr.magic, MAGIC);
+        assert_eq!(hdr.version, FORMAT_VERSION);
+        assert_eq!(hdr.page_count, FIRST_DATA_PAGE);
+        assert_eq!(hdr.next_node_id, 1);
+        assert_eq!(hdr.next_edge_id, 1);
+    }
+
+    #[test]
+    fn test_database_header_roundtrip() {
+        let hdr = DatabaseHeader {
+            magic: MAGIC,
+            version: FORMAT_VERSION,
+            page_count: 100,
+            root_node_page: 5,
+            root_edge_page: 10,
+            next_node_id: 42,
+            next_edge_id: 99,
+        };
+        let page = hdr.to_page();
+        let decoded = DatabaseHeader::from_page(&page);
+        assert_eq!(decoded.magic, MAGIC);
+        assert_eq!(decoded.version, FORMAT_VERSION);
+        assert_eq!(decoded.page_count, 100);
+        assert_eq!(decoded.root_node_page, 5);
+        assert_eq!(decoded.root_edge_page, 10);
+        assert_eq!(decoded.next_node_id, 42);
+        assert_eq!(decoded.next_edge_id, 99);
+    }
+
+    // REQ-PAGE-003: FSM bitmap can track 32768 pages
+    #[test]
+    fn test_fsm_max_pages() {
+        assert_eq!(FSM_MAX_PAGES, 32768);
+    }
+
+    #[test]
+    fn test_page_type_variants() {
+        assert_eq!(PageType::Header as u8, 0);
+        assert_eq!(PageType::FreeSpaceMap as u8, 1);
+        assert_eq!(PageType::BTreeInterior as u8, 2);
+        assert_eq!(PageType::BTreeLeaf as u8, 3);
+        assert_eq!(PageType::Overflow as u8, 4);
+        assert_eq!(PageType::Data as u8, 5);
+    }
+}
