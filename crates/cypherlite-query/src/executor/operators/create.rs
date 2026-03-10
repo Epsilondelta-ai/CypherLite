@@ -318,6 +318,8 @@ mod tests {
                         rel_types: vec!["KNOWS".to_string()],
                         direction: RelDirection::Outgoing,
                         properties: None,
+                        min_hops: None,
+                        max_hops: None,
                     }),
                     PatternElement::Node(NodePattern {
                         variable: Some("b".to_string()),
@@ -362,6 +364,8 @@ mod tests {
                         rel_types: vec!["KNOWS".to_string()],
                         direction: RelDirection::Outgoing,
                         properties: None,
+                        min_hops: None,
+                        max_hops: None,
                     }),
                     PatternElement::Node(NodePattern {
                         variable: Some("b".to_string()),

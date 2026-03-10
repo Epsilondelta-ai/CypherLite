@@ -287,6 +287,29 @@ pub fn execute(
 
             Ok(vec![])
         }
+        LogicalPlan::VarLengthExpand {
+            source,
+            src_var,
+            rel_var,
+            target_var,
+            rel_type_id,
+            direction,
+            min_hops,
+            max_hops,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            Ok(operators::var_length_expand::execute_var_length_expand(
+                source_records,
+                src_var,
+                rel_var.as_deref(),
+                target_var,
+                *rel_type_id,
+                direction,
+                *min_hops,
+                *max_hops,
+                engine,
+            ))
+        }
         LogicalPlan::OptionalExpand {
             source,
             src_var,

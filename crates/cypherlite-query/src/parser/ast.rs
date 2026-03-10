@@ -154,6 +154,10 @@ pub struct RelationshipPattern {
     pub rel_types: Vec<String>,
     pub direction: RelDirection,
     pub properties: Option<MapLiteral>,
+    /// Minimum hops for variable-length paths. None means regular 1-hop.
+    pub min_hops: Option<u32>,
+    /// Maximum hops for variable-length paths. None means unbounded (capped by planner).
+    pub max_hops: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

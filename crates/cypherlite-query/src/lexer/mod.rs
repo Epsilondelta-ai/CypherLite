@@ -195,6 +195,8 @@ pub enum Token {
     RBrace,
     #[token(":")]
     Colon,
+    #[token("..")]
+    DoubleDot,
     #[token(".")]
     Dot,
     #[token(",")]
@@ -547,6 +549,41 @@ mod tests {
                 Token::Dot,
                 Token::Comma,
                 Token::Pipe,
+            ]
+        );
+    }
+
+    // ---- TASK-102: DoubleDot token ----------------------------------------
+
+    #[test]
+    fn lex_double_dot() {
+        let toks = tokens("..");
+        assert_eq!(toks, vec![Token::DoubleDot]);
+    }
+
+    #[test]
+    fn lex_double_dot_in_var_length() {
+        let toks = tokens("*1..3");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Star,
+                Token::Integer(1),
+                Token::DoubleDot,
+                Token::Integer(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_single_dot_still_works() {
+        let toks = tokens("n.name");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Ident("n".to_string()),
+                Token::Dot,
+                Token::Ident("name".to_string()),
             ]
         );
     }

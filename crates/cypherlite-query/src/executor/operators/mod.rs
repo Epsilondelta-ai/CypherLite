@@ -12,4 +12,5 @@ pub mod set_props;
 pub mod sort;
 pub mod optional_expand;
 pub mod unwind;
+pub mod var_length_expand;
 pub mod with;

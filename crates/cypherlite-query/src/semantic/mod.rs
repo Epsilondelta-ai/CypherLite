@@ -289,6 +289,29 @@ impl<'a> SemanticAnalyzer<'a> {
         for rt in &rel.rel_types {
             self.registry.get_or_create_rel_type(rt);
         }
+        // Validate variable-length path bounds.
+        if let (Some(min), Some(max)) = (rel.min_hops, rel.max_hops) {
+            if max < min {
+                return Err(SemanticError {
+                    message: format!(
+                        "max_hops ({}) must be >= min_hops ({})",
+                        max, min
+                    ),
+                });
+            }
+        }
+        // Configurable max hop limit (default 10).
+        const MAX_HOP_LIMIT: u32 = 10;
+        if let Some(max) = rel.max_hops {
+            if max > MAX_HOP_LIMIT {
+                return Err(SemanticError {
+                    message: format!(
+                        "max_hops ({}) exceeds configurable limit ({})",
+                        max, MAX_HOP_LIMIT
+                    ),
+                });
+            }
+        }
         // Resolve property keys in map literal.
         if let Some(ref props) = rel.properties {
             for (key, value) in props {
@@ -426,6 +449,8 @@ mod tests {
             rel_types: types.iter().map(|s| s.to_string()).collect(),
             direction: dir,
             properties: props,
+            min_hops: None,
+            max_hops: None,
         })
     }
 
@@ -1232,5 +1257,163 @@ mod tests {
             message: "test error".to_string(),
         };
         assert_eq!(format!("{}", err), "Semantic error: test error");
+    }
+
+    // -- TASK-103: Variable-length path semantic validation --
+
+    #[test]
+    fn test_var_length_path_valid() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &["Person"], None),
+                    rel(None, &["KNOWS"], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        // Modify the relationship to have variable-length
+        let mut q = query;
+        if let Clause::Match(ref mut mc) = q.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(1);
+                rp.max_hops = Some(3);
+            }
+        }
+        assert!(analyzer.analyze(&q).is_ok());
+    }
+
+    #[test]
+    fn test_var_length_path_max_less_than_min() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(5);
+                rp.max_hops = Some(2);
+            }
+        }
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("should fail")
+            .message
+            .contains("max_hops"));
+    }
+
+    #[test]
+    fn test_var_length_path_max_exceeds_limit() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(1);
+                rp.max_hops = Some(100);
+            }
+        }
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("should fail")
+            .message
+            .contains("exceeds"));
+    }
+
+    #[test]
+    fn test_var_length_path_unbounded_ok() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(1);
+                rp.max_hops = None; // unbounded is OK - planner will cap it
+            }
+        }
+        assert!(analyzer.analyze(&query).is_ok());
+    }
+
+    #[test]
+    fn test_var_length_path_min_zero_ok() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(0);
+                rp.max_hops = Some(1);
+            }
+        }
+        assert!(analyzer.analyze(&query).is_ok());
+    }
+
+    #[test]
+    fn test_var_length_path_equal_min_max_ok() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(3);
+                rp.max_hops = Some(3);
+            }
+        }
+        assert!(analyzer.analyze(&query).is_ok());
     }
 }

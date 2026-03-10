@@ -116,6 +116,17 @@ pub enum LogicalPlan {
     DropIndex {
         name: String,
     },
+    /// Variable-length path expansion (BFS/DFS traversal with depth bounds).
+    VarLengthExpand {
+        source: Box<LogicalPlan>,
+        src_var: String,
+        rel_var: Option<String>,
+        target_var: String,
+        rel_type_id: Option<u32>,
+        direction: RelDirection,
+        min_hops: u32,
+        max_hops: u32,
+    },
 }
 
 /// Supported aggregate functions.
@@ -138,6 +149,9 @@ impl std::fmt::Display for PlanError {
 }
 
 impl std::error::Error for PlanError {}
+
+/// Default maximum hops for unbounded variable-length paths.
+pub const DEFAULT_MAX_HOPS: u32 = 10;
 
 /// Logical planner that converts a parsed Query AST into a LogicalPlan tree.
 pub struct LogicalPlanner<'a> {
@@ -358,14 +372,30 @@ impl<'a> LogicalPlanner<'a> {
                 .first()
                 .map(|name| self.registry.get_or_create_rel_type(name));
 
-            plan = LogicalPlan::Expand {
-                source: Box::new(plan),
-                src_var,
-                rel_var,
-                target_var,
-                rel_type_id,
-                direction: rel.direction,
-            };
+            if rel.min_hops.is_some() {
+                // Variable-length path: use VarLengthExpand
+                let min = rel.min_hops.unwrap_or(1);
+                let max = rel.max_hops.unwrap_or(DEFAULT_MAX_HOPS);
+                plan = LogicalPlan::VarLengthExpand {
+                    source: Box::new(plan),
+                    src_var,
+                    rel_var,
+                    target_var,
+                    rel_type_id,
+                    direction: rel.direction,
+                    min_hops: min,
+                    max_hops: max,
+                };
+            } else {
+                plan = LogicalPlan::Expand {
+                    source: Box::new(plan),
+                    src_var,
+                    rel_var,
+                    target_var,
+                    rel_type_id,
+                    direction: rel.direction,
+                };
+            }
         }
 
         Ok(plan)
@@ -376,6 +406,7 @@ impl<'a> LogicalPlanner<'a> {
         match plan {
             LogicalPlan::NodeScan { variable, .. } => variable.clone(),
             LogicalPlan::Expand { target_var, .. } => target_var.clone(),
+            LogicalPlan::VarLengthExpand { target_var, .. } => target_var.clone(),
             LogicalPlan::OptionalExpand { target_var, .. } => target_var.clone(),
             LogicalPlan::Filter { source, .. } => Self::extract_src_var(source),
             _ => String::new(),
@@ -1315,6 +1346,138 @@ mod tests {
                 assert_eq!(target_var, "b");
             }
             other => panic!("expected OptionalExpand, got {:?}", other),
+        }
+    }
+
+    // -- TASK-104/105: VarLengthExpand planner tests --
+
+    #[test]
+    fn test_plan_var_length_bounded() {
+        let plan = plan_query("MATCH (a)-[*1..3]->(b) RETURN b");
+        // Outermost: Project wrapping VarLengthExpand
+        match &plan {
+            LogicalPlan::Project { source, .. } => match source.as_ref() {
+                LogicalPlan::VarLengthExpand {
+                    src_var,
+                    target_var,
+                    min_hops,
+                    max_hops,
+                    ..
+                } => {
+                    assert_eq!(src_var, "a");
+                    assert_eq!(target_var, "b");
+                    assert_eq!(*min_hops, 1);
+                    assert_eq!(*max_hops, 3);
+                }
+                other => panic!("expected VarLengthExpand, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_var_length_unbounded_gets_default_max() {
+        let plan = plan_query("MATCH (a)-[*]->(b) RETURN b");
+        match &plan {
+            LogicalPlan::Project { source, .. } => match source.as_ref() {
+                LogicalPlan::VarLengthExpand {
+                    min_hops, max_hops, ..
+                } => {
+                    assert_eq!(*min_hops, 1);
+                    assert_eq!(*max_hops, DEFAULT_MAX_HOPS);
+                }
+                other => panic!("expected VarLengthExpand, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_var_length_typed() {
+        let (plan, catalog) = plan_query_with_catalog("MATCH (a)-[:KNOWS*2..4]->(b) RETURN b");
+        let knows_id = catalog.rel_type_id("KNOWS").expect("KNOWS exists");
+        match &plan {
+            LogicalPlan::Project { source, .. } => match source.as_ref() {
+                LogicalPlan::VarLengthExpand {
+                    rel_type_id,
+                    min_hops,
+                    max_hops,
+                    ..
+                } => {
+                    assert_eq!(*rel_type_id, Some(knows_id));
+                    assert_eq!(*min_hops, 2);
+                    assert_eq!(*max_hops, 4);
+                }
+                other => panic!("expected VarLengthExpand, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_regular_expand_unchanged() {
+        let plan = plan_query("MATCH (a)-[:KNOWS]->(b) RETURN b");
+        match &plan {
+            LogicalPlan::Project { source, .. } => match source.as_ref() {
+                LogicalPlan::Expand { .. } => {} // Regular expand, not VarLengthExpand
+                other => panic!("expected Expand, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_var_length_exact_hop() {
+        let plan = plan_query("MATCH (a)-[*2]->(b) RETURN b");
+        match &plan {
+            LogicalPlan::Project { source, .. } => match source.as_ref() {
+                LogicalPlan::VarLengthExpand {
+                    min_hops, max_hops, ..
+                } => {
+                    assert_eq!(*min_hops, 2);
+                    assert_eq!(*max_hops, 2);
+                }
+                other => panic!("expected VarLengthExpand, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_var_length_open_end_gets_default() {
+        let plan = plan_query("MATCH (a)-[*3..]->(b) RETURN b");
+        match &plan {
+            LogicalPlan::Project { source, .. } => match source.as_ref() {
+                LogicalPlan::VarLengthExpand {
+                    min_hops, max_hops, ..
+                } => {
+                    assert_eq!(*min_hops, 3);
+                    assert_eq!(*max_hops, DEFAULT_MAX_HOPS);
+                }
+                other => panic!("expected VarLengthExpand, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_var_length_with_variable() {
+        let plan = plan_query("MATCH (a)-[r:KNOWS*1..2]->(b) RETURN b");
+        match &plan {
+            LogicalPlan::Project { source, .. } => match source.as_ref() {
+                LogicalPlan::VarLengthExpand {
+                    rel_var,
+                    min_hops,
+                    max_hops,
+                    ..
+                } => {
+                    assert_eq!(*rel_var, Some("r".to_string()));
+                    assert_eq!(*min_hops, 1);
+                    assert_eq!(*max_hops, 2);
+                }
+                other => panic!("expected VarLengthExpand, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
         }
     }
 }
