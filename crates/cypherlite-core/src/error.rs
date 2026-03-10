@@ -32,6 +32,25 @@ pub enum CypherLiteError {
 
     #[error("Edge not found: {0}")]
     EdgeNotFound(u64),
+
+    #[error("Parse error at line {line}, column {column}: {message}")]
+    ParseError {
+        line: usize,
+        column: usize,
+        message: String,
+    },
+
+    #[error("Semantic error: {0}")]
+    SemanticError(String),
+
+    #[error("Execution error: {0}")]
+    ExecutionError(String),
+
+    #[error("Unsupported syntax: {0}")]
+    UnsupportedSyntax(String),
+
+    #[error("Constraint violation: {0}")]
+    ConstraintViolation(String),
 }
 
 /// Convenience type alias for CypherLite operations.
@@ -126,5 +145,50 @@ mod tests {
     fn test_edge_not_found_error() {
         let err = CypherLiteError::EdgeNotFound(99);
         assert_eq!(format!("{err}"), "Edge not found: 99");
+    }
+
+    // REQ-QUERY-001: Parse error with location
+    #[test]
+    fn test_parse_error() {
+        let err = CypherLiteError::ParseError {
+            line: 3,
+            column: 10,
+            message: "unexpected token".to_string(),
+        };
+        assert_eq!(
+            format!("{err}"),
+            "Parse error at line 3, column 10: unexpected token"
+        );
+    }
+
+    // REQ-QUERY-002: Semantic error
+    #[test]
+    fn test_semantic_error() {
+        let err = CypherLiteError::SemanticError("unknown label".to_string());
+        assert_eq!(format!("{err}"), "Semantic error: unknown label");
+    }
+
+    // REQ-QUERY-003: Execution error
+    #[test]
+    fn test_execution_error() {
+        let err = CypherLiteError::ExecutionError("division by zero".to_string());
+        assert_eq!(format!("{err}"), "Execution error: division by zero");
+    }
+
+    // REQ-QUERY-004: Unsupported syntax
+    #[test]
+    fn test_unsupported_syntax_error() {
+        let err = CypherLiteError::UnsupportedSyntax("MERGE".to_string());
+        assert_eq!(format!("{err}"), "Unsupported syntax: MERGE");
+    }
+
+    // REQ-QUERY-005: Constraint violation
+    #[test]
+    fn test_constraint_violation_error() {
+        let err = CypherLiteError::ConstraintViolation("unique key violated".to_string());
+        assert_eq!(
+            format!("{err}"),
+            "Constraint violation: unique key violated"
+        );
     }
 }

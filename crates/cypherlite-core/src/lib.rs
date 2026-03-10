@@ -5,5 +5,5 @@ pub mod types;
 
 pub use config::{DatabaseConfig, SyncMode};
 pub use error::{CypherLiteError, Result};
-pub use traits::TransactionView;
+pub use traits::{LabelRegistry, TransactionView};
 pub use types::{Direction, EdgeId, NodeId, NodeRecord, PageId, PropertyValue, RelationshipRecord};
