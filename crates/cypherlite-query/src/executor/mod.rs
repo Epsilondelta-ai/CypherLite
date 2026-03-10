@@ -90,10 +90,16 @@ pub fn execute(
     match plan {
         LogicalPlan::EmptySource => Ok(vec![Record::new()]),
         LogicalPlan::NodeScan {
-            variable, label_id, ..
-        } => Ok(operators::node_scan::execute_node_scan(
-            variable, *label_id, engine,
-        )),
+            variable, label_id, limit, ..
+        } => {
+            let mut records = operators::node_scan::execute_node_scan(
+                variable, *label_id, engine,
+            );
+            if let Some(lim) = limit {
+                records.truncate(*lim);
+            }
+            Ok(records)
+        }
         LogicalPlan::Expand {
             source,
             src_var,
@@ -329,6 +335,19 @@ pub fn execute(
                 engine,
             ))
         }
+        LogicalPlan::IndexScan {
+            variable,
+            label_id,
+            prop_key,
+            lookup_value,
+        } => operators::index_scan::execute_index_scan(
+            variable,
+            *label_id,
+            prop_key,
+            lookup_value,
+            engine,
+            params,
+        ),
     }
 }
 

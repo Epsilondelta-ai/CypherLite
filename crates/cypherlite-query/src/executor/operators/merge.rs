@@ -1,10 +1,10 @@
 // MergeOp: MERGE clause execution (match-or-create with ON MATCH/ON CREATE SET)
 
 use crate::executor::eval::eval;
-use crate::executor::operators::create::{resolve_properties_mut};
+use crate::executor::operators::create::resolve_properties_mut;
 use crate::executor::{ExecutionError, Params, Record, Value};
 use crate::parser::ast::*;
-use cypherlite_core::{LabelRegistry, PropertyValue};
+use cypherlite_core::{LabelRegistry, NodeId, PropertyValue};
 use cypherlite_storage::StorageEngine;
 
 /// Execute a MERGE pattern: for each source record, try to find existing
@@ -76,7 +76,7 @@ fn merge_chain(
                 let props = resolve_find_properties(&np.properties, record, engine, params)?;
 
                 let found = if all_labels_exist && !label_ids.is_empty() {
-                    engine.find_node(&label_ids, &props)
+                    find_node_with_index(engine, &label_ids, &props)
                 } else if all_labels_exist && label_ids.is_empty() && !props.is_empty() {
                     // No labels but has properties - scan all nodes
                     engine.find_node(&[], &props)
@@ -161,7 +161,7 @@ fn merge_chain(
                         resolve_find_properties(&target_np.properties, record, engine, params)?;
 
                     let found_target = if all_target_labels_exist && !target_label_ids.is_empty() {
-                        engine.find_node(&target_label_ids, &target_props)
+                        find_node_with_index(engine, &target_label_ids, &target_props)
                     } else {
                         None
                     };
@@ -261,6 +261,47 @@ fn merge_chain(
     }
 
     Ok(any_created)
+}
+
+/// Find a node by labels and properties, using index if available.
+///
+/// For each property, checks if an index exists on (first_label, prop_key).
+/// If found, uses `scan_nodes_by_property` (which leverages the index) to narrow
+/// candidates, then verifies remaining labels and properties.
+/// Falls back to `find_node` (linear scan) when no index is available.
+fn find_node_with_index(
+    engine: &StorageEngine,
+    label_ids: &[u32],
+    properties: &[(u32, PropertyValue)],
+) -> Option<NodeId> {
+    if let Some(&first_label) = label_ids.first() {
+        // Try to use an index for any of the properties
+        for (prop_key_id, prop_value) in properties {
+            if engine.index_manager().find_index(first_label, *prop_key_id).is_some() {
+                // Index exists: use scan_nodes_by_property for fast lookup
+                let candidates = engine.scan_nodes_by_property(first_label, *prop_key_id, prop_value);
+                // Filter candidates by remaining labels and properties
+                for nid in candidates {
+                    if let Some(node) = engine.get_node(nid) {
+                        let has_all_labels = label_ids.iter().all(|lid| node.labels.contains(lid));
+                        if !has_all_labels {
+                            continue;
+                        }
+                        let has_all_props = properties.iter().all(|(key, val)| {
+                            node.properties.iter().any(|(k, v)| k == key && v == val)
+                        });
+                        if has_all_props {
+                            return Some(nid);
+                        }
+                    }
+                }
+                return None;
+            }
+        }
+    }
+
+    // Fallback to linear scan
+    engine.find_node(label_ids, properties)
 }
 
 /// Resolve properties for finding (read-only: use existing prop key IDs).
@@ -654,5 +695,181 @@ mod tests {
         )
         .expect("second merge");
         assert_eq!(engine.edge_count(), 1); // Still 1
+    }
+
+    // TASK-113: MERGE with index-assisted node lookup
+    #[test]
+    fn test_merge_uses_index_for_node_lookup() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let person_label = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        // Create a node
+        let n1 = engine.create_node(
+            vec![person_label],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+
+        // Create index on Person(name)
+        engine
+            .index_manager_mut()
+            .create_index("idx_person_name".into(), person_label, name_key)
+            .expect("create index");
+        // Backfill
+        if let Some(idx) = engine.index_manager_mut().find_index_mut(person_label, name_key) {
+            idx.insert(&PropertyValue::String("Alice".into()), n1);
+        }
+
+        // MERGE should find via index
+        let pattern = Pattern {
+            chains: vec![PatternChain {
+                elements: vec![PatternElement::Node(NodePattern {
+                    variable: Some("n".to_string()),
+                    labels: vec!["Person".to_string()],
+                    properties: Some(vec![(
+                        "name".to_string(),
+                        Expression::Literal(Literal::String("Alice".into())),
+                    )]),
+                })],
+            }],
+        };
+
+        let params = Params::new();
+        let records = execute_merge(
+            vec![Record::new()],
+            &pattern,
+            &[],
+            &[],
+            &mut engine,
+            &params,
+        )
+        .expect("merge");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(engine.node_count(), 1); // Should find, not create
+    }
+
+    // TASK-113: MERGE with index, node not in index
+    #[test]
+    fn test_merge_creates_when_not_in_index() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let person_label = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        // Create index but no nodes
+        engine
+            .index_manager_mut()
+            .create_index("idx_person_name".into(), person_label, name_key)
+            .expect("create index");
+
+        let pattern = Pattern {
+            chains: vec![PatternChain {
+                elements: vec![PatternElement::Node(NodePattern {
+                    variable: Some("n".to_string()),
+                    labels: vec!["Person".to_string()],
+                    properties: Some(vec![(
+                        "name".to_string(),
+                        Expression::Literal(Literal::String("Bob".into())),
+                    )]),
+                })],
+            }],
+        };
+
+        let params = Params::new();
+        let records = execute_merge(
+            vec![Record::new()],
+            &pattern,
+            &[],
+            &[],
+            &mut engine,
+            &params,
+        )
+        .expect("merge");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(engine.node_count(), 1); // Should create
+    }
+
+    // TASK-113: find_node_with_index falls back when no index
+    #[test]
+    fn test_find_node_with_index_fallback() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let person_label = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        let n1 = engine.create_node(
+            vec![person_label],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+
+        // No index - should still find via fallback
+        let found = find_node_with_index(
+            &engine,
+            &[person_label],
+            &[(name_key, PropertyValue::String("Alice".into()))],
+        );
+        assert_eq!(found, Some(n1));
+    }
+
+    // TASK-113: find_node_with_index with empty labels
+    #[test]
+    fn test_find_node_with_index_no_labels() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let name_key = engine.get_or_create_prop_key("name");
+        let _n1 = engine.create_node(
+            vec![],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+
+        // No labels -> fallback to find_node
+        let found = find_node_with_index(
+            &engine,
+            &[],
+            &[(name_key, PropertyValue::String("Alice".into()))],
+        );
+        // find_node with empty labels scans all nodes
+        assert!(found.is_some());
+    }
+
+    // TASK-113: find_node_with_index with index, multi-label check
+    #[test]
+    fn test_find_node_with_index_multi_label() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let person_label = engine.get_or_create_label("Person");
+        let employee_label = engine.get_or_create_label("Employee");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        // Create node with both labels
+        let n1 = engine.create_node(
+            vec![person_label, employee_label],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+
+        // Create index on Person(name)
+        engine
+            .index_manager_mut()
+            .create_index("idx_person_name".into(), person_label, name_key)
+            .expect("create index");
+        if let Some(idx) = engine.index_manager_mut().find_index_mut(person_label, name_key) {
+            idx.insert(&PropertyValue::String("Alice".into()), n1);
+        }
+
+        // Should find by both labels
+        let found = find_node_with_index(
+            &engine,
+            &[person_label, employee_label],
+            &[(name_key, PropertyValue::String("Alice".into()))],
+        );
+        assert_eq!(found, Some(n1));
     }
 }

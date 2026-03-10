@@ -8,9 +8,11 @@ use cypherlite_core::LabelRegistry;
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalPlan {
     /// Scan all nodes, optionally filtered by label ID.
+    /// If `limit` is Some, stop after that many nodes (for LIMIT pushdown optimization).
     NodeScan {
         variable: String,
         label_id: Option<u32>,
+        limit: Option<usize>,
     },
     /// Expand from a source variable along edges of given type.
     Expand {
@@ -126,6 +128,15 @@ pub enum LogicalPlan {
         direction: RelDirection,
         min_hops: u32,
         max_hops: u32,
+    },
+    /// Index-based scan: look up nodes by label + property value using an index.
+    /// The executor checks at runtime whether an index actually exists.
+    /// If no index is available, falls back to label scan + filter.
+    IndexScan {
+        variable: String,
+        label_id: u32,
+        prop_key: String,
+        lookup_value: Expression,
     },
 }
 
@@ -341,7 +352,7 @@ impl<'a> LogicalPlanner<'a> {
             .first()
             .map(|name| self.registry.get_or_create_label(name));
 
-        let mut plan = LogicalPlan::NodeScan { variable, label_id };
+        let mut plan = LogicalPlan::NodeScan { variable, label_id, limit: None };
 
         // Process remaining relationship + node pairs.
         while let Some(rel_elem) = elements.next() {
@@ -671,7 +682,7 @@ mod tests {
             } => {
                 assert!(!distinct);
                 match source.as_ref() {
-                    LogicalPlan::NodeScan { variable, label_id } => {
+                    LogicalPlan::NodeScan { variable, label_id, .. } => {
                         assert_eq!(variable, "n");
                         assert_eq!(*label_id, Some(person_id));
                     }
@@ -736,7 +747,7 @@ mod tests {
 
         // NodeScan(a)
         match scan {
-            LogicalPlan::NodeScan { variable, label_id } => {
+            LogicalPlan::NodeScan { variable, label_id, .. } => {
                 assert_eq!(variable, "a");
                 assert_eq!(*label_id, None); // no label on (a)
             }
@@ -781,7 +792,7 @@ mod tests {
 
         // NodeScan
         match filter_source {
-            LogicalPlan::NodeScan { variable, label_id } => {
+            LogicalPlan::NodeScan { variable, label_id, .. } => {
                 assert_eq!(variable, "n");
                 assert!(label_id.is_some());
             }
@@ -801,7 +812,7 @@ mod tests {
                 // Source should be NodeScan(n)
                 let src = source.as_ref().expect("should have source");
                 match src.as_ref() {
-                    LogicalPlan::NodeScan { variable, label_id } => {
+                    LogicalPlan::NodeScan { variable, label_id, .. } => {
                         assert_eq!(variable, "n");
                         assert_eq!(*label_id, None);
                     }
@@ -1271,7 +1282,7 @@ mod tests {
 
         // NodeScan(a:Person)
         match opt_source {
-            LogicalPlan::NodeScan { variable, label_id } => {
+            LogicalPlan::NodeScan { variable, label_id, .. } => {
                 assert_eq!(variable, "a");
                 assert!(label_id.is_some());
             }

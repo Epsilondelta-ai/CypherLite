@@ -4,6 +4,7 @@ pub mod create;
 pub mod delete;
 pub mod expand;
 pub mod filter;
+pub mod index_scan;
 pub mod limit;
 pub mod merge;
 pub mod node_scan;
