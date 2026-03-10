@@ -17,6 +17,9 @@ pub enum Clause {
     Delete(DeleteClause),
     With(WithClause),
     Merge(MergeClause),
+    Unwind(UnwindClause),
+    CreateIndex(CreateIndexClause),
+    DropIndex(DropIndexClause),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +95,32 @@ pub struct WithClause {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeClause {
     pub pattern: Pattern,
+    pub on_match: Vec<SetItem>,
+    pub on_create: Vec<SetItem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnwindClause {
+    pub expr: Expression,
+    pub variable: String,
+}
+
+/// CREATE INDEX [name] ON :Label(property)
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateIndexClause {
+    /// Optional index name.
+    pub name: Option<String>,
+    /// Label the index applies to.
+    pub label: String,
+    /// Property key the index covers.
+    pub property: String,
+}
+
+/// DROP INDEX name
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropIndexClause {
+    /// Name of the index to drop.
+    pub name: String,
 }
 
 // -- Patterns --
@@ -125,6 +154,10 @@ pub struct RelationshipPattern {
     pub rel_types: Vec<String>,
     pub direction: RelDirection,
     pub properties: Option<MapLiteral>,
+    /// Minimum hops for variable-length paths. None means regular 1-hop.
+    pub min_hops: Option<u32>,
+    /// Maximum hops for variable-length paths. None means unbounded (capped by planner).
+    pub max_hops: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +194,8 @@ pub enum Expression {
     IsNull(Box<Expression>, bool),
     /// `count(*)`
     CountStar,
+    /// List literal: `[expr, expr, ...]`
+    ListLiteral(Vec<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

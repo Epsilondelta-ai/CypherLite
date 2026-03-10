@@ -2,7 +2,8 @@
 
 use crate::parser::ast::{
     Clause, CreateClause, DeleteClause, Expression, MatchClause, MergeClause, NodePattern, Pattern,
-    PatternElement, RelationshipPattern, RemoveItem, ReturnClause, SetItem, WithClause,
+    PatternElement, RelationshipPattern, RemoveItem, ReturnClause, SetItem, UnwindClause,
+    WithClause,
 };
 use cypherlite_core::LabelRegistry;
 
@@ -62,13 +63,16 @@ impl<'a> SemanticAnalyzer<'a> {
             Clause::Set(s) => self.analyze_set(s),
             Clause::Delete(d) => self.analyze_delete(d),
             Clause::Remove(r) => self.analyze_remove(r),
+            Clause::Unwind(u) => self.analyze_unwind(u),
+            // DDL clauses: no variable scope validation needed
+            Clause::CreateIndex(_) | Clause::DropIndex(_) => Ok(()),
         }
     }
 
     // --- Pattern-defining clauses ---
 
     fn analyze_match(&mut self, m: &MatchClause) -> Result<(), SemanticError> {
-        self.analyze_pattern_define(&m.pattern)?;
+        self.analyze_pattern_define_with_nullable(&m.pattern, m.optional)?;
         if let Some(ref where_expr) = m.where_clause {
             self.analyze_expression_refs(where_expr)?;
         }
@@ -80,7 +84,26 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn analyze_merge(&mut self, m: &MergeClause) -> Result<(), SemanticError> {
-        self.analyze_pattern_define(&m.pattern)
+        self.analyze_pattern_define(&m.pattern)?;
+        // Validate ON MATCH SET items reference defined variables
+        for item in &m.on_match {
+            match item {
+                SetItem::Property { target, value } => {
+                    self.analyze_expression_refs(target)?;
+                    self.analyze_expression_refs(value)?;
+                }
+            }
+        }
+        // Validate ON CREATE SET items reference defined variables
+        for item in &m.on_create {
+            match item {
+                SetItem::Property { target, value } => {
+                    self.analyze_expression_refs(target)?;
+                    self.analyze_expression_refs(value)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     // --- Expression-referencing clauses ---
@@ -104,12 +127,50 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn analyze_with(&mut self, w: &WithClause) -> Result<(), SemanticError> {
+        // First, validate all WITH expressions against current scope
         for item in &w.items {
             self.analyze_expression_refs(&item.expr)?;
         }
+
+        // Determine surviving variables after scope reset.
+        // Each WITH item produces a variable: alias if present, or variable name from expression.
+        let survivors: Vec<(String, VariableKind)> = w
+            .items
+            .iter()
+            .filter_map(|item| {
+                let name = match &item.alias {
+                    Some(alias) => alias.clone(),
+                    None => match &item.expr {
+                        Expression::Variable(v) => v.clone(),
+                        _ => return None,
+                    },
+                };
+                // If the expression is a plain variable and it already has a kind, preserve it.
+                // Otherwise, it becomes an Expression kind.
+                let kind = if item.alias.is_none() {
+                    if let Expression::Variable(v) = &item.expr {
+                        self.symbols
+                            .get(v)
+                            .map(|info| info.kind)
+                            .unwrap_or(VariableKind::Expression)
+                    } else {
+                        VariableKind::Expression
+                    }
+                } else {
+                    VariableKind::Expression
+                };
+                Some((name, kind))
+            })
+            .collect();
+
+        // Reset scope: only projected variables survive
+        self.symbols.reset_scope(&survivors);
+
+        // Validate WITH WHERE against the new scope (after reset)
         if let Some(ref where_expr) = w.where_clause {
             self.analyze_expression_refs(where_expr)?;
         }
+
         Ok(())
     }
 
@@ -154,25 +215,49 @@ impl<'a> SemanticAnalyzer<'a> {
         Ok(())
     }
 
+    fn analyze_unwind(&mut self, u: &UnwindClause) -> Result<(), SemanticError> {
+        self.analyze_expression_refs(&u.expr)?;
+        self.symbols
+            .define(u.variable.clone(), VariableKind::Expression)
+            .map_err(|msg| SemanticError { message: msg })?;
+        Ok(())
+    }
+
     // --- Pattern definition (defines variables and resolves labels/types) ---
 
     fn analyze_pattern_define(&mut self, pattern: &Pattern) -> Result<(), SemanticError> {
+        self.analyze_pattern_define_with_nullable(pattern, false)
+    }
+
+    fn analyze_pattern_define_with_nullable(
+        &mut self,
+        pattern: &Pattern,
+        nullable: bool,
+    ) -> Result<(), SemanticError> {
         for chain in &pattern.chains {
             for element in &chain.elements {
                 match element {
-                    PatternElement::Node(node) => self.analyze_node_pattern(node)?,
-                    PatternElement::Relationship(rel) => self.analyze_rel_pattern(rel)?,
+                    PatternElement::Node(node) => {
+                        self.analyze_node_pattern(node, nullable)?;
+                    }
+                    PatternElement::Relationship(rel) => {
+                        self.analyze_rel_pattern(rel, nullable)?;
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    fn analyze_node_pattern(&mut self, node: &NodePattern) -> Result<(), SemanticError> {
+    fn analyze_node_pattern(
+        &mut self,
+        node: &NodePattern,
+        nullable: bool,
+    ) -> Result<(), SemanticError> {
         // Define variable if present.
         if let Some(ref var) = node.variable {
             self.symbols
-                .define(var.clone(), VariableKind::Node)
+                .define_with_nullable(var.clone(), VariableKind::Node, nullable)
                 .map_err(|msg| SemanticError { message: msg })?;
         }
         // Resolve labels.
@@ -189,16 +274,43 @@ impl<'a> SemanticAnalyzer<'a> {
         Ok(())
     }
 
-    fn analyze_rel_pattern(&mut self, rel: &RelationshipPattern) -> Result<(), SemanticError> {
+    fn analyze_rel_pattern(
+        &mut self,
+        rel: &RelationshipPattern,
+        nullable: bool,
+    ) -> Result<(), SemanticError> {
         // Define variable if present.
         if let Some(ref var) = rel.variable {
             self.symbols
-                .define(var.clone(), VariableKind::Relationship)
+                .define_with_nullable(var.clone(), VariableKind::Relationship, nullable)
                 .map_err(|msg| SemanticError { message: msg })?;
         }
         // Resolve relationship types.
         for rt in &rel.rel_types {
             self.registry.get_or_create_rel_type(rt);
+        }
+        // Validate variable-length path bounds.
+        if let (Some(min), Some(max)) = (rel.min_hops, rel.max_hops) {
+            if max < min {
+                return Err(SemanticError {
+                    message: format!(
+                        "max_hops ({}) must be >= min_hops ({})",
+                        max, min
+                    ),
+                });
+            }
+        }
+        // Configurable max hop limit (default 10).
+        const MAX_HOP_LIMIT: u32 = 10;
+        if let Some(max) = rel.max_hops {
+            if max > MAX_HOP_LIMIT {
+                return Err(SemanticError {
+                    message: format!(
+                        "max_hops ({}) exceeds configurable limit ({})",
+                        max, MAX_HOP_LIMIT
+                    ),
+                });
+            }
         }
         // Resolve property keys in map literal.
         if let Some(ref props) = rel.properties {
@@ -239,6 +351,12 @@ impl<'a> SemanticAnalyzer<'a> {
                 Ok(())
             }
             Expression::IsNull(inner, _) => self.analyze_expression_refs(inner),
+            Expression::ListLiteral(elements) => {
+                for elem in elements {
+                    self.analyze_expression_refs(elem)?;
+                }
+                Ok(())
+            }
             Expression::Literal(_) | Expression::Parameter(_) | Expression::CountStar => Ok(()),
         }
     }
@@ -331,6 +449,8 @@ mod tests {
             rel_types: types.iter().map(|s| s.to_string()).collect(),
             direction: dir,
             properties: props,
+            min_hops: None,
+            max_hops: None,
         })
     }
 
@@ -707,6 +827,8 @@ mod tests {
             clauses: vec![
                 Clause::Merge(MergeClause {
                     pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                    on_match: vec![],
+                    on_create: vec![],
                 }),
                 Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
             ],
@@ -714,6 +836,49 @@ mod tests {
 
         let mut analyzer = SemanticAnalyzer::new(&mut catalog);
         assert!(analyzer.analyze(&query).is_ok());
+    }
+
+    // TASK-085: MERGE with ON MATCH SET / ON CREATE SET validates variable refs
+    #[test]
+    fn test_valid_merge_on_match_set() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Merge(MergeClause {
+                    pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                    on_match: vec![SetItem::Property {
+                        target: prop_expr("n", "seen"),
+                        value: Expression::Literal(Literal::Bool(true)),
+                    }],
+                    on_create: vec![],
+                }),
+                Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        assert!(analyzer.analyze(&query).is_ok());
+    }
+
+    // TASK-085: MERGE ON CREATE SET with undefined variable fails
+    #[test]
+    fn test_invalid_merge_on_create_set_undefined_var() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![Clause::Merge(MergeClause {
+                pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                on_match: vec![],
+                on_create: vec![SetItem::Property {
+                    target: prop_expr("m", "created"),
+                    value: Expression::Literal(Literal::Bool(true)),
+                }],
+            })],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("undefined variable 'm'"));
     }
 
     // Additional: function calls with variable arguments are checked
@@ -739,6 +904,352 @@ mod tests {
         assert!(analyzer.analyze(&query).is_ok());
     }
 
+    // === TASK-060 Tests: WITH clause scope reset ===
+
+    fn with_clause(items: Vec<ReturnItem>, where_clause: Option<Expression>) -> WithClause {
+        WithClause {
+            distinct: false,
+            items,
+            where_clause,
+        }
+    }
+
+    // MATCH (n:Person)-[r:KNOWS]->(m:Person) WITH n RETURN n
+    // After WITH n, only 'n' survives; 'm' and 'r' become inaccessible
+    #[test]
+    fn test_with_scope_reset_projected_variable_survives() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![
+                        node(Some("n"), &["Person"], None),
+                        rel(Some("r"), &["KNOWS"], RelDirection::Outgoing, None),
+                        node(Some("m"), &["Person"], None),
+                    ]]),
+                    where_clause: None,
+                }),
+                Clause::With(with_clause(
+                    vec![return_item(var_expr("n"))],
+                    None,
+                )),
+                Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_ok());
+    }
+
+    // MATCH (n:Person)-[r:KNOWS]->(m:Person) WITH n RETURN m
+    // Error: 'm' not in WITH projection, so it is undefined after WITH
+    #[test]
+    fn test_with_scope_reset_non_projected_variable_error() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![
+                        node(Some("n"), &["Person"], None),
+                        rel(Some("r"), &["KNOWS"], RelDirection::Outgoing, None),
+                        node(Some("m"), &["Person"], None),
+                    ]]),
+                    where_clause: None,
+                }),
+                Clause::With(with_clause(
+                    vec![return_item(var_expr("n"))],
+                    None,
+                )),
+                Clause::Return(return_clause(vec![return_item(var_expr("m"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("undefined variable 'm'"));
+    }
+
+    // MATCH (n:Person) WITH n.name AS name RETURN name
+    // The alias 'name' is available after WITH, but 'n' is not
+    #[test]
+    fn test_with_alias_creates_new_scope() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                    where_clause: None,
+                }),
+                Clause::With(with_clause(
+                    vec![ReturnItem {
+                        expr: prop_expr("n", "name"),
+                        alias: Some("name".to_string()),
+                    }],
+                    None,
+                )),
+                Clause::Return(return_clause(vec![return_item(var_expr("name"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_ok());
+    }
+
+    // MATCH (n:Person) WITH n.name AS name RETURN n
+    // Error: 'n' is not in WITH projection, only 'name' alias is
+    #[test]
+    fn test_with_alias_original_variable_inaccessible() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                    where_clause: None,
+                }),
+                Clause::With(with_clause(
+                    vec![ReturnItem {
+                        expr: prop_expr("n", "name"),
+                        alias: Some("name".to_string()),
+                    }],
+                    None,
+                )),
+                Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("undefined variable 'n'"));
+    }
+
+    // MATCH (n:Person) WITH n WHERE n.age > 30 RETURN n
+    // WITH WHERE should be able to reference projected variables
+    #[test]
+    fn test_with_where_references_projected_variable() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                    where_clause: None,
+                }),
+                Clause::With(with_clause(
+                    vec![return_item(var_expr("n"))],
+                    Some(Expression::BinaryOp(
+                        BinaryOp::Gt,
+                        Box::new(prop_expr("n", "age")),
+                        Box::new(Expression::Literal(Literal::Integer(30))),
+                    )),
+                )),
+                Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_ok());
+    }
+
+    // === TASK-074 Tests: OPTIONAL MATCH semantic analysis ===
+
+    // OPTIONAL MATCH variables should be marked as nullable
+    #[test]
+    fn test_optional_match_variables_are_nullable() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![node(Some("a"), &["Person"], None)]]),
+                    where_clause: None,
+                }),
+                Clause::Match(MatchClause {
+                    optional: true,
+                    pattern: pattern(vec![vec![
+                        node(Some("a"), &[], None),
+                        rel(Some("r"), &["KNOWS"], RelDirection::Outgoing, None),
+                        node(Some("b"), &[], None),
+                    ]]),
+                    where_clause: None,
+                }),
+                Clause::Return(return_clause(vec![
+                    return_item(prop_expr("a", "name")),
+                    return_item(prop_expr("b", "name")),
+                ])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_ok());
+
+        let symbols = result.unwrap();
+        // 'a' from regular MATCH is not nullable
+        assert!(!symbols.get("a").unwrap().nullable);
+        // 'b' from OPTIONAL MATCH is nullable
+        assert!(symbols.get("b").unwrap().nullable);
+        // 'r' from OPTIONAL MATCH is nullable
+        assert!(symbols.get("r").unwrap().nullable);
+    }
+
+    // OPTIONAL MATCH can reference variables from earlier MATCH
+    #[test]
+    fn test_optional_match_references_earlier_match_variable() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![node(Some("a"), &["Person"], None)]]),
+                    where_clause: None,
+                }),
+                Clause::Match(MatchClause {
+                    optional: true,
+                    pattern: pattern(vec![vec![
+                        node(Some("a"), &[], None),
+                        rel(None, &["WORKS_AT"], RelDirection::Outgoing, None),
+                        node(Some("c"), &["Company"], None),
+                    ]]),
+                    where_clause: None,
+                }),
+                Clause::Return(return_clause(vec![
+                    return_item(var_expr("a")),
+                    return_item(var_expr("c")),
+                ])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_ok());
+
+        let symbols = result.unwrap();
+        // 'a' was first defined in regular MATCH (not nullable), then re-referenced in OPTIONAL MATCH.
+        // The non-nullable definition should be preserved.
+        assert!(!symbols.get("a").unwrap().nullable);
+        // 'c' is from OPTIONAL MATCH, so nullable
+        assert!(symbols.get("c").unwrap().nullable);
+    }
+
+    // OPTIONAL MATCH with WHERE clause
+    #[test]
+    fn test_optional_match_with_where() {
+        let mut catalog = MockCatalog::default();
+        let where_expr = Expression::BinaryOp(
+            BinaryOp::Gt,
+            Box::new(prop_expr("b", "age")),
+            Box::new(Expression::Literal(Literal::Integer(20))),
+        );
+
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![node(Some("a"), &["Person"], None)]]),
+                    where_clause: None,
+                }),
+                Clause::Match(MatchClause {
+                    optional: true,
+                    pattern: pattern(vec![vec![
+                        node(Some("a"), &[], None),
+                        rel(None, &["KNOWS"], RelDirection::Outgoing, None),
+                        node(Some("b"), &[], None),
+                    ]]),
+                    where_clause: Some(where_expr),
+                }),
+                Clause::Return(return_clause(vec![
+                    return_item(var_expr("a")),
+                    return_item(var_expr("b")),
+                ])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_ok());
+    }
+
+    // === TASK-069 Tests: UNWIND clause semantic analysis ===
+
+    // UNWIND [1,2,3] AS x RETURN x -- x should be defined after UNWIND
+    #[test]
+    fn test_unwind_defines_variable() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Unwind(UnwindClause {
+                    expr: Expression::ListLiteral(vec![
+                        Expression::Literal(Literal::Integer(1)),
+                        Expression::Literal(Literal::Integer(2)),
+                    ]),
+                    variable: "x".to_string(),
+                }),
+                Clause::Return(return_clause(vec![return_item(var_expr("x"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_ok());
+
+        let symbols = result.unwrap();
+        assert!(symbols.is_defined("x"));
+        assert_eq!(symbols.get("x").unwrap().kind, VariableKind::Expression);
+    }
+
+    // MATCH (n) UNWIND n.hobbies AS h RETURN h -- UNWIND expr references n
+    #[test]
+    fn test_unwind_references_prior_variables() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    optional: false,
+                    pattern: pattern(vec![vec![node(Some("n"), &[], None)]]),
+                    where_clause: None,
+                }),
+                Clause::Unwind(UnwindClause {
+                    expr: prop_expr("n", "hobbies"),
+                    variable: "h".to_string(),
+                }),
+                Clause::Return(return_clause(vec![return_item(var_expr("h"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_ok());
+    }
+
+    // UNWIND m.items AS x RETURN x -- m is undefined -> error
+    #[test]
+    fn test_unwind_undefined_variable_in_expr() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Unwind(UnwindClause {
+                    expr: prop_expr("m", "items"),
+                    variable: "x".to_string(),
+                }),
+                Clause::Return(return_clause(vec![return_item(var_expr("x"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("undefined variable 'm'"));
+    }
+
     // Additional: SemanticError Display implementation
     #[test]
     fn test_semantic_error_display() {
@@ -746,5 +1257,163 @@ mod tests {
             message: "test error".to_string(),
         };
         assert_eq!(format!("{}", err), "Semantic error: test error");
+    }
+
+    // -- TASK-103: Variable-length path semantic validation --
+
+    #[test]
+    fn test_var_length_path_valid() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &["Person"], None),
+                    rel(None, &["KNOWS"], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        // Modify the relationship to have variable-length
+        let mut q = query;
+        if let Clause::Match(ref mut mc) = q.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(1);
+                rp.max_hops = Some(3);
+            }
+        }
+        assert!(analyzer.analyze(&q).is_ok());
+    }
+
+    #[test]
+    fn test_var_length_path_max_less_than_min() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(5);
+                rp.max_hops = Some(2);
+            }
+        }
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("should fail")
+            .message
+            .contains("max_hops"));
+    }
+
+    #[test]
+    fn test_var_length_path_max_exceeds_limit() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(1);
+                rp.max_hops = Some(100);
+            }
+        }
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("should fail")
+            .message
+            .contains("exceeds"));
+    }
+
+    #[test]
+    fn test_var_length_path_unbounded_ok() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(1);
+                rp.max_hops = None; // unbounded is OK - planner will cap it
+            }
+        }
+        assert!(analyzer.analyze(&query).is_ok());
+    }
+
+    #[test]
+    fn test_var_length_path_min_zero_ok() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(0);
+                rp.max_hops = Some(1);
+            }
+        }
+        assert!(analyzer.analyze(&query).is_ok());
+    }
+
+    #[test]
+    fn test_var_length_path_equal_min_max_ok() {
+        let mut catalog = MockCatalog::default();
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let mut query = Query {
+            clauses: vec![Clause::Match(MatchClause {
+                optional: false,
+                pattern: pattern(vec![vec![
+                    node(Some("a"), &[], None),
+                    rel(None, &[], RelDirection::Outgoing, None),
+                    node(Some("b"), &[], None),
+                ]]),
+                where_clause: None,
+            })],
+        };
+        if let Clause::Match(ref mut mc) = query.clauses[0] {
+            if let PatternElement::Relationship(ref mut rp) = mc.pattern.chains[0].elements[1] {
+                rp.min_hops = Some(3);
+                rp.max_hops = Some(3);
+            }
+        }
+        assert!(analyzer.analyze(&query).is_ok());
     }
 }

@@ -42,6 +42,8 @@ impl<'a> Parser<'a> {
                         rel_types: Vec::new(),
                         direction: RelDirection::Undirected,
                         properties: None,
+                        min_hops: None,
+                        max_hops: None,
                     }));
                     elements.push(PatternElement::Node(self.parse_node_pattern()?));
                 }
@@ -135,6 +137,8 @@ impl<'a> Parser<'a> {
             rel_types: content.rel_types,
             direction,
             properties: content.properties,
+            min_hops: content.min_hops,
+            max_hops: content.max_hops,
         })
     }
 
@@ -155,30 +159,59 @@ impl<'a> Parser<'a> {
             rel_types: content.rel_types,
             direction: RelDirection::Incoming,
             properties: content.properties,
+            min_hops: content.min_hops,
+            max_hops: content.max_hops,
         })
     }
 
-    /// Parse content inside relationship brackets: `[variable :TYPE | TYPE2 {props}]`
+    /// Parse content inside relationship brackets: `[variable :TYPE | TYPE2 *N..M {props}]`
     fn parse_relationship_content(&mut self) -> Result<RelContentResult, ParseError> {
         let mut variable = None;
         let mut rel_types = Vec::new();
         let mut properties = None;
+        let mut min_hops = None;
+        let mut max_hops = None;
 
-        // Check for variable-length path star
+        // Check for bare star: [*...] (no variable, no type)
         if self.check(&Token::Star) {
-            return Err(self.error("variable-length paths (*) are not supported"));
+            let (mn, mx) = self.parse_var_length_spec()?;
+            min_hops = Some(mn);
+            max_hops = mx;
+
+            // After star spec, optional properties then done
+            if self.check(&Token::LBrace) {
+                properties = Some(self.parse_map_literal()?);
+            }
+            return Ok(RelContentResult {
+                variable,
+                rel_types,
+                properties,
+                min_hops,
+                max_hops,
+            });
         }
 
         // Optional variable
         if let Some(Token::Ident(_) | Token::BacktickIdent(_)) = self.peek() {
-            // Only treat as variable if next is not just `]`
-            // Could be a variable followed by colon (for type), or just a variable
             variable = Some(self.expect_ident()?);
         }
 
-        // Check for variable-length path star after variable
+        // Optional variable-length path star after variable: [r*...]
         if self.check(&Token::Star) {
-            return Err(self.error("variable-length paths (*) are not supported"));
+            let (mn, mx) = self.parse_var_length_spec()?;
+            min_hops = Some(mn);
+            max_hops = mx;
+
+            if self.check(&Token::LBrace) {
+                properties = Some(self.parse_map_literal()?);
+            }
+            return Ok(RelContentResult {
+                variable,
+                rel_types,
+                properties,
+                min_hops,
+                max_hops,
+            });
         }
 
         // Optional relationship types: `:TYPE` or `:TYPE|TYPE2`
@@ -189,9 +222,11 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Check for variable-length path star after types
+        // Optional variable-length path star after types: [:TYPE*...]
         if self.check(&Token::Star) {
-            return Err(self.error("variable-length paths (*) are not supported"));
+            let (mn, mx) = self.parse_var_length_spec()?;
+            min_hops = Some(mn);
+            max_hops = mx;
         }
 
         // Optional properties
@@ -203,7 +238,58 @@ impl<'a> Parser<'a> {
             variable,
             rel_types,
             properties,
+            min_hops,
+            max_hops,
         })
+    }
+
+    /// Parse variable-length spec after `*`: `*`, `*N`, `*N..M`, `*N..`, `*..M`
+    /// Returns (min_hops, max_hops).
+    fn parse_var_length_spec(&mut self) -> Result<(u32, Option<u32>), ParseError> {
+        self.expect(&Token::Star)?;
+
+        // Check for DoubleDot immediately: *..M
+        if self.eat(&Token::DoubleDot) {
+            // *..M form
+            if let Some(Token::Integer(n)) = self.peek() {
+                let max = Self::int_to_u32(*n, self)?;
+                self.advance();
+                return Ok((1, Some(max)));
+            }
+            // *.. alone (unbounded from 1)
+            return Ok((1, None));
+        }
+
+        // Check for integer: *N or *N..M or *N..
+        if let Some(Token::Integer(n)) = self.peek() {
+            let first = Self::int_to_u32(*n, self)?;
+            self.advance();
+
+            // Check for DoubleDot: *N..M or *N..
+            if self.eat(&Token::DoubleDot) {
+                if let Some(Token::Integer(m)) = self.peek() {
+                    let second = Self::int_to_u32(*m, self)?;
+                    self.advance();
+                    return Ok((first, Some(second)));
+                }
+                // *N.. (open end)
+                return Ok((first, None));
+            }
+
+            // *N (exact hop)
+            return Ok((first, Some(first)));
+        }
+
+        // Just * alone (unbounded)
+        Ok((1, None))
+    }
+
+    /// Convert i64 to u32 for hop counts, returning error if negative.
+    fn int_to_u32(n: i64, parser: &Self) -> Result<u32, ParseError> {
+        if n < 0 {
+            return Err(parser.error("hop count must be non-negative"));
+        }
+        Ok(n as u32)
     }
 }
 
@@ -212,6 +298,8 @@ struct RelContentResult {
     variable: Option<String>,
     rel_types: Vec<String>,
     properties: Option<MapLiteral>,
+    min_hops: Option<u32>,
+    max_hops: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +457,8 @@ mod tests {
                 rel_types: vec!["KNOWS".to_string()],
                 direction: RelDirection::Outgoing,
                 properties: None,
+                min_hops: None,
+                max_hops: None,
             })
         );
         assert_eq!(
@@ -393,6 +483,8 @@ mod tests {
                 rel_types: vec!["KNOWS".to_string()],
                 direction: RelDirection::Incoming,
                 properties: None,
+                min_hops: None,
+                max_hops: None,
             })
         );
     }
@@ -409,6 +501,8 @@ mod tests {
                 rel_types: vec!["KNOWS".to_string()],
                 direction: RelDirection::Undirected,
                 properties: None,
+                min_hops: None,
+                max_hops: None,
             })
         );
     }
@@ -425,6 +519,8 @@ mod tests {
                 rel_types: vec![],
                 direction: RelDirection::Undirected,
                 properties: None,
+                min_hops: None,
+                max_hops: None,
             })
         );
     }
@@ -441,6 +537,8 @@ mod tests {
                 rel_types: vec!["KNOWS".to_string()],
                 direction: RelDirection::Outgoing,
                 properties: None,
+                min_hops: None,
+                max_hops: None,
             })
         );
     }
@@ -460,6 +558,8 @@ mod tests {
                     "since".to_string(),
                     Expression::Literal(Literal::Integer(2020)),
                 )]),
+                min_hops: None,
+                max_hops: None,
             })
         );
     }
@@ -476,6 +576,8 @@ mod tests {
                 rel_types: vec!["KNOWS".to_string(), "LIKES".to_string()],
                 direction: RelDirection::Outgoing,
                 properties: None,
+                min_hops: None,
+                max_hops: None,
             })
         );
     }
@@ -510,17 +612,155 @@ mod tests {
         assert_eq!(pattern.chains[1].elements.len(), 3);
     }
 
-    // Variable-length path -> UnsupportedSyntax error
+    // -- TASK-102: Variable-length path parsing --
+
+    // [*] -> min=1, max=None (unbounded)
     #[test]
-    fn pattern_variable_length_error() {
-        let result = parse_pattern_str("(a)-[*1..3]->(b)");
-        assert!(result.is_err());
-        let err = result.expect_err("should fail");
-        assert!(
-            err.message.contains("not supported"),
-            "error message should mention unsupported: {}",
-            err.message
-        );
+    fn pattern_var_length_star_only() {
+        let pattern = parse_pattern_str("(a)-[*]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.min_hops, Some(1));
+            assert_eq!(rel.max_hops, None);
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // [*N] -> min=N, max=N (exact hop)
+    #[test]
+    fn pattern_var_length_exact_hop() {
+        let pattern = parse_pattern_str("(a)-[*3]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.min_hops, Some(3));
+            assert_eq!(rel.max_hops, Some(3));
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // [*N..M] -> min=N, max=M
+    #[test]
+    fn pattern_var_length_range() {
+        let pattern = parse_pattern_str("(a)-[*1..3]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.min_hops, Some(1));
+            assert_eq!(rel.max_hops, Some(3));
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // [*N..] -> min=N, max=None
+    #[test]
+    fn pattern_var_length_open_end() {
+        let pattern = parse_pattern_str("(a)-[*2..]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.min_hops, Some(2));
+            assert_eq!(rel.max_hops, None);
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // [*..M] -> min=1, max=M
+    #[test]
+    fn pattern_var_length_open_start() {
+        let pattern = parse_pattern_str("(a)-[*..5]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.min_hops, Some(1));
+            assert_eq!(rel.max_hops, Some(5));
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // [:TYPE*N..M] -> typed + bounded
+    #[test]
+    fn pattern_var_length_typed_bounded() {
+        let pattern = parse_pattern_str("(a)-[:KNOWS*2..4]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.rel_types, vec!["KNOWS".to_string()]);
+            assert_eq!(rel.min_hops, Some(2));
+            assert_eq!(rel.max_hops, Some(4));
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // [r:TYPE*2..5] -> variable + typed + bounded
+    #[test]
+    fn pattern_var_length_variable_typed_bounded() {
+        let pattern = parse_pattern_str("(a)-[r:KNOWS*2..5]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.variable, Some("r".to_string()));
+            assert_eq!(rel.rel_types, vec!["KNOWS".to_string()]);
+            assert_eq!(rel.min_hops, Some(2));
+            assert_eq!(rel.max_hops, Some(5));
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // Incoming variable-length: (a)<-[*1..3]-(b)
+    #[test]
+    fn pattern_var_length_incoming() {
+        let pattern = parse_pattern_str("(a)<-[*1..3]-(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.direction, RelDirection::Incoming);
+            assert_eq!(rel.min_hops, Some(1));
+            assert_eq!(rel.max_hops, Some(3));
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // [*0..1] zero-length path
+    #[test]
+    fn pattern_var_length_zero() {
+        let pattern = parse_pattern_str("(a)-[*0..1]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.min_hops, Some(0));
+            assert_eq!(rel.max_hops, Some(1));
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // Variable-length with variable only (no type): [r*2..5]
+    #[test]
+    fn pattern_var_length_variable_no_type() {
+        let pattern = parse_pattern_str("(a)-[r*2..5]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.variable, Some("r".to_string()));
+            assert_eq!(rel.rel_types, Vec::<String>::new());
+            assert_eq!(rel.min_hops, Some(2));
+            assert_eq!(rel.max_hops, Some(5));
+        } else {
+            panic!("expected relationship");
+        }
+    }
+
+    // Regular rel (no *) still has None/None
+    #[test]
+    fn pattern_regular_rel_no_hops() {
+        let pattern = parse_pattern_str("(a)-[:KNOWS]->(b)").expect("should parse");
+        let chain = &pattern.chains[0];
+        if let PatternElement::Relationship(rel) = &chain.elements[1] {
+            assert_eq!(rel.min_hops, None);
+            assert_eq!(rel.max_hops, None);
+        } else {
+            panic!("expected relationship");
+        }
     }
 
     // Relationship with only variable, no type: (a)-[r]->(b)
@@ -535,6 +775,8 @@ mod tests {
                 rel_types: vec![],
                 direction: RelDirection::Outgoing,
                 properties: None,
+                min_hops: None,
+                max_hops: None,
             })
         );
     }
@@ -551,6 +793,8 @@ mod tests {
                 rel_types: vec![],
                 direction: RelDirection::Outgoing,
                 properties: None,
+                min_hops: None,
+                max_hops: None,
             })
         );
     }

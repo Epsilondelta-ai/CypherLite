@@ -4,7 +4,7 @@ pub mod operators;
 
 use crate::parser::ast::*;
 use crate::planner::LogicalPlan;
-use cypherlite_core::{EdgeId, NodeId, PropertyValue};
+use cypherlite_core::{EdgeId, LabelRegistry, NodeId, PropertyValue};
 use cypherlite_storage::StorageEngine;
 use std::collections::HashMap;
 
@@ -90,10 +90,16 @@ pub fn execute(
     match plan {
         LogicalPlan::EmptySource => Ok(vec![Record::new()]),
         LogicalPlan::NodeScan {
-            variable, label_id, ..
-        } => Ok(operators::node_scan::execute_node_scan(
-            variable, *label_id, engine,
-        )),
+            variable, label_id, limit, ..
+        } => {
+            let mut records = operators::node_scan::execute_node_scan(
+                variable, *label_id, engine,
+            );
+            if let Some(lim) = limit {
+                records.truncate(*lim);
+            }
+            Ok(records)
+        }
         LogicalPlan::Expand {
             source,
             src_var,
@@ -186,6 +192,162 @@ pub fn execute(
             let source_records = execute(source, engine, params)?;
             operators::set_props::execute_remove(source_records, items, engine, params)
         }
+        LogicalPlan::Unwind {
+            source,
+            expr,
+            variable,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            operators::unwind::execute_unwind(source_records, expr, variable, engine, params)
+        }
+        LogicalPlan::With {
+            source,
+            items,
+            where_clause,
+            distinct,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            let mut result =
+                operators::with::execute_with(source_records, items, engine, params)?;
+            if *distinct {
+                deduplicate_records(&mut result);
+            }
+            if let Some(ref predicate) = where_clause {
+                result = operators::filter::execute_filter(result, predicate, engine, params)?;
+            }
+            Ok(result)
+        }
+        LogicalPlan::MergeOp {
+            source,
+            pattern,
+            on_match,
+            on_create,
+        } => {
+            let source_records = match source {
+                Some(s) => execute(s, engine, params)?,
+                None => vec![Record::new()],
+            };
+            operators::merge::execute_merge(source_records, pattern, on_match, on_create, engine, params)
+        }
+        LogicalPlan::CreateIndex {
+            name,
+            label,
+            property,
+        } => {
+            // Resolve label and property names via catalog
+            let label_id = engine.get_or_create_label(label);
+            let prop_key_id = engine.get_or_create_prop_key(property);
+
+            // Generate index name if not provided
+            let index_name = match name {
+                Some(n) => n.clone(),
+                None => format!("idx_{}_{}", label, property),
+            };
+
+            // Create the index
+            engine
+                .index_manager_mut()
+                .create_index(index_name.clone(), label_id, prop_key_id)
+                .map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
+
+            // Register in catalog
+            engine.catalog_mut().add_index_definition(
+                cypherlite_storage::index::IndexDefinition {
+                    name: index_name,
+                    label_id,
+                    prop_key_id,
+                },
+            );
+
+            // Backfill: index existing nodes that match the label + property
+            let nodes: Vec<(cypherlite_core::NodeId, Vec<(u32, cypherlite_core::PropertyValue)>)> = engine
+                .scan_nodes_by_label(label_id)
+                .iter()
+                .map(|n| (n.node_id, n.properties.clone()))
+                .collect();
+            for (nid, props) in &nodes {
+                for (pk, v) in props {
+                    if *pk == prop_key_id {
+                        if let Some(idx) = engine.index_manager_mut().find_index_mut(label_id, prop_key_id) {
+                            idx.insert(v, *nid);
+                        }
+                    }
+                }
+            }
+
+            Ok(vec![])
+        }
+        LogicalPlan::DropIndex { name } => {
+            // Remove from index manager
+            engine
+                .index_manager_mut()
+                .drop_index(name)
+                .map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
+
+            // Remove from catalog
+            engine.catalog_mut().remove_index_definition(name);
+
+            Ok(vec![])
+        }
+        LogicalPlan::VarLengthExpand {
+            source,
+            src_var,
+            rel_var,
+            target_var,
+            rel_type_id,
+            direction,
+            min_hops,
+            max_hops,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            Ok(operators::var_length_expand::execute_var_length_expand(
+                source_records,
+                src_var,
+                rel_var.as_deref(),
+                target_var,
+                *rel_type_id,
+                direction,
+                *min_hops,
+                *max_hops,
+                engine,
+            ))
+        }
+        LogicalPlan::OptionalExpand {
+            source,
+            src_var,
+            rel_var,
+            target_var,
+            rel_type_id,
+            direction,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            Ok(operators::optional_expand::execute_optional_expand(
+                source_records,
+                src_var,
+                rel_var.as_deref(),
+                target_var,
+                *rel_type_id,
+                direction,
+                engine,
+            ))
+        }
+        LogicalPlan::IndexScan {
+            variable,
+            label_id,
+            prop_key,
+            lookup_value,
+        } => operators::index_scan::execute_index_scan(
+            variable,
+            *label_id,
+            prop_key,
+            lookup_value,
+            engine,
+            params,
+        ),
     }
 }
 

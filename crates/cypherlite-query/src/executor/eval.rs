@@ -40,6 +40,13 @@ pub fn eval(
                 Ok(Value::Bool(is_null))
             }
         }
+        Expression::ListLiteral(elements) => {
+            let mut values = Vec::with_capacity(elements.len());
+            for elem in elements {
+                values.push(eval(elem, record, engine, params)?);
+            }
+            Ok(Value::List(values))
+        }
         // CountStar and FunctionCall with aggregates are handled at the aggregate level.
         // When encountered in non-aggregate context, return Null.
         Expression::CountStar => Ok(Value::Null),

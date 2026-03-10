@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::index::IndexDefinition;
 use cypherlite_core::LabelRegistry;
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +44,9 @@ pub struct Catalog {
     labels: Namespace,
     prop_keys: Namespace,
     rel_types: Namespace,
+    /// Index definitions persisted alongside the catalog.
+    #[serde(default)]
+    indexes: Vec<IndexDefinition>,
 }
 
 impl Catalog {
@@ -55,6 +59,25 @@ impl Catalog {
     pub fn load(data: &[u8]) -> cypherlite_core::Result<Self> {
         bincode::deserialize(data)
             .map_err(|e| cypherlite_core::CypherLiteError::SerializationError(e.to_string()))
+    }
+}
+
+impl Catalog {
+    /// Add an index definition to the catalog.
+    pub fn add_index_definition(&mut self, def: IndexDefinition) {
+        self.indexes.push(def);
+    }
+
+    /// Remove an index definition by name. Returns true if found and removed.
+    pub fn remove_index_definition(&mut self, name: &str) -> bool {
+        let before = self.indexes.len();
+        self.indexes.retain(|d| d.name != name);
+        self.indexes.len() < before
+    }
+
+    /// Get all index definitions.
+    pub fn index_definitions(&self) -> &[IndexDefinition] {
+        &self.indexes
     }
 }
 
@@ -99,6 +122,7 @@ impl LabelRegistry for Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::IndexDefinition;
 
     // REQ-CATALOG-010: Catalog default is empty
     #[test]
@@ -226,6 +250,65 @@ mod tests {
     fn test_catalog_load_corrupted_data() {
         let result = Catalog::load(&[0xFF, 0xFF, 0xFF]);
         assert!(result.is_err());
+    }
+
+    // ======================================================================
+    // TASK-094: Index definitions in Catalog
+    // ======================================================================
+
+    #[test]
+    fn test_catalog_index_definitions_empty() {
+        let cat = Catalog::default();
+        assert!(cat.index_definitions().is_empty());
+    }
+
+    #[test]
+    fn test_catalog_add_index_definition() {
+        let mut cat = Catalog::default();
+        cat.add_index_definition(IndexDefinition {
+            name: "idx_person_name".to_string(),
+            label_id: 0,
+            prop_key_id: 1,
+        });
+        assert_eq!(cat.index_definitions().len(), 1);
+        assert_eq!(cat.index_definitions()[0].name, "idx_person_name");
+    }
+
+    #[test]
+    fn test_catalog_remove_index_definition() {
+        let mut cat = Catalog::default();
+        cat.add_index_definition(IndexDefinition {
+            name: "idx_test".to_string(),
+            label_id: 0,
+            prop_key_id: 1,
+        });
+        assert!(cat.remove_index_definition("idx_test"));
+        assert!(cat.index_definitions().is_empty());
+    }
+
+    #[test]
+    fn test_catalog_remove_index_definition_not_found() {
+        let mut cat = Catalog::default();
+        assert!(!cat.remove_index_definition("nonexistent"));
+    }
+
+    #[test]
+    fn test_catalog_index_definitions_save_load_roundtrip() {
+        let mut cat = Catalog::default();
+        cat.get_or_create_label("Person");
+        cat.get_or_create_prop_key("name");
+        cat.add_index_definition(IndexDefinition {
+            name: "idx_person_name".to_string(),
+            label_id: 0,
+            prop_key_id: 0,
+        });
+
+        let bytes = cat.save();
+        let loaded = Catalog::load(&bytes).expect("load");
+        assert_eq!(loaded.index_definitions().len(), 1);
+        assert_eq!(loaded.index_definitions()[0].name, "idx_person_name");
+        assert_eq!(loaded.index_definitions()[0].label_id, 0);
+        assert_eq!(loaded.index_definitions()[0].prop_key_id, 0);
     }
 
     // REQ-CATALOG-023: Loaded catalog supports continued use

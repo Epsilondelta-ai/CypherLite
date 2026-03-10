@@ -51,7 +51,15 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
             }
             Some(Token::Match) => Clause::Match(parser.parse_match_clause(false)?),
             Some(Token::Return) => Clause::Return(parser.parse_return_clause()?),
-            Some(Token::Create) => Clause::Create(parser.parse_create_clause()?),
+            Some(Token::Create) => {
+                // Peek at next token to distinguish CREATE INDEX from CREATE (pattern)
+                if parser.tokens.get(parser.pos + 1).map(|(t, _)| t) == Some(&Token::Index) {
+                    parser.advance(); // consume CREATE
+                    Clause::CreateIndex(parser.parse_create_index_clause()?)
+                } else {
+                    Clause::Create(parser.parse_create_clause()?)
+                }
+            }
             Some(Token::Set) => Clause::Set(parser.parse_set_clause()?),
             Some(Token::Remove) => Clause::Remove(parser.parse_remove_clause()?),
             Some(Token::Delete) => Clause::Delete(parser.parse_delete_clause(false)?),
@@ -64,6 +72,10 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
             }
             Some(Token::With) => Clause::With(parser.parse_with_clause()?),
             Some(Token::Merge) => Clause::Merge(parser.parse_merge_clause()?),
+            Some(Token::Unwind) => Clause::Unwind(parser.parse_unwind_clause()?),
+            Some(Token::Drop) => {
+                Clause::DropIndex(parser.parse_drop_index_clause()?)
+            }
             Some(Token::Where) => {
                 return Err(parser.error("WHERE clause must follow a MATCH clause"));
             }
@@ -624,5 +636,76 @@ mod tests {
     fn query_case_insensitive() {
         let q = parse_query("match (n:Person) return n").expect("should parse");
         assert_eq!(q.clauses.len(), 2);
+    }
+
+    // ======================================================================
+    // TASK-098: CREATE INDEX / DROP INDEX parsing
+    // ======================================================================
+
+    #[test]
+    fn query_create_index_with_name() {
+        let q = parse_query("CREATE INDEX idx_person_name ON :Person(name)").expect("should parse");
+        assert_eq!(q.clauses.len(), 1);
+
+        if let Clause::CreateIndex(ci) = &q.clauses[0] {
+            assert_eq!(ci.name, Some("idx_person_name".to_string()));
+            assert_eq!(ci.label, "Person");
+            assert_eq!(ci.property, "name");
+        } else {
+            panic!("expected CreateIndex clause");
+        }
+    }
+
+    #[test]
+    fn query_create_index_without_name() {
+        let q = parse_query("CREATE INDEX ON :Person(name)").expect("should parse");
+        assert_eq!(q.clauses.len(), 1);
+
+        if let Clause::CreateIndex(ci) = &q.clauses[0] {
+            assert_eq!(ci.name, None);
+            assert_eq!(ci.label, "Person");
+            assert_eq!(ci.property, "name");
+        } else {
+            panic!("expected CreateIndex clause");
+        }
+    }
+
+    #[test]
+    fn query_drop_index() {
+        let q = parse_query("DROP INDEX idx_person_name").expect("should parse");
+        assert_eq!(q.clauses.len(), 1);
+
+        if let Clause::DropIndex(di) = &q.clauses[0] {
+            assert_eq!(di.name, "idx_person_name");
+        } else {
+            panic!("expected DropIndex clause");
+        }
+    }
+
+    // ======================================================================
+    // TASK-068: UNWIND clause integration tests
+    // ======================================================================
+
+    #[test]
+    fn query_unwind_list_return() {
+        let q = parse_query("UNWIND [1, 2, 3] AS x RETURN x").expect("should parse");
+        assert_eq!(q.clauses.len(), 2);
+        assert!(matches!(&q.clauses[0], Clause::Unwind(_)));
+        assert!(matches!(&q.clauses[1], Clause::Return(_)));
+
+        if let Clause::Unwind(uc) = &q.clauses[0] {
+            assert_eq!(uc.variable, "x");
+            assert!(matches!(&uc.expr, Expression::ListLiteral(_)));
+        }
+    }
+
+    #[test]
+    fn query_match_unwind_return() {
+        let q = parse_query("MATCH (n:Person) UNWIND n.hobbies AS h RETURN h")
+            .expect("should parse");
+        assert_eq!(q.clauses.len(), 3);
+        assert!(matches!(&q.clauses[0], Clause::Match(_)));
+        assert!(matches!(&q.clauses[1], Clause::Unwind(_)));
+        assert!(matches!(&q.clauses[2], Clause::Return(_)));
     }
 }

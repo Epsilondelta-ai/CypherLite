@@ -112,6 +112,14 @@ pub enum Token {
     #[regex("(?i)on", priority = 10)]
     On,
 
+    // -- P3 Keywords -------------------------------------------------------
+    #[regex("(?i)unwind", priority = 10)]
+    Unwind,
+    #[regex("(?i)index", priority = 10)]
+    Index,
+    #[regex("(?i)drop", priority = 10)]
+    Drop,
+
     // -- Literals ----------------------------------------------------------
     /// Floating-point literal (must come before integer to match greedily).
     #[regex(r"[0-9]+\.[0-9]+", lex_float, priority = 3)]
@@ -187,6 +195,8 @@ pub enum Token {
     RBrace,
     #[token(":")]
     Colon,
+    #[token("..")]
+    DoubleDot,
     #[token(".")]
     Dot,
     #[token(",")]
@@ -383,6 +393,9 @@ mod tests {
             ("asc", Token::Asc),
             ("desc", Token::Desc),
             ("on", Token::On),
+            ("unwind", Token::Unwind),
+            ("index", Token::Index),
+            ("drop", Token::Drop),
         ];
         for (input, expected) in kw_pairs {
             assert_eq!(
@@ -536,6 +549,41 @@ mod tests {
                 Token::Dot,
                 Token::Comma,
                 Token::Pipe,
+            ]
+        );
+    }
+
+    // ---- TASK-102: DoubleDot token ----------------------------------------
+
+    #[test]
+    fn lex_double_dot() {
+        let toks = tokens("..");
+        assert_eq!(toks, vec![Token::DoubleDot]);
+    }
+
+    #[test]
+    fn lex_double_dot_in_var_length() {
+        let toks = tokens("*1..3");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Star,
+                Token::Integer(1),
+                Token::DoubleDot,
+                Token::Integer(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_single_dot_still_works() {
+        let toks = tokens("n.name");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Ident("n".to_string()),
+                Token::Dot,
+                Token::Ident("name".to_string()),
             ]
         );
     }
@@ -856,6 +904,106 @@ mod tests {
                 Token::LParen,
                 Token::Ident("b".to_string()),
                 Token::RParen,
+            ]
+        );
+    }
+
+    // ---- TASK-066: UNWIND keyword token ---------------------------------
+
+    #[test]
+    fn lex_t066_unwind_keyword() {
+        let toks = tokens("UNWIND");
+        assert_eq!(toks, vec![Token::Unwind]);
+    }
+
+    #[test]
+    fn lex_t066_unwind_case_insensitive() {
+        assert_eq!(tokens("unwind"), vec![Token::Unwind]);
+        assert_eq!(tokens("Unwind"), vec![Token::Unwind]);
+        assert_eq!(tokens("uNwInD"), vec![Token::Unwind]);
+    }
+
+    #[test]
+    fn lex_t066_unwind_not_prefix_of_identifier() {
+        // "unwinding" should be an identifier, not UNWIND + "ing"
+        let toks = tokens("unwinding");
+        assert_eq!(toks, vec![Token::Ident("unwinding".to_string())]);
+    }
+
+    #[test]
+    fn lex_t066_unwind_in_context() {
+        let toks = tokens("UNWIND [1, 2, 3] AS x");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Unwind,
+                Token::LBracket,
+                Token::Integer(1),
+                Token::Comma,
+                Token::Integer(2),
+                Token::Comma,
+                Token::Integer(3),
+                Token::RBracket,
+                Token::As,
+                Token::Ident("x".to_string()),
+            ]
+        );
+    }
+
+    // ---- TASK-098: INDEX and DROP keyword tokens --------------------------
+
+    #[test]
+    fn lex_t098_index_keyword() {
+        let toks = tokens("INDEX");
+        assert_eq!(toks, vec![Token::Index]);
+    }
+
+    #[test]
+    fn lex_t098_index_case_insensitive() {
+        assert_eq!(tokens("index"), vec![Token::Index]);
+        assert_eq!(tokens("Index"), vec![Token::Index]);
+    }
+
+    #[test]
+    fn lex_t098_drop_keyword() {
+        let toks = tokens("DROP");
+        assert_eq!(toks, vec![Token::Drop]);
+    }
+
+    #[test]
+    fn lex_t098_drop_case_insensitive() {
+        assert_eq!(tokens("drop"), vec![Token::Drop]);
+        assert_eq!(tokens("Drop"), vec![Token::Drop]);
+    }
+
+    #[test]
+    fn lex_t098_create_index_on() {
+        let toks = tokens("CREATE INDEX idx_name ON :Person(name)");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Create,
+                Token::Index,
+                Token::Ident("idx_name".to_string()),
+                Token::On,
+                Token::Colon,
+                Token::Ident("Person".to_string()),
+                Token::LParen,
+                Token::Ident("name".to_string()),
+                Token::RParen,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_t098_drop_index() {
+        let toks = tokens("DROP INDEX idx_name");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Drop,
+                Token::Index,
+                Token::Ident("idx_name".to_string()),
             ]
         );
     }
