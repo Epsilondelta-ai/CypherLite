@@ -1,0 +1,14 @@
+[package]
+name = "cypherlite-query"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.84"
+
+[dependencies]
+cypherlite-core    = { path = "../cypherlite-core" }
+cypherlite-storage = { path = "../cypherlite-storage" }
+logos              = "0.14"
+
+[dev-dependencies]
+tempfile = "3"
+proptest = "1"
