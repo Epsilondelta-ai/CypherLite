@@ -211,6 +211,18 @@ pub fn execute(
             }
             Ok(result)
         }
+        LogicalPlan::MergeOp {
+            source,
+            pattern,
+            on_match,
+            on_create,
+        } => {
+            let source_records = match source {
+                Some(s) => execute(s, engine, params)?,
+                None => vec![Record::new()],
+            };
+            operators::merge::execute_merge(source_records, pattern, on_match, on_create, engine, params)
+        }
         LogicalPlan::OptionalExpand {
             source,
             src_var,

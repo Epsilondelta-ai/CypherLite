@@ -97,6 +97,13 @@ pub enum LogicalPlan {
         rel_type_id: Option<u32>,
         direction: RelDirection,
     },
+    /// MERGE: match-or-create pattern with optional ON MATCH/ON CREATE SET.
+    MergeOp {
+        source: Option<Box<LogicalPlan>>,
+        pattern: Pattern,
+        on_match: Vec<SetItem>,
+        on_create: Vec<SetItem>,
+    },
     /// Empty source (produces one empty row).
     EmptySource,
 }
@@ -159,9 +166,7 @@ impl<'a> LogicalPlanner<'a> {
             Clause::Remove(rc) => self.plan_remove(rc, current),
             Clause::With(wc) => self.plan_with(wc, current),
             Clause::Unwind(uc) => self.plan_unwind(uc, current),
-            Clause::Merge(_) => Err(PlanError {
-                message: format!("unsupported clause type: {:?}", clause),
-            }),
+            Clause::Merge(mc) => Ok(self.plan_merge(mc, current)),
         }
     }
 
@@ -405,6 +410,15 @@ impl<'a> LogicalPlanner<'a> {
         LogicalPlan::CreateOp {
             source: current.map(Box::new),
             pattern: cc.pattern.clone(),
+        }
+    }
+
+    fn plan_merge(&self, mc: &MergeClause, current: Option<LogicalPlan>) -> LogicalPlan {
+        LogicalPlan::MergeOp {
+            source: current.map(Box::new),
+            pattern: mc.pattern.clone(),
+            on_match: mc.on_match.clone(),
+            on_create: mc.on_create.clone(),
         }
     }
 

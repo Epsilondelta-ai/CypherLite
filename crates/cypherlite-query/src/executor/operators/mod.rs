@@ -5,6 +5,7 @@ pub mod delete;
 pub mod expand;
 pub mod filter;
 pub mod limit;
+pub mod merge;
 pub mod node_scan;
 pub mod project;
 pub mod set_props;

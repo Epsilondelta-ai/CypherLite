@@ -93,6 +93,8 @@ pub struct WithClause {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeClause {
     pub pattern: Pattern,
+    pub on_match: Vec<SetItem>,
+    pub on_create: Vec<SetItem>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

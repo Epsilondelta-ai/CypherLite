@@ -247,6 +247,58 @@ impl StorageEngine {
         self.edge_store.len()
     }
 
+    /// Find the first node matching all given labels and properties.
+    ///
+    /// Scans nodes by the first label (if any) for efficiency, then filters
+    /// by remaining labels and all property key-value pairs (exact equality).
+    /// Returns `None` if no match is found.
+    pub fn find_node(
+        &self,
+        label_ids: &[u32],
+        properties: &[(u32, PropertyValue)],
+    ) -> Option<NodeId> {
+        let candidates: Vec<&NodeRecord> = if let Some(&first_label) = label_ids.first() {
+            self.scan_nodes_by_label(first_label)
+        } else {
+            self.scan_nodes()
+        };
+
+        for node in candidates {
+            // Check all required labels
+            let has_all_labels = label_ids.iter().all(|lid| node.labels.contains(lid));
+            if !has_all_labels {
+                continue;
+            }
+            // Check all required properties (exact equality)
+            let has_all_props = properties.iter().all(|(key, val)| {
+                node.properties.iter().any(|(k, v)| k == key && v == val)
+            });
+            if has_all_props {
+                return Some(node.node_id);
+            }
+        }
+        None
+    }
+
+    /// Find the first edge from `start` to `end` with the given relationship type.
+    ///
+    /// Checks edges connected to the start node and returns the first one
+    /// matching both the end node and relationship type.
+    pub fn find_edge(
+        &self,
+        start: NodeId,
+        end: NodeId,
+        type_id: u32,
+    ) -> Option<EdgeId> {
+        let edges = self.get_edges_for_node(start);
+        for edge in edges {
+            if edge.start_node == start && edge.end_node == end && edge.rel_type_id == type_id {
+                return Some(edge.edge_id);
+            }
+        }
+        None
+    }
+
     /// Returns a reference to the config.
     pub fn config(&self) -> &DatabaseConfig {
         &self.config
@@ -543,6 +595,121 @@ mod tests {
         let engine = test_engine(dir.path());
         let edges = engine.scan_edges_by_type(1);
         assert!(edges.is_empty());
+    }
+
+    // TASK-080: find_node API
+    #[test]
+    fn test_find_node_returns_matching_node() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+        let nid = engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+        let found = engine.find_node(&[label_id], &[(name_key, PropertyValue::String("Alice".into()))]);
+        assert_eq!(found, Some(nid));
+    }
+
+    #[test]
+    fn test_find_node_returns_none_when_no_match() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+        engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+        let found = engine.find_node(&[label_id], &[(name_key, PropertyValue::String("Bob".into()))]);
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn test_find_node_empty_db() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let found = engine.find_node(&[0], &[]);
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn test_find_node_multiple_labels() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let person = engine.get_or_create_label("Person");
+        let employee = engine.get_or_create_label("Employee");
+        let name_key = engine.get_or_create_prop_key("name");
+        let nid = engine.create_node(
+            vec![person, employee],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+        // Both labels required
+        let found = engine.find_node(&[person, employee], &[(name_key, PropertyValue::String("Alice".into()))]);
+        assert_eq!(found, Some(nid));
+        // Only person label - should still match (node has both)
+        let found2 = engine.find_node(&[person], &[(name_key, PropertyValue::String("Alice".into()))]);
+        assert_eq!(found2, Some(nid));
+    }
+
+    #[test]
+    fn test_find_node_no_properties() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let nid = engine.create_node(vec![label_id], vec![]);
+        let found = engine.find_node(&[label_id], &[]);
+        assert_eq!(found, Some(nid));
+    }
+
+    // TASK-081: find_edge API
+    #[test]
+    fn test_find_edge_returns_matching_edge() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let type_id = engine.get_or_create_rel_type("KNOWS");
+        let eid = engine.create_edge(n1, n2, type_id, vec![]).expect("edge");
+        let found = engine.find_edge(n1, n2, type_id);
+        assert_eq!(found, Some(eid));
+    }
+
+    #[test]
+    fn test_find_edge_returns_none_wrong_type() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let knows = engine.get_or_create_rel_type("KNOWS");
+        let likes = engine.get_or_create_rel_type("LIKES");
+        engine.create_edge(n1, n2, knows, vec![]).expect("edge");
+        let found = engine.find_edge(n1, n2, likes);
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn test_find_edge_returns_none_wrong_endpoints() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let n3 = engine.create_node(vec![], vec![]);
+        let type_id = engine.get_or_create_rel_type("KNOWS");
+        engine.create_edge(n1, n2, type_id, vec![]).expect("edge");
+        let found = engine.find_edge(n1, n3, type_id);
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn test_find_edge_empty_db() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let found = engine.find_edge(n1, n2, 0);
+        assert_eq!(found, None);
     }
 
     // REQ-CATALOG-030: StorageEngine exposes catalog accessor

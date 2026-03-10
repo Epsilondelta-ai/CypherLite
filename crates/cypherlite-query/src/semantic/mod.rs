@@ -82,7 +82,26 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn analyze_merge(&mut self, m: &MergeClause) -> Result<(), SemanticError> {
-        self.analyze_pattern_define(&m.pattern)
+        self.analyze_pattern_define(&m.pattern)?;
+        // Validate ON MATCH SET items reference defined variables
+        for item in &m.on_match {
+            match item {
+                SetItem::Property { target, value } => {
+                    self.analyze_expression_refs(target)?;
+                    self.analyze_expression_refs(value)?;
+                }
+            }
+        }
+        // Validate ON CREATE SET items reference defined variables
+        for item in &m.on_create {
+            match item {
+                SetItem::Property { target, value } => {
+                    self.analyze_expression_refs(target)?;
+                    self.analyze_expression_refs(value)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     // --- Expression-referencing clauses ---
@@ -781,6 +800,8 @@ mod tests {
             clauses: vec![
                 Clause::Merge(MergeClause {
                     pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                    on_match: vec![],
+                    on_create: vec![],
                 }),
                 Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
             ],
@@ -788,6 +809,49 @@ mod tests {
 
         let mut analyzer = SemanticAnalyzer::new(&mut catalog);
         assert!(analyzer.analyze(&query).is_ok());
+    }
+
+    // TASK-085: MERGE with ON MATCH SET / ON CREATE SET validates variable refs
+    #[test]
+    fn test_valid_merge_on_match_set() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![
+                Clause::Merge(MergeClause {
+                    pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                    on_match: vec![SetItem::Property {
+                        target: prop_expr("n", "seen"),
+                        value: Expression::Literal(Literal::Bool(true)),
+                    }],
+                    on_create: vec![],
+                }),
+                Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
+            ],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        assert!(analyzer.analyze(&query).is_ok());
+    }
+
+    // TASK-085: MERGE ON CREATE SET with undefined variable fails
+    #[test]
+    fn test_invalid_merge_on_create_set_undefined_var() {
+        let mut catalog = MockCatalog::default();
+        let query = Query {
+            clauses: vec![Clause::Merge(MergeClause {
+                pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
+                on_match: vec![],
+                on_create: vec![SetItem::Property {
+                    target: prop_expr("m", "created"),
+                    value: Expression::Literal(Literal::Bool(true)),
+                }],
+            })],
+        };
+
+        let mut analyzer = SemanticAnalyzer::new(&mut catalog);
+        let result = analyzer.analyze(&query);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("undefined variable 'm'"));
     }
 
     // Additional: function calls with variable arguments are checked

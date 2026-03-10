@@ -154,13 +154,52 @@ impl<'a> Parser<'a> {
         Ok(UnwindClause { expr, variable })
     }
 
-    /// Parse a MERGE clause (P2 syntax -- parsed but execution returns UnsupportedSyntax).
+    /// Parse a MERGE clause.
     ///
-    /// Grammar: MERGE pattern
+    /// Grammar: MERGE pattern [ON MATCH SET items] [ON CREATE SET items]
     pub fn parse_merge_clause(&mut self) -> Result<MergeClause, ParseError> {
         self.expect(&Token::Merge)?;
         let pattern = self.parse_pattern()?;
-        Ok(MergeClause { pattern })
+
+        let mut on_match = Vec::new();
+        let mut on_create = Vec::new();
+
+        // Parse optional ON MATCH SET and ON CREATE SET (can appear in any order)
+        loop {
+            if self.check(&Token::On) {
+                // Peek at the token after ON
+                let next = self.tokens.get(self.pos + 1).map(|(t, _)| t.clone());
+                match next {
+                    Some(Token::Match) => {
+                        self.advance(); // consume ON
+                        self.advance(); // consume MATCH
+                        self.expect(&Token::Set)?;
+                        on_match.push(self.parse_set_item()?);
+                        while self.eat(&Token::Comma) {
+                            on_match.push(self.parse_set_item()?);
+                        }
+                    }
+                    Some(Token::Create) => {
+                        self.advance(); // consume ON
+                        self.advance(); // consume CREATE
+                        self.expect(&Token::Set)?;
+                        on_create.push(self.parse_set_item()?);
+                        while self.eat(&Token::Comma) {
+                            on_create.push(self.parse_set_item()?);
+                        }
+                    }
+                    _ => break,
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(MergeClause {
+            pattern,
+            on_match,
+            on_create,
+        })
     }
 
     // -- Helper functions --
@@ -636,6 +675,69 @@ mod tests {
         };
         assert_eq!(node.variable, Some("n".to_string()));
         assert_eq!(node.labels, vec!["Person".to_string()]);
+        assert!(mc.on_match.is_empty());
+        assert!(mc.on_create.is_empty());
+    }
+
+    // TASK-084: MERGE with ON CREATE SET
+    #[test]
+    fn merge_on_create_set() {
+        let (tokens, input) =
+            make_parser("MERGE (n:Person {name: 'Alice'}) ON CREATE SET n.created = true");
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_merge_clause().expect("should parse");
+
+        assert!(mc.on_match.is_empty());
+        assert_eq!(mc.on_create.len(), 1);
+        match &mc.on_create[0] {
+            SetItem::Property { target, value } => {
+                assert_eq!(
+                    *target,
+                    Expression::Property(
+                        Box::new(Expression::Variable("n".to_string())),
+                        "created".to_string(),
+                    )
+                );
+                assert_eq!(*value, Expression::Literal(Literal::Bool(true)));
+            }
+        }
+    }
+
+    // TASK-084: MERGE with ON MATCH SET
+    #[test]
+    fn merge_on_match_set() {
+        let (tokens, input) =
+            make_parser("MERGE (n:Person {name: 'Alice'}) ON MATCH SET n.seen = true");
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_merge_clause().expect("should parse");
+
+        assert_eq!(mc.on_match.len(), 1);
+        assert!(mc.on_create.is_empty());
+    }
+
+    // TASK-084: MERGE with both ON CREATE SET and ON MATCH SET
+    #[test]
+    fn merge_on_create_and_on_match() {
+        let (tokens, input) = make_parser(
+            "MERGE (n:Person {name: 'Alice'}) ON CREATE SET n.created = true ON MATCH SET n.seen = true",
+        );
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_merge_clause().expect("should parse");
+
+        assert_eq!(mc.on_create.len(), 1);
+        assert_eq!(mc.on_match.len(), 1);
+    }
+
+    // TASK-084: MERGE with multiple SET items in ON CREATE
+    #[test]
+    fn merge_on_create_multiple_items() {
+        let (tokens, input) = make_parser(
+            "MERGE (n:Person {name: 'Alice'}) ON CREATE SET n.created = true, n.age = 1",
+        );
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_merge_clause().expect("should parse");
+
+        assert_eq!(mc.on_create.len(), 2);
     }
 
     // ======================================================================
