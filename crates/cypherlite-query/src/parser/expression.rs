@@ -458,8 +458,8 @@ mod tests {
 
     #[test]
     fn expr_literal_float() {
-        let expr = parse_expr("3.14").expect("should parse");
-        assert_eq!(expr, Expression::Literal(Literal::Float(3.14)));
+        let expr = parse_expr("3.15").expect("should parse");
+        assert_eq!(expr, Expression::Literal(Literal::Float(3.15)));
     }
 
     #[test]

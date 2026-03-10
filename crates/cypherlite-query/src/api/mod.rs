@@ -265,9 +265,9 @@ mod tests {
     #[test]
     fn test_row_get_as_f64() {
         let mut values = HashMap::new();
-        values.insert("score".to_string(), Value::Float64(3.14));
+        values.insert("score".to_string(), Value::Float64(3.15));
         let row = Row::new(values, vec!["score".to_string()]);
-        assert_eq!(row.get_as::<f64>("score"), Some(3.14));
+        assert_eq!(row.get_as::<f64>("score"), Some(3.15));
     }
 
     #[test]

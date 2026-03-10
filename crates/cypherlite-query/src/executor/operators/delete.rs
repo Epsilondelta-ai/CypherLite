@@ -114,7 +114,7 @@ mod tests {
 
         let result = execute_delete(vec![record], &exprs, false, &mut engine, &params);
         assert!(result.is_err());
-        let err = result.err().expect("should error");
+        let err = result.expect_err("should error");
         assert!(err.message.contains("cannot delete node"));
         assert!(err.message.contains("DETACH DELETE"));
     }

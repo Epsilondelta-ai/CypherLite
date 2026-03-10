@@ -454,8 +454,8 @@ mod tests {
 
     #[test]
     fn lex_t006_float_3_14() {
-        let toks = tokens("3.14");
-        assert_eq!(toks, vec![Token::Float(3.14)]);
+        let toks = tokens("3.15");
+        assert_eq!(toks, vec![Token::Float(3.15)]);
     }
 
     #[test]

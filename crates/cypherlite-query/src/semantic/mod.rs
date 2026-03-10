@@ -38,6 +38,8 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
+    // @MX:ANCHOR: [AUTO] Central semantic validation — called by CypherLite API and Planner
+    // @MX:REASON: fan_in >= 3; validates all queries before execution
     /// Analyze a query, resolving names and checking variable scoping.
     /// Returns the symbol table on success.
     pub fn analyze(

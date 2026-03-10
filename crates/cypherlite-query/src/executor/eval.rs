@@ -5,6 +5,8 @@ use crate::parser::ast::*;
 use cypherlite_core::LabelRegistry;
 use cypherlite_storage::StorageEngine;
 
+// @MX:ANCHOR: [AUTO] Expression evaluator — called by Filter, Project, Create, Set, and Sort operators
+// @MX:REASON: fan_in >= 5; core evaluation logic for all WHERE/RETURN/SET expressions
 /// Evaluate an expression against a record (current row bindings).
 pub fn eval(
     expr: &Expression,
@@ -498,8 +500,7 @@ mod tests {
         let result = eval_cmp(&Value::Int64(1), &Value::String("x".into()), BinaryOp::Eq);
         assert!(result.is_err());
         assert!(result
-            .err()
-            .expect("should error")
+            .expect_err("should error")
             .message
             .contains("type mismatch"));
     }
@@ -564,12 +565,12 @@ mod tests {
         assert_eq!(result, Ok(Value::Int64(42)));
 
         let result = eval(
-            &Expression::Literal(Literal::Float(3.14)),
+            &Expression::Literal(Literal::Float(3.15)),
             &record,
             &engine,
             &params,
         );
-        assert_eq!(result, Ok(Value::Float64(3.14)));
+        assert_eq!(result, Ok(Value::Float64(3.15)));
 
         let result = eval(
             &Expression::Literal(Literal::String("hello".into())),
