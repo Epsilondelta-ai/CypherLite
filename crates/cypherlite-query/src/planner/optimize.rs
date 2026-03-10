@@ -12,8 +12,7 @@ use crate::parser::ast::*;
 /// 3. Constant folding: simplify constant expressions
 /// 4. Projection pruning: merge consecutive Projects
 pub fn optimize(plan: LogicalPlan) -> LogicalPlan {
-    let plan = apply_rules(plan);
-    plan
+    apply_rules(plan)
 }
 
 /// Recursively apply optimization rules bottom-up.
@@ -24,8 +23,7 @@ fn apply_rules(plan: LogicalPlan) -> LogicalPlan {
     let plan = push_index_scan(plan);
     let plan = push_limit_down(plan);
     let plan = fold_constants_in_plan(plan);
-    let plan = prune_projections(plan);
-    plan
+    prune_projections(plan)
 }
 
 /// Recursively optimize child plans.

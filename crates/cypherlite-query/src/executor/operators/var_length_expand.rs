@@ -9,6 +9,7 @@ use std::collections::HashSet;
 /// Execute variable-length expansion from source records.
 /// Uses DFS with backtracking to enumerate all paths within [min_hops, max_hops].
 /// Cycle detection: a node cannot appear twice in the same path.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_var_length_expand(
     source_records: Vec<Record>,
     src_var: &str,
@@ -61,6 +62,7 @@ pub fn execute_var_length_expand(
     results
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dfs(
     current_node: NodeId,
     depth: u32,

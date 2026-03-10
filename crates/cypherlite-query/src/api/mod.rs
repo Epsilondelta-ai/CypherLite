@@ -1,4 +1,13 @@
 // Public API: CypherLite, QueryResult, Row, Transaction, Params, Value
+//
+// Phase 3 (v0.3.0) additions:
+// - WITH clause (scope barrier + projection)
+// - UNWIND clause (list expansion)
+// - OPTIONAL MATCH (left join semantics)
+// - MERGE with ON MATCH SET / ON CREATE SET
+// - CREATE INDEX / DROP INDEX DDL
+// - Variable-length paths [*N..M] with cycle detection
+// - Query optimizer: IndexScan, LIMIT pushdown, constant folding, projection pruning
 
 use crate::executor::{Params, Record, Value};
 use cypherlite_core::{CypherLiteError, DatabaseConfig};
@@ -128,7 +137,7 @@ impl CypherLite {
             .plan(&ast)
             .map_err(|e| CypherLiteError::ExecutionError(e.message))?;
 
-        // 4. Optimize (pass-through for now)
+        // 4. Optimize (index scan, limit pushdown, constant folding, projection pruning)
         let plan = crate::planner::optimize::optimize(plan);
 
         // 5. Execute
