@@ -1,6 +1,13 @@
+#![warn(missing_docs)]
+//! Core types, traits, and error definitions for the CypherLite graph database.
+
+/// Database configuration and sync mode definitions.
 pub mod config;
+/// Error types for all CypherLite operations.
 pub mod error;
+/// Trait definitions for transactions and registries.
 pub mod traits;
+/// Core graph data types (nodes, edges, properties, identifiers).
 pub mod types;
 
 pub use config::{DatabaseConfig, SyncMode};

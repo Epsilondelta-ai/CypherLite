@@ -1,4 +1,6 @@
+/// LRU buffer pool for caching database pages in memory.
 pub mod buffer_pool;
+/// Page-level I/O and database file management.
 pub mod page_manager;
 
 /// Page size constant: 4096 bytes.
@@ -26,24 +28,36 @@ pub const FSM_MAX_PAGES: u32 = PAGE_SIZE as u32 * 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PageType {
+    /// Database file header page (page 0).
     Header = 0,
+    /// Free space map bitmap page.
     FreeSpaceMap = 1,
+    /// Interior node of a B-tree index.
     BTreeInterior = 2,
+    /// Leaf node of a B-tree index.
     BTreeLeaf = 3,
+    /// Overflow page for large records.
     Overflow = 4,
+    /// General data page.
     Data = 5,
 }
 
 /// 32-byte header at the start of each data page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageHeader {
+    /// Discriminant indicating the page type.
     pub page_type: u8,
+    /// Bit flags for page-level metadata.
     pub flags: u8,
+    /// Byte offset where free space begins.
     pub free_start: u16,
+    /// Byte offset where free space ends.
     pub free_end: u16,
+    /// Page ID of the overflow continuation page (0 = none).
     pub overflow_page: u32,
+    /// Number of items stored in this page.
     pub item_count: u16,
-    // Remaining bytes pad to 32 bytes total
+    /// Reserved bytes for future use (pads header to 32 bytes).
     pub _reserved: [u8; 20],
 }
 
@@ -96,16 +110,24 @@ impl PageHeader {
 /// Database file header stored at page 0.
 #[derive(Debug, Clone)]
 pub struct DatabaseHeader {
+    /// Magic number identifying the file format.
     pub magic: u32,
+    /// Database format version number.
     pub version: u32,
+    /// Total number of pages in the database file.
     pub page_count: u32,
+    /// Root page of the node B-tree index.
     pub root_node_page: u32,
+    /// Root page of the edge B-tree index.
     pub root_edge_page: u32,
+    /// Next available node ID.
     pub next_node_id: u64,
+    /// Next available edge ID.
     pub next_edge_id: u64,
 }
 
 impl DatabaseHeader {
+    /// Creates a new database header with default values.
     pub fn new() -> Self {
         Self {
             magic: MAGIC,

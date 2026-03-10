@@ -1,7 +1,15 @@
+#![warn(missing_docs)]
+//! Storage engine for CypherLite: page management, B-tree indexes, WAL, and transactions.
+
+/// B-tree index structures for nodes and edges.
 pub mod btree;
+/// Catalog for label, property key, and relationship type name resolution.
 pub mod catalog;
+/// Page layout, buffer pool, and page manager.
 pub mod page;
+/// MVCC transaction management.
 pub mod transaction;
+/// Write-ahead log (WAL) for crash recovery.
 pub mod wal;
 
 use cypherlite_core::{

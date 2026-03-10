@@ -3,52 +3,85 @@
 /// All errors that can occur in CypherLite operations.
 #[derive(thiserror::Error, Debug)]
 pub enum CypherLiteError {
+    /// Wrapper for standard I/O errors.
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
 
+    /// A database page failed integrity checks.
     #[error("Corrupted page {page_id}: {reason}")]
-    CorruptedPage { page_id: u32, reason: String },
+    CorruptedPage {
+        /// The page number that is corrupted.
+        page_id: u32,
+        /// Human-readable description of the corruption.
+        reason: String,
+    },
 
+    /// A write transaction could not be acquired because another is active.
     #[error("Transaction conflict: write lock unavailable")]
     TransactionConflict,
 
+    /// The buffer pool or disk is full.
     #[error("Out of space: buffer pool or disk full")]
     OutOfSpace,
 
+    /// The database file does not start with the expected magic bytes.
     #[error("Invalid magic number")]
     InvalidMagicNumber,
 
+    /// The database file format version is not supported.
     #[error("Unsupported version: found {found}, supported {supported}")]
-    UnsupportedVersion { found: u32, supported: u32 },
+    UnsupportedVersion {
+        /// The version found in the file.
+        found: u32,
+        /// The version this build supports.
+        supported: u32,
+    },
 
+    /// A checksum did not match the expected value.
     #[error("Checksum mismatch: expected {expected}, found {found}")]
-    ChecksumMismatch { expected: u64, found: u64 },
+    ChecksumMismatch {
+        /// The expected checksum value.
+        expected: u64,
+        /// The actual checksum value found.
+        found: u64,
+    },
 
+    /// Serialization or deserialization failed.
     #[error("Serialization error: {0}")]
     SerializationError(String),
 
+    /// The requested node does not exist.
     #[error("Node not found: {0}")]
     NodeNotFound(u64),
 
+    /// The requested edge does not exist.
     #[error("Edge not found: {0}")]
     EdgeNotFound(u64),
 
+    /// A Cypher query could not be parsed.
     #[error("Parse error at line {line}, column {column}: {message}")]
     ParseError {
+        /// The 1-based line number where the error occurred.
         line: usize,
+        /// The 1-based column number where the error occurred.
         column: usize,
+        /// Description of the parse error.
         message: String,
     },
 
+    /// A semantically invalid query was detected.
     #[error("Semantic error: {0}")]
     SemanticError(String),
 
+    /// An error occurred during query execution.
     #[error("Execution error: {0}")]
     ExecutionError(String),
 
+    /// The query uses syntax not yet implemented.
     #[error("Unsupported syntax: {0}")]
     UnsupportedSyntax(String),
 
+    /// A constraint (e.g. uniqueness) was violated.
     #[error("Constraint violation: {0}")]
     ConstraintViolation(String),
 }

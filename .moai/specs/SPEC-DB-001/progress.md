@@ -13,3 +13,9 @@
 - Phase 3 complete: git init, branch=feature/SPEC-DB-001-storage-engine, commit=c3d48f6
 - Phase 4 (sync): SPEC status updated to completed, dependency versions corrected (dashmap 6, thiserror 2, MSRV 1.84+), Implementation Notes added, clippy fixes applied (3 approx_constant warnings resolved), coverage 96.82%
 - Status: DONE (sync complete 2026-03-10)
+- Skipped tasks resolved (2026-03-10):
+  - proptest: 8 property-based tests added (B-tree/NodeStore, serialization roundtrip, WAL consistency)
+  - Benchmarks: 3 scenarios added (cache miss, crash recovery, edge traversal)
+  - cargo audit: PASS (0 critical/high vulnerabilities, 1 low warning: bincode unmaintained)
+  - #![warn(missing_docs)]: Applied to core + storage crates, all public items documented
+  - Thread Sanitizer: PASS (570 tests, 0 data races detected via RUSTFLAGS="-Z sanitizer=thread" cargo +nightly test)
