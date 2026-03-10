@@ -109,6 +109,25 @@ impl NodeStore {
     pub fn iter(&self) -> impl Iterator<Item = (&u64, &NodeRecord)> {
         self.tree.iter()
     }
+
+    /// Scan all node records.
+    pub fn scan_all(&self) -> Vec<&NodeRecord> {
+        self.tree.iter().map(|(_, record)| record).collect()
+    }
+
+    /// Scan nodes that contain the given label.
+    pub fn scan_by_label(&self, label_id: u32) -> Vec<&NodeRecord> {
+        self.tree
+            .iter()
+            .filter_map(|(_, record)| {
+                if record.labels.contains(&label_id) {
+                    Some(record)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -207,6 +226,43 @@ mod tests {
         let store = NodeStore::new(1);
         assert!(store.is_empty());
         assert_eq!(store.len(), 0);
+    }
+
+    // TASK-006: scan_all returns all nodes
+    #[test]
+    fn test_scan_all_empty() {
+        let store = NodeStore::new(1);
+        let nodes = store.scan_all();
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn test_scan_all_returns_all_nodes() {
+        let mut store = NodeStore::new(1);
+        store.create_node(vec![1], vec![]);
+        store.create_node(vec![2], vec![]);
+        store.create_node(vec![3], vec![]);
+        let nodes = store.scan_all();
+        assert_eq!(nodes.len(), 3);
+    }
+
+    // TASK-007: scan_by_label filters by label
+    #[test]
+    fn test_scan_by_label_returns_matching() {
+        let mut store = NodeStore::new(1);
+        store.create_node(vec![1, 2], vec![]);
+        store.create_node(vec![2, 3], vec![]);
+        store.create_node(vec![3], vec![]);
+        let nodes = store.scan_by_label(2);
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn test_scan_by_label_nonexistent_returns_empty() {
+        let mut store = NodeStore::new(1);
+        store.create_node(vec![1], vec![]);
+        let nodes = store.scan_by_label(999);
+        assert!(nodes.is_empty());
     }
 
     // Many nodes for B-tree performance
