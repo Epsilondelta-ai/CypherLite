@@ -11,6 +11,8 @@ pub mod page;
 pub mod transaction;
 /// Write-ahead log (WAL) for crash recovery.
 pub mod wal;
+/// Property index infrastructure for fast node lookups.
+pub mod index;
 
 use cypherlite_core::{
     DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId, PropertyValue,
@@ -19,6 +21,7 @@ use cypherlite_core::{
 
 use btree::edge_store::EdgeStore;
 use btree::node_store::NodeStore;
+use index::IndexManager;
 use page::buffer_pool::BufferPool;
 use page::page_manager::PageManager;
 use page::PAGE_SIZE;
@@ -42,6 +45,7 @@ pub struct StorageEngine {
     node_store: NodeStore,
     edge_store: EdgeStore,
     catalog: catalog::Catalog,
+    index_manager: IndexManager,
     config: DatabaseConfig,
 }
 
@@ -92,6 +96,7 @@ impl StorageEngine {
             node_store,
             edge_store,
             catalog: catalog::Catalog::default(),
+            index_manager: IndexManager::new(),
             config,
         })
     }
@@ -104,9 +109,17 @@ impl StorageEngine {
         labels: Vec<u32>,
         properties: Vec<(u32, PropertyValue)>,
     ) -> NodeId {
-        let id = self.node_store.create_node(labels, properties);
+        let id = self.node_store.create_node(labels.clone(), properties.clone());
         // Update header with new next_node_id
         self.page_manager.header_mut().next_node_id = self.node_store.next_id();
+        // Auto-update indexes: for each label and property, check if an index applies
+        for &label_id in &labels {
+            for (prop_key_id, value) in &properties {
+                if let Some(idx) = self.index_manager.find_index_mut(label_id, *prop_key_id) {
+                    idx.insert(value, id);
+                }
+            }
+        }
         id
     }
 
@@ -121,16 +134,49 @@ impl StorageEngine {
         node_id: NodeId,
         properties: Vec<(u32, PropertyValue)>,
     ) -> Result<()> {
-        self.node_store.update_node(node_id, properties)
+        // Capture old properties for index removal
+        let old_node = self.node_store.get_node(node_id).cloned();
+        self.node_store.update_node(node_id, properties.clone())?;
+        // Update indexes: remove old values, insert new values
+        if let Some(old) = old_node {
+            for &label_id in &old.labels {
+                // Remove old property values from indexes
+                for (prop_key_id, old_value) in &old.properties {
+                    if let Some(idx) = self.index_manager.find_index_mut(label_id, *prop_key_id) {
+                        idx.remove(old_value, node_id);
+                    }
+                }
+                // Insert new property values into indexes
+                for (prop_key_id, new_value) in &properties {
+                    if let Some(idx) = self.index_manager.find_index_mut(label_id, *prop_key_id) {
+                        idx.insert(new_value, node_id);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Delete a node and all its connected edges.
     /// REQ-STORE-004: Delete all connected edges first.
     pub fn delete_node(&mut self, node_id: NodeId) -> Result<NodeRecord> {
+        // Capture node data for index removal before deletion
+        let node_data = self.node_store.get_node(node_id).cloned();
         // Delete connected edges first
         self.edge_store
             .delete_edges_for_node(node_id, &mut self.node_store)?;
-        self.node_store.delete_node(node_id)
+        let deleted = self.node_store.delete_node(node_id)?;
+        // Remove from all applicable indexes
+        if let Some(node) = node_data {
+            for &label_id in &node.labels {
+                for (prop_key_id, value) in &node.properties {
+                    if let Some(idx) = self.index_manager.find_index_mut(label_id, *prop_key_id) {
+                        idx.remove(value, node_id);
+                    }
+                }
+            }
+        }
+        Ok(deleted)
     }
 
     // -- Edge CRUD --
@@ -302,6 +348,75 @@ impl StorageEngine {
     /// Returns a reference to the config.
     pub fn config(&self) -> &DatabaseConfig {
         &self.config
+    }
+
+    /// Scan nodes by (label, property_key, value) using index if available.
+    ///
+    /// If an index exists for (label_id, prop_key_id), uses the fast index lookup.
+    /// Otherwise falls back to linear scan.
+    pub fn scan_nodes_by_property(
+        &self,
+        label_id: u32,
+        prop_key_id: u32,
+        value: &PropertyValue,
+    ) -> Vec<NodeId> {
+        if let Some(idx) = self.index_manager.find_index(label_id, prop_key_id) {
+            // Fast path: index lookup
+            idx.lookup(value)
+        } else {
+            // Slow path: linear scan
+            self.node_store
+                .scan_by_label(label_id)
+                .iter()
+                .filter(|n| n.properties.iter().any(|(k, v)| *k == prop_key_id && v == value))
+                .map(|n| n.node_id)
+                .collect()
+        }
+    }
+
+    /// Range scan by (label, property_key, min, max) using index if available.
+    ///
+    /// Returns node IDs where the property value is in [min, max] (inclusive).
+    /// Uses index range query if available, otherwise falls back to linear scan.
+    pub fn scan_nodes_by_range(
+        &self,
+        label_id: u32,
+        prop_key_id: u32,
+        min: &PropertyValue,
+        max: &PropertyValue,
+    ) -> Vec<NodeId> {
+        if let Some(idx) = self.index_manager.find_index(label_id, prop_key_id) {
+            // Fast path: index range query
+            idx.range(min, max)
+        } else {
+            // Slow path: linear scan with comparison
+            let min_key = index::PropertyValueKey(min.clone());
+            let max_key = index::PropertyValueKey(max.clone());
+            self.node_store
+                .scan_by_label(label_id)
+                .iter()
+                .filter(|n| {
+                    n.properties.iter().any(|(k, v)| {
+                        if *k != prop_key_id {
+                            return false;
+                        }
+                        let vk = index::PropertyValueKey(v.clone());
+                        vk >= min_key && vk <= max_key
+                    })
+                })
+                .map(|n| n.node_id)
+                .collect()
+        }
+    }
+
+    /// Returns a reference to the index manager.
+    pub fn index_manager(&self) -> &IndexManager {
+        &self.index_manager
+    }
+
+    /// Returns a mutable reference to the index manager.
+    pub fn index_manager_mut(&mut self) -> &mut IndexManager {
+        &mut self.index_manager
     }
 
     /// Returns a reference to the catalog.
@@ -710,6 +825,255 @@ mod tests {
         let n2 = engine.create_node(vec![], vec![]);
         let found = engine.find_edge(n1, n2, 0);
         assert_eq!(found, None);
+    }
+
+    // ======================================================================
+    // TASK-095: Auto-update indexes on mutations
+    // ======================================================================
+
+    #[test]
+    fn test_create_node_updates_index() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        // Create index before creating nodes
+        engine
+            .index_manager_mut()
+            .create_index("idx_person_name".to_string(), label_id, name_key)
+            .expect("create index");
+
+        let nid = engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+
+        // Index should contain the new node
+        let result = engine.index_manager().find_index(label_id, name_key)
+            .expect("index exists")
+            .lookup(&PropertyValue::String("Alice".into()));
+        assert_eq!(result, vec![nid]);
+    }
+
+    #[test]
+    fn test_update_node_updates_index() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        engine
+            .index_manager_mut()
+            .create_index("idx_person_name".to_string(), label_id, name_key)
+            .expect("create index");
+
+        let nid = engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+
+        // Update the property
+        engine
+            .update_node(nid, vec![(name_key, PropertyValue::String("Bob".into()))])
+            .expect("update");
+
+        let idx = engine.index_manager().find_index(label_id, name_key).expect("idx");
+        // Old value should not be in index
+        assert!(idx.lookup(&PropertyValue::String("Alice".into())).is_empty());
+        // New value should be in index
+        assert_eq!(idx.lookup(&PropertyValue::String("Bob".into())), vec![nid]);
+    }
+
+    #[test]
+    fn test_delete_node_removes_from_index() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        engine
+            .index_manager_mut()
+            .create_index("idx_person_name".to_string(), label_id, name_key)
+            .expect("create index");
+
+        let nid = engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+
+        engine.delete_node(nid).expect("delete");
+
+        let idx = engine.index_manager().find_index(label_id, name_key).expect("idx");
+        assert!(idx.lookup(&PropertyValue::String("Alice".into())).is_empty());
+    }
+
+    // ======================================================================
+    // TASK-096: scan_nodes_by_property
+    // ======================================================================
+
+    #[test]
+    fn test_scan_nodes_by_property_with_index() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        engine
+            .index_manager_mut()
+            .create_index("idx_person_name".to_string(), label_id, name_key)
+            .expect("create index");
+
+        let n1 = engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+        engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Bob".into()))],
+        );
+
+        let result = engine.scan_nodes_by_property(
+            label_id,
+            name_key,
+            &PropertyValue::String("Alice".into()),
+        );
+        assert_eq!(result, vec![n1]);
+    }
+
+    #[test]
+    fn test_scan_nodes_by_property_without_index() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        // No index created -- should use linear scan
+        let n1 = engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+        engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Bob".into()))],
+        );
+
+        let result = engine.scan_nodes_by_property(
+            label_id,
+            name_key,
+            &PropertyValue::String("Alice".into()),
+        );
+        assert_eq!(result, vec![n1]);
+    }
+
+    #[test]
+    fn test_scan_nodes_by_property_both_paths_agree() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let name_key = engine.get_or_create_prop_key("name");
+
+        // Create nodes without index
+        engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+        engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Bob".into()))],
+        );
+        engine.create_node(
+            vec![label_id],
+            vec![(name_key, PropertyValue::String("Alice".into()))],
+        );
+
+        // Linear scan result
+        let without_idx = engine.scan_nodes_by_property(
+            label_id, name_key, &PropertyValue::String("Alice".into()),
+        );
+
+        // Now create index and backfill
+        engine
+            .index_manager_mut()
+            .create_index("idx".to_string(), label_id, name_key)
+            .expect("create");
+        // Backfill: manually insert existing nodes into the index
+        let nodes: Vec<_> = engine.scan_nodes_by_label(label_id)
+            .iter()
+            .map(|n| (n.node_id, n.properties.clone()))
+            .collect();
+        for (nid, props) in &nodes {
+            for (pk, v) in props {
+                if *pk == name_key {
+                    engine.index_manager_mut().find_index_mut(label_id, name_key)
+                        .expect("idx").insert(v, *nid);
+                }
+            }
+        }
+
+        let with_idx = engine.scan_nodes_by_property(
+            label_id, name_key, &PropertyValue::String("Alice".into()),
+        );
+
+        // Both paths should return same IDs (order may differ)
+        let mut a: Vec<u64> = without_idx.iter().map(|n| n.0).collect();
+        let mut b: Vec<u64> = with_idx.iter().map(|n| n.0).collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+    }
+
+    // ======================================================================
+    // TASK-097: scan_nodes_by_range
+    // ======================================================================
+
+    #[test]
+    fn test_scan_nodes_by_range_with_index() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let age_key = engine.get_or_create_prop_key("age");
+
+        engine
+            .index_manager_mut()
+            .create_index("idx_person_age".to_string(), label_id, age_key)
+            .expect("create index");
+
+        for age in [20, 25, 30, 35, 40] {
+            engine.create_node(
+                vec![label_id],
+                vec![(age_key, PropertyValue::Int64(age))],
+            );
+        }
+
+        let result = engine.scan_nodes_by_range(
+            label_id, age_key,
+            &PropertyValue::Int64(25),
+            &PropertyValue::Int64(35),
+        );
+        assert_eq!(result.len(), 3); // 25, 30, 35
+    }
+
+    #[test]
+    fn test_scan_nodes_by_range_without_index() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let label_id = engine.get_or_create_label("Person");
+        let age_key = engine.get_or_create_prop_key("age");
+
+        for age in [20, 25, 30, 35, 40] {
+            engine.create_node(
+                vec![label_id],
+                vec![(age_key, PropertyValue::Int64(age))],
+            );
+        }
+
+        let result = engine.scan_nodes_by_range(
+            label_id, age_key,
+            &PropertyValue::Int64(25),
+            &PropertyValue::Int64(35),
+        );
+        assert_eq!(result.len(), 3);
     }
 
     // REQ-CATALOG-030: StorageEngine exposes catalog accessor

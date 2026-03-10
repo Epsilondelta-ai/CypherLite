@@ -202,6 +202,44 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a CREATE INDEX clause (TASK-098).
+    ///
+    /// Grammar: CREATE INDEX [name] ON :Label(property)
+    /// The parser has already consumed CREATE and is positioned at INDEX.
+    pub fn parse_create_index_clause(&mut self) -> Result<CreateIndexClause, ParseError> {
+        self.expect(&Token::Index)?;
+
+        // Optional index name (identifier before ON)
+        let name = if !self.check(&Token::On) {
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+
+        self.expect(&Token::On)?;
+        self.expect(&Token::Colon)?;
+        let label = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+        let property = self.expect_ident()?;
+        self.expect(&Token::RParen)?;
+
+        Ok(CreateIndexClause {
+            name,
+            label,
+            property,
+        })
+    }
+
+    /// Parse a DROP INDEX clause (TASK-098).
+    ///
+    /// Grammar: DROP INDEX name
+    pub fn parse_drop_index_clause(&mut self) -> Result<DropIndexClause, ParseError> {
+        self.expect(&Token::Drop)?;
+        self.expect(&Token::Index)?;
+        let name = self.expect_ident()?;
+        Ok(DropIndexClause { name })
+    }
+
     // -- Helper functions --
 
     /// Parse comma-separated return items: expression [AS alias] [, ...]

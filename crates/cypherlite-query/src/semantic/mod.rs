@@ -64,6 +64,8 @@ impl<'a> SemanticAnalyzer<'a> {
             Clause::Delete(d) => self.analyze_delete(d),
             Clause::Remove(r) => self.analyze_remove(r),
             Clause::Unwind(u) => self.analyze_unwind(u),
+            // DDL clauses: no variable scope validation needed
+            Clause::CreateIndex(_) | Clause::DropIndex(_) => Ok(()),
         }
     }
 

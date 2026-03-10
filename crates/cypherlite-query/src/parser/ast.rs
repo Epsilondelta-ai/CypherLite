@@ -18,6 +18,8 @@ pub enum Clause {
     With(WithClause),
     Merge(MergeClause),
     Unwind(UnwindClause),
+    CreateIndex(CreateIndexClause),
+    DropIndex(DropIndexClause),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +103,24 @@ pub struct MergeClause {
 pub struct UnwindClause {
     pub expr: Expression,
     pub variable: String,
+}
+
+/// CREATE INDEX [name] ON :Label(property)
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateIndexClause {
+    /// Optional index name.
+    pub name: Option<String>,
+    /// Label the index applies to.
+    pub label: String,
+    /// Property key the index covers.
+    pub property: String,
+}
+
+/// DROP INDEX name
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropIndexClause {
+    /// Name of the index to drop.
+    pub name: String,
 }
 
 // -- Patterns --
