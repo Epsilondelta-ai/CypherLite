@@ -36,16 +36,22 @@ pub enum PropertyValue {
 /// Direction of a relationship traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
+    /// Traversal follows outgoing edges from a node.
     Outgoing,
+    /// Traversal follows incoming edges into a node.
     Incoming,
+    /// Traversal follows edges in either direction.
     Both,
 }
 
 /// A node record stored in the Node B-tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeRecord {
+    /// Unique identifier for this node.
     pub node_id: NodeId,
+    /// Label IDs assigned to this node.
     pub labels: Vec<u32>,
+    /// Key-value property pairs stored on this node.
     pub properties: Vec<(u32, PropertyValue)>,
     /// Head of the outgoing adjacency chain (None = no edges).
     pub next_edge_id: Option<EdgeId>,
@@ -56,15 +62,21 @@ pub struct NodeRecord {
 /// A relationship record stored in the Edge B-tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationshipRecord {
+    /// Unique identifier for this edge.
     pub edge_id: EdgeId,
+    /// The node this edge originates from.
     pub start_node: NodeId,
+    /// The node this edge points to.
     pub end_node: NodeId,
+    /// Relationship type ID for this edge.
     pub rel_type_id: u32,
+    /// Direction of this edge in the graph.
     pub direction: Direction,
     /// Next outgoing edge in the start node's adjacency chain.
     pub next_out_edge: Option<EdgeId>,
     /// Next incoming edge in the end node's adjacency chain.
     pub next_in_edge: Option<EdgeId>,
+    /// Key-value property pairs stored on this edge.
     pub properties: Vec<(u32, PropertyValue)>,
 }
 

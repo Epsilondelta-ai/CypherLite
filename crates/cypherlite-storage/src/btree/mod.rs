@@ -1,5 +1,8 @@
+/// Edge storage backed by a B-tree index.
 pub mod edge_store;
+/// Node storage backed by a B-tree index.
 pub mod node_store;
+/// Property serialization and storage utilities.
 pub mod property_store;
 
 use std::collections::BTreeMap;

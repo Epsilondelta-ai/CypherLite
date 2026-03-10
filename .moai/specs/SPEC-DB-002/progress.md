@@ -1,0 +1,23 @@
+## SPEC-DB-002 Progress
+
+- Started: 2026-03-10T00:00:00Z
+- Phase 1.6 complete: 10 acceptance criteria registered as pending tasks (#1–#10)
+- Phase 1.7 complete: 25 stub files created (cypherlite-query crate + catalog module), LSP baseline captured (all stubs compile-clean)
+- Phase 1.8: No existing @MX tags found in target files (cypherlite-core, cypherlite-storage). New cypherlite-query crate is greenfield — @MX scan skipped per Phase 1.8 skip condition.
+- Phase 2 TDD implementation complete (2026-03-10):
+  - Group A (Catalog): TASK-001~005 complete — LabelRegistry trait, error variants, Catalog BiMap, save/load, StorageEngine integration
+  - Group B (Scan APIs): TASK-006~009 complete — scan_nodes, scan_nodes_by_label, scan_edges_by_type
+  - Group C (Scaffold): Already done in Phase 1.7
+  - Group D (Lexer): TASK-012~016 complete — logos Token enum (28 keywords), lex() with Span/LexError
+  - Group E+F (Parser): TASK-017~027 complete — AST types, Pratt expression parser, pattern parser
+  - Group G (Clauses): TASK-028~035 complete — all clause parsers, parse_query() entry point
+  - Group H (Semantic): TASK-036~039 complete — SymbolTable, SemanticAnalyzer, label/type resolution
+  - Group I (Planner): TASK-040~043 complete — LogicalPlan, LogicalPlanner, optimize pass-through
+  - Group J (Executor): TASK-044~053 complete — Value, eval/eval_cmp, all operators (NodeScan, Expand, Filter, Project, Create, Delete, Set, Limit, Sort, Aggregate)
+  - Group K (API): TASK-054~057 complete — CypherLite, QueryResult, Row, FromValue, Transaction
+  - Total: 542 tests passing, 0 failures, clippy clean, fmt clean
+  - AC coverage: AC-001, AC-002, AC-003, AC-004, AC-006, AC-007, AC-010 tested
+  - TASK-058 (proptest): Complete — 20 property-based tests (lexer/parser robustness, valid query generation, expression parser, token fidelity)
+  - TASK-059 (benchmarks): Complete — 7 criterion benchmarks (lex simple/complex, parse simple/complex, execute create/match/filter)
+  - cargo audit: PASS (0 critical/high vulnerabilities)
+  - Total updated: 570 tests passing, 0 failures, clippy clean, fmt clean

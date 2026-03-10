@@ -1,6 +1,10 @@
+/// WAL checkpoint: copies committed frames back to the main database file.
 pub mod checkpoint;
+/// WAL reader for scanning committed frames.
 pub mod reader;
+/// Crash recovery by replaying WAL frames.
 pub mod recovery;
+/// WAL writer for appending frames and committing transactions.
 pub mod writer;
 
 use crate::page::PAGE_SIZE;
@@ -21,14 +25,20 @@ pub const WAL_FRAME_SIZE: usize = 32 + PAGE_SIZE;
 /// WAL file header.
 #[derive(Debug, Clone)]
 pub struct WalHeader {
+    /// Magic number identifying the WAL file.
     pub magic: u32,
+    /// WAL format version number.
     pub format_version: u32,
+    /// Number of committed frames in the WAL.
     pub frame_count: u64,
+    /// Random salt for checksum computation.
     pub salt: u64,
+    /// Checksum of the header fields.
     pub header_checksum: u64,
 }
 
 impl WalHeader {
+    /// Creates a new WAL header with the given salt.
     pub fn new(salt: u64) -> Self {
         let mut hdr = Self {
             magic: WAL_MAGIC,
@@ -82,11 +92,17 @@ impl WalHeader {
 /// A single WAL frame: metadata + page data.
 #[derive(Debug, Clone)]
 pub struct WalFrame {
+    /// Sequential frame number within the WAL.
     pub frame_number: u64,
+    /// Database page number this frame overwrites.
     pub page_number: u32,
+    /// Database size (in pages) at the time of this frame.
     pub db_size: u32,
+    /// Salt value copied from the WAL header.
     pub salt: u64,
+    /// Integrity checksum over all frame fields and page data.
     pub checksum: u64,
+    /// Full page data (4096 bytes).
     pub page_data: [u8; PAGE_SIZE],
 }
 

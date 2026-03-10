@@ -182,6 +182,20 @@ impl EdgeStore {
     pub fn iter(&self) -> impl Iterator<Item = (&u64, &RelationshipRecord)> {
         self.tree.iter()
     }
+
+    /// Scan edges that match the given relationship type.
+    pub fn scan_by_type(&self, type_id: u32) -> Vec<&RelationshipRecord> {
+        self.tree
+            .iter()
+            .filter_map(|(_, record)| {
+                if record.rel_type_id == type_id {
+                    Some(record)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -317,6 +331,42 @@ mod tests {
         let edges = es.get_edges_for_node(n1, &ns);
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].edge_id, e1);
+    }
+
+    // TASK-008: scan_by_type filters edges by relationship type
+    #[test]
+    fn test_scan_by_type_returns_matching() {
+        let (mut ns, mut es) = setup();
+        let n1 = ns.create_node(vec![], vec![]);
+        let n2 = ns.create_node(vec![], vec![]);
+        let n3 = ns.create_node(vec![], vec![]);
+
+        es.create_edge(n1, n2, 1, vec![], &mut ns).expect("e1");
+        es.create_edge(n1, n3, 2, vec![], &mut ns).expect("e2");
+        es.create_edge(n2, n3, 1, vec![], &mut ns).expect("e3");
+
+        let edges = es.scan_by_type(1);
+        assert_eq!(edges.len(), 2);
+        for edge in &edges {
+            assert_eq!(edge.rel_type_id, 1);
+        }
+    }
+
+    #[test]
+    fn test_scan_by_type_empty_store() {
+        let (_, es) = setup();
+        let edges = es.scan_by_type(1);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn test_scan_by_type_nonexistent_returns_empty() {
+        let (mut ns, mut es) = setup();
+        let n1 = ns.create_node(vec![], vec![]);
+        let n2 = ns.create_node(vec![], vec![]);
+        es.create_edge(n1, n2, 1, vec![], &mut ns).expect("e1");
+        let edges = es.scan_by_type(999);
+        assert!(edges.is_empty());
     }
 
     #[test]

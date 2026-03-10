@@ -1,10 +1,20 @@
+#![warn(missing_docs)]
+//! Storage engine for CypherLite: page management, B-tree indexes, WAL, and transactions.
+
+/// B-tree index structures for nodes and edges.
 pub mod btree;
+/// Catalog for label, property key, and relationship type name resolution.
+pub mod catalog;
+/// Page layout, buffer pool, and page manager.
 pub mod page;
+/// MVCC transaction management.
 pub mod transaction;
+/// Write-ahead log (WAL) for crash recovery.
 pub mod wal;
 
 use cypherlite_core::{
-    DatabaseConfig, EdgeId, NodeId, NodeRecord, PageId, PropertyValue, RelationshipRecord, Result,
+    DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId, PropertyValue,
+    RelationshipRecord, Result,
 };
 
 use btree::edge_store::EdgeStore;
@@ -31,6 +41,7 @@ pub struct StorageEngine {
     tx_manager: TransactionManager,
     node_store: NodeStore,
     edge_store: EdgeStore,
+    catalog: catalog::Catalog,
     config: DatabaseConfig,
 }
 
@@ -80,6 +91,7 @@ impl StorageEngine {
             tx_manager,
             node_store,
             edge_store,
+            catalog: catalog::Catalog::default(),
             config,
         })
     }
@@ -158,6 +170,23 @@ impl StorageEngine {
         self.edge_store.delete_edge(edge_id, &mut self.node_store)
     }
 
+    // -- Scan operations --
+
+    /// Scan all nodes in the database.
+    pub fn scan_nodes(&self) -> Vec<&NodeRecord> {
+        self.node_store.scan_all()
+    }
+
+    /// Scan nodes that have the given label.
+    pub fn scan_nodes_by_label(&self, label_id: u32) -> Vec<&NodeRecord> {
+        self.node_store.scan_by_label(label_id)
+    }
+
+    /// Scan edges of the given relationship type.
+    pub fn scan_edges_by_type(&self, type_id: u32) -> Vec<&RelationshipRecord> {
+        self.edge_store.scan_by_type(type_id)
+    }
+
     // -- Transaction operations --
 
     /// Begin a read transaction.
@@ -221,6 +250,54 @@ impl StorageEngine {
     /// Returns a reference to the config.
     pub fn config(&self) -> &DatabaseConfig {
         &self.config
+    }
+
+    /// Returns a reference to the catalog.
+    pub fn catalog(&self) -> &catalog::Catalog {
+        &self.catalog
+    }
+
+    /// Returns a mutable reference to the catalog.
+    pub fn catalog_mut(&mut self) -> &mut catalog::Catalog {
+        &mut self.catalog
+    }
+}
+
+impl LabelRegistry for StorageEngine {
+    fn get_or_create_label(&mut self, name: &str) -> u32 {
+        self.catalog.get_or_create_label(name)
+    }
+
+    fn label_id(&self, name: &str) -> Option<u32> {
+        self.catalog.label_id(name)
+    }
+
+    fn label_name(&self, id: u32) -> Option<&str> {
+        self.catalog.label_name(id)
+    }
+
+    fn get_or_create_rel_type(&mut self, name: &str) -> u32 {
+        self.catalog.get_or_create_rel_type(name)
+    }
+
+    fn rel_type_id(&self, name: &str) -> Option<u32> {
+        self.catalog.rel_type_id(name)
+    }
+
+    fn rel_type_name(&self, id: u32) -> Option<&str> {
+        self.catalog.rel_type_name(id)
+    }
+
+    fn get_or_create_prop_key(&mut self, name: &str) -> u32 {
+        self.catalog.get_or_create_prop_key(name)
+    }
+
+    fn prop_key_id(&self, name: &str) -> Option<u32> {
+        self.catalog.prop_key_id(name)
+    }
+
+    fn prop_key_name(&self, id: u32) -> Option<&str> {
+        self.catalog.prop_key_name(id)
     }
 }
 
@@ -399,5 +476,113 @@ mod tests {
             // without serialization. But header data (next_id) should persist.
             assert_eq!(engine.node_count(), 0); // in-memory only for Phase 1
         }
+    }
+
+    // TASK-006: scan_nodes
+    #[test]
+    fn test_scan_nodes_empty() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let nodes = engine.scan_nodes();
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn test_scan_nodes_returns_all() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        engine.create_node(vec![1], vec![]);
+        engine.create_node(vec![2], vec![]);
+        engine.create_node(vec![3], vec![]);
+        let nodes = engine.scan_nodes();
+        assert_eq!(nodes.len(), 3);
+    }
+
+    // TASK-007: scan_nodes_by_label
+    #[test]
+    fn test_scan_nodes_by_label_returns_matching() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        engine.create_node(vec![1, 2], vec![]);
+        engine.create_node(vec![2, 3], vec![]);
+        engine.create_node(vec![3], vec![]);
+        let nodes = engine.scan_nodes_by_label(2);
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn test_scan_nodes_by_label_nonexistent() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        engine.create_node(vec![1], vec![]);
+        let nodes = engine.scan_nodes_by_label(999);
+        assert!(nodes.is_empty());
+    }
+
+    // TASK-008: scan_edges_by_type
+    #[test]
+    fn test_scan_edges_by_type_returns_matching() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let n3 = engine.create_node(vec![], vec![]);
+        engine.create_edge(n1, n2, 1, vec![]).expect("e1");
+        engine.create_edge(n1, n3, 2, vec![]).expect("e2");
+        engine.create_edge(n2, n3, 1, vec![]).expect("e3");
+        let edges = engine.scan_edges_by_type(1);
+        assert_eq!(edges.len(), 2);
+        for edge in &edges {
+            assert_eq!(edge.rel_type_id, 1);
+        }
+    }
+
+    #[test]
+    fn test_scan_edges_by_type_empty() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let edges = engine.scan_edges_by_type(1);
+        assert!(edges.is_empty());
+    }
+
+    // REQ-CATALOG-030: StorageEngine exposes catalog accessor
+    #[test]
+    fn test_storage_engine_has_catalog() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let cat = engine.catalog();
+        // Empty catalog on fresh database
+        assert_eq!(cat.label_id("Person"), None);
+    }
+
+    // REQ-CATALOG-031: StorageEngine exposes mutable catalog accessor
+    #[test]
+    fn test_storage_engine_catalog_mut() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let cat = engine.catalog_mut();
+        let id = cat.get_or_create_label("Person");
+        assert_eq!(engine.catalog().label_id("Person"), Some(id));
+    }
+
+    // REQ-CATALOG-032: StorageEngine implements LabelRegistry by delegation
+    #[test]
+    fn test_storage_engine_label_registry() {
+        use cypherlite_core::LabelRegistry;
+
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let label_id = engine.get_or_create_label("Person");
+        assert_eq!(engine.label_id("Person"), Some(label_id));
+        assert_eq!(engine.label_name(label_id), Some("Person"));
+
+        let rel_id = engine.get_or_create_rel_type("KNOWS");
+        assert_eq!(engine.rel_type_id("KNOWS"), Some(rel_id));
+        assert_eq!(engine.rel_type_name(rel_id), Some("KNOWS"));
+
+        let prop_id = engine.get_or_create_prop_key("name");
+        assert_eq!(engine.prop_key_id("name"), Some(prop_id));
+        assert_eq!(engine.prop_key_name(prop_id), Some("name"));
     }
 }

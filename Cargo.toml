@@ -2,5 +2,6 @@
 members = [
     "crates/cypherlite-core",
     "crates/cypherlite-storage",
+    "crates/cypherlite-query",
 ]
 resolver = "2"
