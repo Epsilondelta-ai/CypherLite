@@ -9,3 +9,6 @@ pub mod node_scan;
 pub mod project;
 pub mod set_props;
 pub mod sort;
+pub mod optional_expand;
+pub mod unwind;
+pub mod with;

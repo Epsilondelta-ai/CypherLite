@@ -74,6 +74,29 @@ pub enum LogicalPlan {
         source: Box<LogicalPlan>,
         items: Vec<RemoveItem>,
     },
+    /// WITH clause: intermediate projection (scope reset).
+    With {
+        source: Box<LogicalPlan>,
+        items: Vec<ReturnItem>,
+        where_clause: Option<Expression>,
+        distinct: bool,
+    },
+    /// UNWIND clause: flatten a list into rows.
+    Unwind {
+        source: Box<LogicalPlan>,
+        expr: Expression,
+        variable: String,
+    },
+    /// OPTIONAL MATCH expand: left join semantics.
+    /// If no matching edges found, emit one record with NULL for new variables.
+    OptionalExpand {
+        source: Box<LogicalPlan>,
+        src_var: String,
+        rel_var: Option<String>,
+        target_var: String,
+        rel_type_id: Option<u32>,
+        direction: RelDirection,
+    },
     /// Empty source (produces one empty row).
     EmptySource,
 }
@@ -134,7 +157,9 @@ impl<'a> LogicalPlanner<'a> {
             Clause::Set(sc) => self.plan_set(sc, current),
             Clause::Delete(dc) => self.plan_delete(dc, current),
             Clause::Remove(rc) => self.plan_remove(rc, current),
-            Clause::With(_) | Clause::Merge(_) => Err(PlanError {
+            Clause::With(wc) => self.plan_with(wc, current),
+            Clause::Unwind(uc) => self.plan_unwind(uc, current),
+            Clause::Merge(_) => Err(PlanError {
                 message: format!("unsupported clause type: {:?}", clause),
             }),
         }
@@ -145,6 +170,10 @@ impl<'a> LogicalPlanner<'a> {
         mc: &MatchClause,
         current: Option<LogicalPlan>,
     ) -> Result<LogicalPlan, PlanError> {
+        if mc.optional {
+            return self.plan_optional_match(mc, current);
+        }
+
         // Build plan from pattern chains.
         // For now, handle the first chain only (single path pattern).
         let chain = mc.pattern.chains.first().ok_or_else(|| PlanError {
@@ -161,6 +190,87 @@ impl<'a> LogicalPlanner<'a> {
             // Simple approach: wrap previous in the new scan chain.
             // For now, just use the new plan (covers most test cases).
             let _ = prev;
+        }
+
+        // Apply WHERE predicate as Filter.
+        if let Some(ref predicate) = mc.where_clause {
+            plan = LogicalPlan::Filter {
+                source: Box::new(plan),
+                predicate: predicate.clone(),
+            };
+        }
+
+        Ok(plan)
+    }
+
+    /// Plan an OPTIONAL MATCH clause. Produces OptionalExpand nodes with left join
+    /// semantics: if no match found, new variables are padded with NULL.
+    fn plan_optional_match(
+        &mut self,
+        mc: &MatchClause,
+        current: Option<LogicalPlan>,
+    ) -> Result<LogicalPlan, PlanError> {
+        let source = current.ok_or_else(|| PlanError {
+            message: "OPTIONAL MATCH requires a preceding MATCH clause".to_string(),
+        })?;
+
+        let chain = mc.pattern.chains.first().ok_or_else(|| PlanError {
+            message: "OPTIONAL MATCH clause has no pattern chains".to_string(),
+        })?;
+
+        let mut plan = source;
+
+        // The first element should be a node (anchor from previous MATCH).
+        let mut elements = chain.elements.iter();
+        let first_node = match elements.next() {
+            Some(PatternElement::Node(np)) => np,
+            _ => {
+                return Err(PlanError {
+                    message: "OPTIONAL MATCH pattern must start with a node".to_string(),
+                })
+            }
+        };
+
+        // The anchor variable binds to records from the source plan.
+        let _anchor_var = first_node.variable.clone().unwrap_or_default();
+
+        // Process relationship + target node pairs as OptionalExpand.
+        while let Some(rel_elem) = elements.next() {
+            let rel = match rel_elem {
+                PatternElement::Relationship(rp) => rp,
+                _ => {
+                    return Err(PlanError {
+                        message: "expected relationship after node in pattern".to_string(),
+                    })
+                }
+            };
+
+            let target_node = match elements.next() {
+                Some(PatternElement::Node(np)) => np,
+                _ => {
+                    return Err(PlanError {
+                        message: "expected node after relationship in pattern".to_string(),
+                    })
+                }
+            };
+
+            let src_var = Self::extract_src_var(&plan);
+            let rel_var = rel.variable.clone();
+            let target_var = target_node.variable.clone().unwrap_or_default();
+
+            let rel_type_id = rel
+                .rel_types
+                .first()
+                .map(|name| self.registry.get_or_create_rel_type(name));
+
+            plan = LogicalPlan::OptionalExpand {
+                source: Box::new(plan),
+                src_var,
+                rel_var,
+                target_var,
+                rel_type_id,
+                direction: rel.direction,
+            };
         }
 
         // Apply WHERE predicate as Filter.
@@ -243,6 +353,7 @@ impl<'a> LogicalPlanner<'a> {
         match plan {
             LogicalPlan::NodeScan { variable, .. } => variable.clone(),
             LogicalPlan::Expand { target_var, .. } => target_var.clone(),
+            LogicalPlan::OptionalExpand { target_var, .. } => target_var.clone(),
             LogicalPlan::Filter { source, .. } => Self::extract_src_var(source),
             _ => String::new(),
         }
@@ -325,6 +436,117 @@ impl<'a> LogicalPlanner<'a> {
             source: Box::new(source),
             exprs: dc.exprs.clone(),
             detach: dc.detach,
+        })
+    }
+
+    fn plan_with(
+        &self,
+        wc: &WithClause,
+        current: Option<LogicalPlan>,
+    ) -> Result<LogicalPlan, PlanError> {
+        let source = current.ok_or_else(|| PlanError {
+            message: "WITH clause requires a preceding data source".to_string(),
+        })?;
+
+        // Detect aggregate functions in WITH items.
+        // If any item contains an aggregate, split into group_keys + aggregates.
+        let has_aggregate = wc.items.iter().any(|item| Self::is_aggregate_expr(&item.expr));
+
+        if has_aggregate {
+            let mut group_keys = Vec::new();
+            let mut aggregates = Vec::new();
+
+            for item in &wc.items {
+                if Self::is_aggregate_expr(&item.expr) {
+                    let alias = item
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| Self::default_agg_name(&item.expr));
+                    let func = Self::extract_aggregate_func(&item.expr)?;
+                    aggregates.push((alias, func));
+                } else {
+                    group_keys.push(item.expr.clone());
+                }
+            }
+
+            let mut plan = LogicalPlan::Aggregate {
+                source: Box::new(source),
+                group_keys,
+                aggregates,
+            };
+
+            // Apply WITH WHERE after aggregation
+            if let Some(ref predicate) = wc.where_clause {
+                plan = LogicalPlan::Filter {
+                    source: Box::new(plan),
+                    predicate: predicate.clone(),
+                };
+            }
+
+            Ok(plan)
+        } else {
+            Ok(LogicalPlan::With {
+                source: Box::new(source),
+                items: wc.items.clone(),
+                where_clause: wc.where_clause.clone(),
+                distinct: wc.distinct,
+            })
+        }
+    }
+
+    /// Check if an expression is an aggregate function.
+    fn is_aggregate_expr(expr: &Expression) -> bool {
+        match expr {
+            Expression::CountStar => true,
+            Expression::FunctionCall { name, .. } => {
+                matches!(
+                    name.to_lowercase().as_str(),
+                    "count" | "sum" | "avg" | "min" | "max" | "collect"
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Extract an AggregateFunc from an aggregate expression.
+    fn extract_aggregate_func(expr: &Expression) -> Result<AggregateFunc, PlanError> {
+        match expr {
+            Expression::CountStar => Ok(AggregateFunc::CountStar),
+            Expression::FunctionCall {
+                name, distinct, ..
+            } => match name.to_lowercase().as_str() {
+                "count" => Ok(AggregateFunc::Count {
+                    distinct: *distinct,
+                }),
+                other => Err(PlanError {
+                    message: format!("unsupported aggregate function: {}", other),
+                }),
+            },
+            _ => Err(PlanError {
+                message: "not an aggregate expression".to_string(),
+            }),
+        }
+    }
+
+    /// Generate a default display name for an aggregate expression.
+    fn default_agg_name(expr: &Expression) -> String {
+        match expr {
+            Expression::CountStar => "count(*)".to_string(),
+            Expression::FunctionCall { name, .. } => format!("{}(..)", name),
+            _ => "agg".to_string(),
+        }
+    }
+
+    fn plan_unwind(
+        &self,
+        uc: &UnwindClause,
+        current: Option<LogicalPlan>,
+    ) -> Result<LogicalPlan, PlanError> {
+        let source = current.unwrap_or(LogicalPlan::EmptySource);
+        Ok(LogicalPlan::Unwind {
+            source: Box::new(source),
+            expr: uc.expr.clone(),
+            variable: uc.variable.clone(),
         })
     }
 
@@ -690,11 +912,377 @@ mod tests {
             .contains("requires a preceding data source"));
     }
 
+    // ======================================================================
+    // TASK-061: Planner WITH clause tests
+    // ======================================================================
+
+    /// MATCH (n:Person) WITH n RETURN n -> NodeScan + With + Project
+    #[test]
+    fn test_plan_with_simple() {
+        let plan = plan_query("MATCH (n:Person) WITH n RETURN n");
+
+        // Outermost: Project
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        // With
+        let with_source = match project_source {
+            LogicalPlan::With {
+                source,
+                items,
+                where_clause,
+                distinct,
+            } => {
+                assert_eq!(items.len(), 1);
+                assert!(where_clause.is_none());
+                assert!(!distinct);
+                source.as_ref()
+            }
+            other => panic!("expected With, got {:?}", other),
+        };
+
+        // NodeScan
+        match with_source {
+            LogicalPlan::NodeScan { variable, .. } => {
+                assert_eq!(variable, "n");
+            }
+            other => panic!("expected NodeScan, got {:?}", other),
+        }
+    }
+
+    /// MATCH (n:Person) WITH n WHERE n.age > 30 RETURN n
+    #[test]
+    fn test_plan_with_where() {
+        let plan = plan_query("MATCH (n:Person) WITH n WHERE n.age > 30 RETURN n");
+
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        match project_source {
+            LogicalPlan::With {
+                where_clause,
+                items,
+                ..
+            } => {
+                assert_eq!(items.len(), 1);
+                assert!(where_clause.is_some());
+            }
+            other => panic!("expected With, got {:?}", other),
+        }
+    }
+
+    /// WITH without source should fail
+    #[test]
+    fn test_plan_with_without_source_fails() {
+        let query = parse_query("MATCH (n) WITH n RETURN n").expect("should parse");
+        // Build a WITH-only query
+        let with_only = Query {
+            clauses: vec![query.clauses.into_iter().nth(1).expect("has WITH")],
+        };
+        let mut catalog = Catalog::default();
+        let mut planner = LogicalPlanner::new(&mut catalog);
+        let result = planner.plan(&with_only);
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("should fail")
+            .message
+            .contains("requires a preceding data source"));
+    }
+
+    // ======================================================================
+    // TASK-064: WITH DISTINCT planner test
+    // ======================================================================
+
+    /// MATCH (n:Person) WITH DISTINCT n.name AS name RETURN name
+    #[test]
+    fn test_plan_with_distinct() {
+        let plan = plan_query("MATCH (n:Person) WITH DISTINCT n.name AS name RETURN name");
+
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        match project_source {
+            LogicalPlan::With { distinct, items, .. } => {
+                assert!(distinct);
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].alias, Some("name".to_string()));
+            }
+            other => panic!("expected With, got {:?}", other),
+        }
+    }
+
+    // ======================================================================
+    // TASK-063: WITH + aggregation planner tests
+    // ======================================================================
+
+    /// MATCH (n:Person) WITH n, count(*) AS cnt RETURN n, cnt
+    /// -> NodeScan + Aggregate(group_keys=[n], aggs=[count(*) AS cnt]) + Project
+    #[test]
+    fn test_plan_with_count_star_aggregation() {
+        let plan = plan_query("MATCH (n:Person) WITH n, count(*) AS cnt RETURN n, cnt");
+
+        // Outermost: Project
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        // Should be Aggregate (not With), because count(*) was detected
+        match project_source {
+            LogicalPlan::Aggregate {
+                group_keys,
+                aggregates,
+                source,
+                ..
+            } => {
+                // group key: n
+                assert_eq!(group_keys.len(), 1);
+                assert_eq!(
+                    group_keys[0],
+                    Expression::Variable("n".to_string())
+                );
+                // aggregate: count(*) AS cnt
+                assert_eq!(aggregates.len(), 1);
+                assert_eq!(aggregates[0].0, "cnt");
+                assert_eq!(aggregates[0].1, AggregateFunc::CountStar);
+                // source: NodeScan
+                match source.as_ref() {
+                    LogicalPlan::NodeScan { variable, .. } => {
+                        assert_eq!(variable, "n");
+                    }
+                    other => panic!("expected NodeScan, got {:?}", other),
+                }
+            }
+            other => panic!("expected Aggregate, got {:?}", other),
+        }
+    }
+
+    /// MATCH (n:Person) WITH count(*) AS total RETURN total
+    /// -> NodeScan + Aggregate(group_keys=[], aggs=[count(*) AS total]) + Project
+    #[test]
+    fn test_plan_with_count_star_no_group_key() {
+        let plan = plan_query("MATCH (n:Person) WITH count(*) AS total RETURN total");
+
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        match project_source {
+            LogicalPlan::Aggregate {
+                group_keys,
+                aggregates,
+                ..
+            } => {
+                assert!(group_keys.is_empty());
+                assert_eq!(aggregates.len(), 1);
+                assert_eq!(aggregates[0].0, "total");
+                assert_eq!(aggregates[0].1, AggregateFunc::CountStar);
+            }
+            other => panic!("expected Aggregate, got {:?}", other),
+        }
+    }
+
     /// Optimizer pass-through test.
     #[test]
     fn test_optimizer_passthrough() {
         let plan = plan_query("MATCH (n:Person) WHERE n.age > 30 RETURN n");
         let optimized = optimize::optimize(plan.clone());
         assert_eq!(plan, optimized);
+    }
+
+    // ======================================================================
+    // TASK-070: Planner UNWIND clause tests
+    // ======================================================================
+
+    /// UNWIND [1,2,3] AS x RETURN x -> EmptySource + Unwind + Project
+    #[test]
+    fn test_plan_unwind_list_literal() {
+        let plan = plan_query("UNWIND [1, 2, 3] AS x RETURN x");
+
+        // Outermost: Project
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        // Unwind
+        match project_source {
+            LogicalPlan::Unwind {
+                source,
+                expr,
+                variable,
+            } => {
+                assert_eq!(variable, "x");
+                assert!(matches!(expr, Expression::ListLiteral(_)));
+                // Source should be EmptySource
+                match source.as_ref() {
+                    LogicalPlan::EmptySource => {}
+                    other => panic!("expected EmptySource, got {:?}", other),
+                }
+            }
+            other => panic!("expected Unwind, got {:?}", other),
+        }
+    }
+
+    /// MATCH (n:Person) UNWIND n.hobbies AS h RETURN h
+    /// -> NodeScan + Unwind + Project
+    #[test]
+    fn test_plan_match_unwind() {
+        let plan = plan_query("MATCH (n:Person) UNWIND n.hobbies AS h RETURN h");
+
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        match project_source {
+            LogicalPlan::Unwind {
+                source,
+                variable,
+                expr,
+            } => {
+                assert_eq!(variable, "h");
+                assert_eq!(
+                    *expr,
+                    Expression::Property(
+                        Box::new(Expression::Variable("n".to_string())),
+                        "hobbies".to_string(),
+                    )
+                );
+                match source.as_ref() {
+                    LogicalPlan::NodeScan { variable, .. } => {
+                        assert_eq!(variable, "n");
+                    }
+                    other => panic!("expected NodeScan, got {:?}", other),
+                }
+            }
+            other => panic!("expected Unwind, got {:?}", other),
+        }
+    }
+
+    // ======================================================================
+    // TASK-075: Planner OPTIONAL MATCH tests
+    // ======================================================================
+
+    /// MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a, b
+    /// -> NodeScan(a) + OptionalExpand(KNOWS, b) + Project
+    #[test]
+    fn test_plan_optional_match_basic() {
+        let (plan, catalog) = plan_query_with_catalog(
+            "MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a, b",
+        );
+        let knows_id = catalog.rel_type_id("KNOWS").expect("KNOWS rel type");
+
+        // Outermost: Project
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        // OptionalExpand
+        let opt_source = match project_source {
+            LogicalPlan::OptionalExpand {
+                src_var,
+                rel_var,
+                target_var,
+                rel_type_id,
+                direction,
+                source,
+            } => {
+                assert_eq!(src_var, "a");
+                assert!(rel_var.is_none());
+                assert_eq!(target_var, "b");
+                assert_eq!(*rel_type_id, Some(knows_id));
+                assert_eq!(*direction, RelDirection::Outgoing);
+                source.as_ref()
+            }
+            other => panic!("expected OptionalExpand, got {:?}", other),
+        };
+
+        // NodeScan(a:Person)
+        match opt_source {
+            LogicalPlan::NodeScan { variable, label_id } => {
+                assert_eq!(variable, "a");
+                assert!(label_id.is_some());
+            }
+            other => panic!("expected NodeScan, got {:?}", other),
+        }
+    }
+
+    /// OPTIONAL MATCH without preceding MATCH should fail
+    #[test]
+    fn test_plan_optional_match_without_source_fails() {
+        let query = parse_query("OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a, b")
+            .expect("should parse");
+        let mut catalog = Catalog::default();
+        let mut planner = LogicalPlanner::new(&mut catalog);
+        let result = planner.plan(&query);
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("should fail")
+            .message
+            .contains("requires a preceding MATCH"));
+    }
+
+    /// MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b) WHERE b.age > 20 RETURN a, b
+    /// -> NodeScan + OptionalExpand + Filter + Project
+    #[test]
+    fn test_plan_optional_match_with_where() {
+        let plan = plan_query(
+            "MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b) WHERE b.age > 20 RETURN a, b",
+        );
+
+        // Outermost: Project
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        // Filter from OPTIONAL MATCH WHERE
+        let filter_source = match project_source {
+            LogicalPlan::Filter { source, .. } => source.as_ref(),
+            other => panic!("expected Filter, got {:?}", other),
+        };
+
+        // OptionalExpand
+        match filter_source {
+            LogicalPlan::OptionalExpand { target_var, .. } => {
+                assert_eq!(target_var, "b");
+            }
+            other => panic!("expected OptionalExpand, got {:?}", other),
+        }
+    }
+
+    /// MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b
+    /// -> OptionalExpand with rel_var
+    #[test]
+    fn test_plan_optional_match_with_rel_var() {
+        let plan = plan_query(
+            "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b",
+        );
+
+        let project_source = match &plan {
+            LogicalPlan::Project { source, .. } => source.as_ref(),
+            other => panic!("expected Project, got {:?}", other),
+        };
+
+        match project_source {
+            LogicalPlan::OptionalExpand {
+                rel_var,
+                target_var,
+                ..
+            } => {
+                assert_eq!(*rel_var, Some("r".to_string()));
+                assert_eq!(target_var, "b");
+            }
+            other => panic!("expected OptionalExpand, got {:?}", other),
+        }
     }
 }

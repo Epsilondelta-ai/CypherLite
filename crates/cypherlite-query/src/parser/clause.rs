@@ -143,6 +143,17 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse an UNWIND clause (TASK-068).
+    ///
+    /// Grammar: UNWIND expression AS variable
+    pub fn parse_unwind_clause(&mut self) -> Result<UnwindClause, ParseError> {
+        self.expect(&Token::Unwind)?;
+        let expr = self.parse_expression()?;
+        self.expect(&Token::As)?;
+        let variable = self.expect_ident()?;
+        Ok(UnwindClause { expr, variable })
+    }
+
     /// Parse a MERGE clause (P2 syntax -- parsed but execution returns UnsupportedSyntax).
     ///
     /// Grammar: MERGE pattern
@@ -625,5 +636,62 @@ mod tests {
         };
         assert_eq!(node.variable, Some("n".to_string()));
         assert_eq!(node.labels, vec!["Person".to_string()]);
+    }
+
+    // ======================================================================
+    // TASK-068: parse_unwind_clause
+    // ======================================================================
+
+    #[test]
+    fn unwind_list_literal() {
+        let (tokens, input) = make_parser("UNWIND [1, 2, 3] AS x");
+        let mut p = Parser::new(&tokens, &input);
+        let uc = p.parse_unwind_clause().expect("should parse");
+
+        assert_eq!(
+            uc.expr,
+            Expression::ListLiteral(vec![
+                Expression::Literal(Literal::Integer(1)),
+                Expression::Literal(Literal::Integer(2)),
+                Expression::Literal(Literal::Integer(3)),
+            ])
+        );
+        assert_eq!(uc.variable, "x");
+    }
+
+    #[test]
+    fn unwind_variable_expression() {
+        let (tokens, input) = make_parser("UNWIND items AS item");
+        let mut p = Parser::new(&tokens, &input);
+        let uc = p.parse_unwind_clause().expect("should parse");
+
+        assert_eq!(uc.expr, Expression::Variable("items".to_string()));
+        assert_eq!(uc.variable, "item");
+    }
+
+    #[test]
+    fn unwind_property_expression() {
+        let (tokens, input) = make_parser("UNWIND n.hobbies AS h");
+        let mut p = Parser::new(&tokens, &input);
+        let uc = p.parse_unwind_clause().expect("should parse");
+
+        assert_eq!(
+            uc.expr,
+            Expression::Property(
+                Box::new(Expression::Variable("n".to_string())),
+                "hobbies".to_string(),
+            )
+        );
+        assert_eq!(uc.variable, "h");
+    }
+
+    #[test]
+    fn unwind_empty_list() {
+        let (tokens, input) = make_parser("UNWIND [] AS x");
+        let mut p = Parser::new(&tokens, &input);
+        let uc = p.parse_unwind_clause().expect("should parse");
+
+        assert_eq!(uc.expr, Expression::ListLiteral(vec![]));
+        assert_eq!(uc.variable, "x");
     }
 }

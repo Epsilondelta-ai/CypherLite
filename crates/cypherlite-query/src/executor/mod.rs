@@ -186,6 +186,50 @@ pub fn execute(
             let source_records = execute(source, engine, params)?;
             operators::set_props::execute_remove(source_records, items, engine, params)
         }
+        LogicalPlan::Unwind {
+            source,
+            expr,
+            variable,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            operators::unwind::execute_unwind(source_records, expr, variable, engine, params)
+        }
+        LogicalPlan::With {
+            source,
+            items,
+            where_clause,
+            distinct,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            let mut result =
+                operators::with::execute_with(source_records, items, engine, params)?;
+            if *distinct {
+                deduplicate_records(&mut result);
+            }
+            if let Some(ref predicate) = where_clause {
+                result = operators::filter::execute_filter(result, predicate, engine, params)?;
+            }
+            Ok(result)
+        }
+        LogicalPlan::OptionalExpand {
+            source,
+            src_var,
+            rel_var,
+            target_var,
+            rel_type_id,
+            direction,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            Ok(operators::optional_expand::execute_optional_expand(
+                source_records,
+                src_var,
+                rel_var.as_deref(),
+                target_var,
+                *rel_type_id,
+                direction,
+                engine,
+            ))
+        }
     }
 }
 

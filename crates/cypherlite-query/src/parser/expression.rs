@@ -135,8 +135,23 @@ impl<'a> Parser<'a> {
                 self.expect(&Token::RParen)?;
                 Ok(expr)
             }
+            Some(Token::LBracket) => self.parse_list_literal(),
             _ => self.parse_primary(),
         }
+    }
+
+    /// Parse a list literal: `[expr, expr, ...]`
+    fn parse_list_literal(&mut self) -> Result<Expression, ParseError> {
+        self.expect(&Token::LBracket)?;
+        let mut elements = Vec::new();
+        if !self.check(&Token::RBracket) {
+            elements.push(self.parse_expression()?);
+            while self.eat(&Token::Comma) {
+                elements.push(self.parse_expression()?);
+            }
+        }
+        self.expect(&Token::RBracket)?;
+        Ok(Expression::ListLiteral(elements))
     }
 
     /// Parse a primary expression: literal, variable, function call, parameter.
@@ -572,6 +587,77 @@ mod tests {
     fn expr_error_unmatched_paren() {
         let result = parse_expr("(1 + 2");
         assert!(result.is_err());
+    }
+
+    // ---- TASK-067/068: List literal expressions ----
+
+    #[test]
+    fn expr_list_literal_empty() {
+        let expr = parse_expr("[]").expect("should parse");
+        assert_eq!(expr, Expression::ListLiteral(vec![]));
+    }
+
+    #[test]
+    fn expr_list_literal_integers() {
+        let expr = parse_expr("[1, 2, 3]").expect("should parse");
+        assert_eq!(
+            expr,
+            Expression::ListLiteral(vec![
+                Expression::Literal(Literal::Integer(1)),
+                Expression::Literal(Literal::Integer(2)),
+                Expression::Literal(Literal::Integer(3)),
+            ])
+        );
+    }
+
+    #[test]
+    fn expr_list_literal_mixed() {
+        let expr = parse_expr("[1, 'hello', true, null]").expect("should parse");
+        assert_eq!(
+            expr,
+            Expression::ListLiteral(vec![
+                Expression::Literal(Literal::Integer(1)),
+                Expression::Literal(Literal::String("hello".to_string())),
+                Expression::Literal(Literal::Bool(true)),
+                Expression::Literal(Literal::Null),
+            ])
+        );
+    }
+
+    #[test]
+    fn expr_list_literal_nested() {
+        let expr = parse_expr("[[1, 2], [3]]").expect("should parse");
+        assert_eq!(
+            expr,
+            Expression::ListLiteral(vec![
+                Expression::ListLiteral(vec![
+                    Expression::Literal(Literal::Integer(1)),
+                    Expression::Literal(Literal::Integer(2)),
+                ]),
+                Expression::ListLiteral(vec![
+                    Expression::Literal(Literal::Integer(3)),
+                ]),
+            ])
+        );
+    }
+
+    #[test]
+    fn expr_list_literal_with_expressions() {
+        let expr = parse_expr("[1 + 2, n.name]").expect("should parse");
+        assert_eq!(
+            expr,
+            Expression::ListLiteral(vec![
+                Expression::BinaryOp(
+                    BinaryOp::Add,
+                    Box::new(Expression::Literal(Literal::Integer(1))),
+                    Box::new(Expression::Literal(Literal::Integer(2))),
+                ),
+                Expression::Property(
+                    Box::new(Expression::Variable("n".to_string())),
+                    "name".to_string(),
+                ),
+            ])
+        );
     }
 
     // All arithmetic operators

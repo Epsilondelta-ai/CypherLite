@@ -64,6 +64,7 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
             }
             Some(Token::With) => Clause::With(parser.parse_with_clause()?),
             Some(Token::Merge) => Clause::Merge(parser.parse_merge_clause()?),
+            Some(Token::Unwind) => Clause::Unwind(parser.parse_unwind_clause()?),
             Some(Token::Where) => {
                 return Err(parser.error("WHERE clause must follow a MATCH clause"));
             }
@@ -624,5 +625,32 @@ mod tests {
     fn query_case_insensitive() {
         let q = parse_query("match (n:Person) return n").expect("should parse");
         assert_eq!(q.clauses.len(), 2);
+    }
+
+    // ======================================================================
+    // TASK-068: UNWIND clause integration tests
+    // ======================================================================
+
+    #[test]
+    fn query_unwind_list_return() {
+        let q = parse_query("UNWIND [1, 2, 3] AS x RETURN x").expect("should parse");
+        assert_eq!(q.clauses.len(), 2);
+        assert!(matches!(&q.clauses[0], Clause::Unwind(_)));
+        assert!(matches!(&q.clauses[1], Clause::Return(_)));
+
+        if let Clause::Unwind(uc) = &q.clauses[0] {
+            assert_eq!(uc.variable, "x");
+            assert!(matches!(&uc.expr, Expression::ListLiteral(_)));
+        }
+    }
+
+    #[test]
+    fn query_match_unwind_return() {
+        let q = parse_query("MATCH (n:Person) UNWIND n.hobbies AS h RETURN h")
+            .expect("should parse");
+        assert_eq!(q.clauses.len(), 3);
+        assert!(matches!(&q.clauses[0], Clause::Match(_)));
+        assert!(matches!(&q.clauses[1], Clause::Unwind(_)));
+        assert!(matches!(&q.clauses[2], Clause::Return(_)));
     }
 }

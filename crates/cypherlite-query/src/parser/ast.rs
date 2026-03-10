@@ -17,6 +17,7 @@ pub enum Clause {
     Delete(DeleteClause),
     With(WithClause),
     Merge(MergeClause),
+    Unwind(UnwindClause),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,6 +95,12 @@ pub struct MergeClause {
     pub pattern: Pattern,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnwindClause {
+    pub expr: Expression,
+    pub variable: String,
+}
+
 // -- Patterns --
 
 #[derive(Debug, Clone, PartialEq)]
@@ -161,6 +168,8 @@ pub enum Expression {
     IsNull(Box<Expression>, bool),
     /// `count(*)`
     CountStar,
+    /// List literal: `[expr, expr, ...]`
+    ListLiteral(Vec<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -112,6 +112,10 @@ pub enum Token {
     #[regex("(?i)on", priority = 10)]
     On,
 
+    // -- P3 Keywords -------------------------------------------------------
+    #[regex("(?i)unwind", priority = 10)]
+    Unwind,
+
     // -- Literals ----------------------------------------------------------
     /// Floating-point literal (must come before integer to match greedily).
     #[regex(r"[0-9]+\.[0-9]+", lex_float, priority = 3)]
@@ -383,6 +387,7 @@ mod tests {
             ("asc", Token::Asc),
             ("desc", Token::Desc),
             ("on", Token::On),
+            ("unwind", Token::Unwind),
         ];
         for (input, expected) in kw_pairs {
             assert_eq!(
@@ -856,6 +861,48 @@ mod tests {
                 Token::LParen,
                 Token::Ident("b".to_string()),
                 Token::RParen,
+            ]
+        );
+    }
+
+    // ---- TASK-066: UNWIND keyword token ---------------------------------
+
+    #[test]
+    fn lex_t066_unwind_keyword() {
+        let toks = tokens("UNWIND");
+        assert_eq!(toks, vec![Token::Unwind]);
+    }
+
+    #[test]
+    fn lex_t066_unwind_case_insensitive() {
+        assert_eq!(tokens("unwind"), vec![Token::Unwind]);
+        assert_eq!(tokens("Unwind"), vec![Token::Unwind]);
+        assert_eq!(tokens("uNwInD"), vec![Token::Unwind]);
+    }
+
+    #[test]
+    fn lex_t066_unwind_not_prefix_of_identifier() {
+        // "unwinding" should be an identifier, not UNWIND + "ing"
+        let toks = tokens("unwinding");
+        assert_eq!(toks, vec![Token::Ident("unwinding".to_string())]);
+    }
+
+    #[test]
+    fn lex_t066_unwind_in_context() {
+        let toks = tokens("UNWIND [1, 2, 3] AS x");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Unwind,
+                Token::LBracket,
+                Token::Integer(1),
+                Token::Comma,
+                Token::Integer(2),
+                Token::Comma,
+                Token::Integer(3),
+                Token::RBracket,
+                Token::As,
+                Token::Ident("x".to_string()),
             ]
         );
     }
