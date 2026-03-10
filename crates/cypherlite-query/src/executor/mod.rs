@@ -245,8 +245,8 @@ mod tests {
     #[test]
     fn test_value_from_property_value_float64() {
         assert_eq!(
-            Value::from(PropertyValue::Float64(3.14)),
-            Value::Float64(3.14)
+            Value::from(PropertyValue::Float64(3.15)),
+            Value::Float64(3.15)
         );
     }
 
@@ -321,8 +321,7 @@ mod tests {
         let result = PropertyValue::try_from(Value::Node(NodeId(1)));
         assert!(result.is_err());
         assert!(result
-            .err()
-            .expect("should error")
+            .expect_err("should error")
             .contains("cannot convert graph entity"));
     }
 

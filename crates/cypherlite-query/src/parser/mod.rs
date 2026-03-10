@@ -7,6 +7,8 @@ pub mod pattern;
 use crate::lexer::{lex, LexError, Span, Token};
 pub use ast::*;
 
+// @MX:ANCHOR: [AUTO] Main entry point for the query pipeline — called by SemanticAnalyzer, Planner, and API layer
+// @MX:REASON: fan_in >= 3; all query processing starts here
 /// Parse a Cypher query string into a `Query` AST (TASK-034).
 ///
 /// This is the main public entry point for the parser. It lexes the input,
