@@ -70,6 +70,7 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
             target_var,
             rel_type_id,
             direction,
+            temporal_filter,
         } => LogicalPlan::Expand {
             source: Box::new(apply_rules(*source)),
             src_var,
@@ -77,6 +78,7 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
             target_var,
             rel_type_id,
             direction,
+            temporal_filter,
         },
         LogicalPlan::CreateOp { source, pattern } => LogicalPlan::CreateOp {
             source: source.map(|s| Box::new(apply_rules(*s))),
@@ -139,6 +141,7 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
             direction,
             min_hops,
             max_hops,
+            temporal_filter,
         } => LogicalPlan::VarLengthExpand {
             source: Box::new(apply_rules(*source)),
             src_var,
@@ -148,6 +151,7 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
             direction,
             min_hops,
             max_hops,
+            temporal_filter,
         },
         LogicalPlan::OptionalExpand {
             source,
@@ -185,6 +189,7 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
         | plan @ LogicalPlan::IndexScan { .. }
         | plan @ LogicalPlan::EmptySource
         | plan @ LogicalPlan::CreateIndex { .. }
+        | plan @ LogicalPlan::CreateEdgeIndex { .. }
         | plan @ LogicalPlan::DropIndex { .. } => plan,
     }
 }
@@ -867,6 +872,7 @@ mod tests {
                 target_var: "n".into(),
                 rel_type_id: None,
                 direction: RelDirection::Outgoing,
+                temporal_filter: None,
             }),
             predicate: Expression::BinaryOp(
                 BinaryOp::Eq,

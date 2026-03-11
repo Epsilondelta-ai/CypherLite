@@ -10,7 +10,7 @@ pub const PAGE_SIZE: usize = 4096;
 pub const MAGIC: u32 = 0x4359_4C54;
 
 /// Current database format version.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Header page is always at page 0.
 pub const HEADER_PAGE_ID: u32 = 0;
@@ -127,10 +127,20 @@ pub struct DatabaseHeader {
     /// Root page of the version store (0 = no version store allocated).
     /// Added in format version 2, stored at bytes 36-43.
     pub version_store_root_page: u64,
+    /// Bit flags for enabled database features.
+    /// Added in format version 3, stored at bytes 44-47.
+    /// Bit 0: temporal-core, Bit 1: temporal-edge.
+    pub feature_flags: u32,
 }
 
 impl DatabaseHeader {
+    /// Feature flag bit: temporal-core is enabled.
+    pub const FLAG_TEMPORAL_CORE: u32 = 1 << 0;
+    /// Feature flag bit: temporal-edge is enabled.
+    pub const FLAG_TEMPORAL_EDGE: u32 = 1 << 1;
+
     /// Creates a new database header with default values.
+    /// Feature flags are set based on compiled Cargo features.
     pub fn new() -> Self {
         Self {
             magic: MAGIC,
@@ -141,7 +151,20 @@ impl DatabaseHeader {
             next_node_id: 1,
             next_edge_id: 1,
             version_store_root_page: 0,
+            feature_flags: Self::compiled_feature_flags(),
         }
+    }
+
+    /// Returns feature flags based on the current compilation features.
+    pub fn compiled_feature_flags() -> u32 {
+        let mut flags = 0u32;
+        // temporal-core is the default feature, always on when compiled with defaults
+        flags |= Self::FLAG_TEMPORAL_CORE;
+        #[cfg(feature = "temporal-edge")]
+        {
+            flags |= Self::FLAG_TEMPORAL_EDGE;
+        }
+        flags
     }
 
     /// Serialize the database header into a 4096-byte page.
@@ -156,11 +179,13 @@ impl DatabaseHeader {
         page[28..36].copy_from_slice(&self.next_edge_id.to_le_bytes());
         // W-004: version_store_root_page at bytes 36-43
         page[36..44].copy_from_slice(&self.version_store_root_page.to_le_bytes());
+        // AA-T2: feature_flags at bytes 44-47
+        page[44..48].copy_from_slice(&self.feature_flags.to_le_bytes());
         page
     }
 
     /// Deserialize the database header from a 4096-byte page.
-    /// Supports both v1 (without version_store_root_page) and v2 formats.
+    /// Supports v1, v2, and v3 formats with auto-migration.
     pub fn from_page(page: &[u8; PAGE_SIZE]) -> Self {
         let version = u32::from_le_bytes([page[4], page[5], page[6], page[7]]);
 
@@ -171,6 +196,14 @@ impl DatabaseHeader {
             ])
         } else {
             0 // v1 headers have no version store field
+        };
+
+        // AA-T2: feature_flags at bytes 44-47 (v3+)
+        let feature_flags = if version >= 3 {
+            u32::from_le_bytes([page[44], page[45], page[46], page[47]])
+        } else {
+            // Auto-migrate: v1/v2 databases default to temporal-core only
+            Self::FLAG_TEMPORAL_CORE
         };
 
         Self {
@@ -186,6 +219,7 @@ impl DatabaseHeader {
                 page[28], page[29], page[30], page[31], page[32], page[33], page[34], page[35],
             ]),
             version_store_root_page,
+            feature_flags,
         }
     }
 }
@@ -273,6 +307,7 @@ mod tests {
             next_node_id: 42,
             next_edge_id: 99,
             version_store_root_page: 0,
+            feature_flags: DatabaseHeader::FLAG_TEMPORAL_CORE,
         };
         let page = hdr.to_page();
         let decoded = DatabaseHeader::from_page(&page);
@@ -284,6 +319,7 @@ mod tests {
         assert_eq!(decoded.next_node_id, 42);
         assert_eq!(decoded.next_edge_id, 99);
         assert_eq!(decoded.version_store_root_page, 0);
+        assert_eq!(decoded.feature_flags, DatabaseHeader::FLAG_TEMPORAL_CORE);
     }
 
     // W-004: DatabaseHeader with version_store_root_page
@@ -315,10 +351,56 @@ mod tests {
         assert_eq!(decoded.version_store_root_page, 0); // auto-migrated to 0
     }
 
-    // W-004: FORMAT_VERSION is now 2
+    // AA-T2: FORMAT_VERSION is now 3
     #[test]
-    fn test_format_version_is_2() {
-        assert_eq!(FORMAT_VERSION, 2);
+    fn test_format_version_is_3() {
+        assert_eq!(FORMAT_VERSION, 3);
+    }
+
+    // AA-T2: feature_flags field in DatabaseHeader
+    #[test]
+    fn test_database_header_feature_flags_roundtrip() {
+        let hdr = DatabaseHeader {
+            feature_flags: DatabaseHeader::FLAG_TEMPORAL_CORE | DatabaseHeader::FLAG_TEMPORAL_EDGE,
+            ..DatabaseHeader::new()
+        };
+        let page = hdr.to_page();
+        let decoded = DatabaseHeader::from_page(&page);
+        assert_eq!(
+            decoded.feature_flags,
+            DatabaseHeader::FLAG_TEMPORAL_CORE | DatabaseHeader::FLAG_TEMPORAL_EDGE
+        );
+    }
+
+    // AA-T3: v2 headers auto-migrate with feature_flags = FLAG_TEMPORAL_CORE
+    #[test]
+    fn test_database_header_v2_migration_feature_flags() {
+        let mut page = [0u8; PAGE_SIZE];
+        page[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+        page[4..8].copy_from_slice(&2u32.to_le_bytes()); // version 2
+        page[8..12].copy_from_slice(&FIRST_DATA_PAGE.to_le_bytes());
+        page[20..28].copy_from_slice(&1u64.to_le_bytes());
+        page[28..36].copy_from_slice(&1u64.to_le_bytes());
+        // bytes 44-47 are zeros (no feature_flags in v2)
+
+        let decoded = DatabaseHeader::from_page(&page);
+        assert_eq!(decoded.version, 2);
+        // Should auto-migrate to temporal-core
+        assert_eq!(decoded.feature_flags, DatabaseHeader::FLAG_TEMPORAL_CORE);
+    }
+
+    // AA-T2: compiled_feature_flags returns at least temporal-core
+    #[test]
+    fn test_compiled_feature_flags() {
+        let flags = DatabaseHeader::compiled_feature_flags();
+        assert!(flags & DatabaseHeader::FLAG_TEMPORAL_CORE != 0);
+    }
+
+    // AA-T2: new() sets feature_flags from compiled features
+    #[test]
+    fn test_database_header_new_sets_feature_flags() {
+        let hdr = DatabaseHeader::new();
+        assert!(hdr.feature_flags & DatabaseHeader::FLAG_TEMPORAL_CORE != 0);
     }
 
     // REQ-PAGE-003: FSM bitmap can track 32768 pages

@@ -52,10 +52,15 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
             Some(Token::Match) => Clause::Match(parser.parse_match_clause(false)?),
             Some(Token::Return) => Clause::Return(parser.parse_return_clause()?),
             Some(Token::Create) => {
-                // Peek at next token to distinguish CREATE INDEX from CREATE (pattern)
-                if parser.tokens.get(parser.pos + 1).map(|(t, _)| t) == Some(&Token::Index) {
+                // Peek at next tokens to distinguish CREATE INDEX / CREATE EDGE INDEX from CREATE (pattern)
+                let next1 = parser.tokens.get(parser.pos + 1).map(|(t, _)| t);
+                let next2 = parser.tokens.get(parser.pos + 2).map(|(t, _)| t);
+                if next1 == Some(&Token::Index) {
                     parser.advance(); // consume CREATE
                     Clause::CreateIndex(parser.parse_create_index_clause()?)
+                } else if next1 == Some(&Token::Edge) && next2 == Some(&Token::Index) {
+                    parser.advance(); // consume CREATE
+                    Clause::CreateIndex(parser.parse_create_edge_index_clause()?)
                 } else {
                     Clause::Create(parser.parse_create_clause()?)
                 }
@@ -649,7 +654,7 @@ mod tests {
 
         if let Clause::CreateIndex(ci) = &q.clauses[0] {
             assert_eq!(ci.name, Some("idx_person_name".to_string()));
-            assert_eq!(ci.label, "Person");
+            assert_eq!(ci.target, IndexTarget::NodeLabel("Person".to_string()));
             assert_eq!(ci.property, "name");
         } else {
             panic!("expected CreateIndex clause");
@@ -663,7 +668,7 @@ mod tests {
 
         if let Clause::CreateIndex(ci) = &q.clauses[0] {
             assert_eq!(ci.name, None);
-            assert_eq!(ci.label, "Person");
+            assert_eq!(ci.target, IndexTarget::NodeLabel("Person".to_string()));
             assert_eq!(ci.property, "name");
         } else {
             panic!("expected CreateIndex clause");
@@ -679,6 +684,42 @@ mod tests {
             assert_eq!(di.name, "idx_person_name");
         } else {
             panic!("expected DropIndex clause");
+        }
+    }
+
+    // CC-T3: CREATE EDGE INDEX parsing
+    #[test]
+    fn query_create_edge_index_with_name() {
+        let q = parse_query("CREATE EDGE INDEX eidx_knows_since ON :KNOWS(since)")
+            .expect("should parse");
+        assert_eq!(q.clauses.len(), 1);
+
+        if let Clause::CreateIndex(ci) = &q.clauses[0] {
+            assert_eq!(ci.name, Some("eidx_knows_since".to_string()));
+            assert_eq!(
+                ci.target,
+                IndexTarget::RelationshipType("KNOWS".to_string())
+            );
+            assert_eq!(ci.property, "since");
+        } else {
+            panic!("expected CreateIndex clause with RelationshipType target");
+        }
+    }
+
+    #[test]
+    fn query_create_edge_index_without_name() {
+        let q = parse_query("CREATE EDGE INDEX ON :LIKES(weight)").expect("should parse");
+        assert_eq!(q.clauses.len(), 1);
+
+        if let Clause::CreateIndex(ci) = &q.clauses[0] {
+            assert_eq!(ci.name, None);
+            assert_eq!(
+                ci.target,
+                IndexTarget::RelationshipType("LIKES".to_string())
+            );
+            assert_eq!(ci.property, "weight");
+        } else {
+            panic!("expected CreateIndex clause with RelationshipType target");
         }
     }
 

@@ -92,6 +92,15 @@ pub enum CypherLiteError {
     /// Attempt to write a system-managed property (prefixed with `_`).
     #[error("System property is read-only: {0}")]
     SystemPropertyReadOnly(String),
+
+    /// The database requires features not compiled into this binary.
+    #[error("Feature incompatible: database requires flags 0x{db_flags:08X}, compiled with 0x{compiled_flags:08X}")]
+    FeatureIncompatible {
+        /// The feature flags stored in the database header.
+        db_flags: u32,
+        /// The feature flags compiled into this binary.
+        compiled_flags: u32,
+    },
 }
 
 /// Convenience type alias for CypherLite operations.
@@ -250,6 +259,19 @@ mod tests {
         assert_eq!(
             format!("{err}"),
             "Invalid datetime format: bad input"
+        );
+    }
+
+    // AA-T4: FeatureIncompatible error
+    #[test]
+    fn test_feature_incompatible_error() {
+        let err = CypherLiteError::FeatureIncompatible {
+            db_flags: 0x03,
+            compiled_flags: 0x01,
+        };
+        assert_eq!(
+            format!("{err}"),
+            "Feature incompatible: database requires flags 0x00000003, compiled with 0x00000001"
         );
     }
 }

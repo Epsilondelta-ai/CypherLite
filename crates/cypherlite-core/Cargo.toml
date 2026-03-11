@@ -1,6 +1,6 @@
 [package]
 name = "cypherlite-core"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.84"
 
@@ -8,6 +8,14 @@ rust-version = "1.84"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
+
+[features]
+default = ["temporal-core"]
+temporal-core = []
+temporal-edge = ["temporal-core"]
+subgraph = ["temporal-edge"]
+hypergraph = ["subgraph"]
+full-temporal = ["hypergraph"]
 
 [dev-dependencies]
 proptest = "1"

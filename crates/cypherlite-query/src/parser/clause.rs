@@ -229,7 +229,36 @@ impl<'a> Parser<'a> {
 
         Ok(CreateIndexClause {
             name,
-            label,
+            target: IndexTarget::NodeLabel(label),
+            property,
+        })
+    }
+
+    /// Parse a CREATE EDGE INDEX clause (CC-T3).
+    ///
+    /// Grammar: CREATE EDGE INDEX [name] ON :RelType(property)
+    /// The parser has already consumed CREATE and is positioned at EDGE.
+    pub fn parse_create_edge_index_clause(&mut self) -> Result<CreateIndexClause, ParseError> {
+        self.expect(&Token::Edge)?;
+        self.expect(&Token::Index)?;
+
+        // Optional index name (identifier before ON)
+        let name = if !self.check(&Token::On) {
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+
+        self.expect(&Token::On)?;
+        self.expect(&Token::Colon)?;
+        let rel_type = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+        let property = self.expect_ident()?;
+        self.expect(&Token::RParen)?;
+
+        Ok(CreateIndexClause {
+            name,
+            target: IndexTarget::RelationshipType(rel_type),
             property,
         })
     }

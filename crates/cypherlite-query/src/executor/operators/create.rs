@@ -10,10 +10,20 @@ use cypherlite_storage::StorageEngine;
 pub const SYSTEM_PROP_CREATED_AT: &str = "_created_at";
 /// System property name for last-updated timestamp.
 pub const SYSTEM_PROP_UPDATED_AT: &str = "_updated_at";
+/// Temporal edge property: validity start timestamp.
+pub const TEMPORAL_PROP_VALID_FROM: &str = "_valid_from";
+/// Temporal edge property: validity end timestamp.
+pub const TEMPORAL_PROP_VALID_TO: &str = "_valid_to";
 
-/// Check if a property name is a system-managed property.
+/// Check if a property name is a system-managed (read-only) property.
+/// Note: _valid_from and _valid_to are temporal but user-settable, so they are NOT system properties.
 pub fn is_system_property(name: &str) -> bool {
     name == SYSTEM_PROP_CREATED_AT || name == SYSTEM_PROP_UPDATED_AT
+}
+
+/// Check if a property name is a temporal edge property (user-settable).
+pub fn is_temporal_edge_property(name: &str) -> bool {
+    name == TEMPORAL_PROP_VALID_FROM || name == TEMPORAL_PROP_VALID_TO
 }
 
 /// Get the current query timestamp from params.
@@ -38,6 +48,21 @@ fn inject_create_timestamps(
     let updated_key = engine.get_or_create_prop_key(SYSTEM_PROP_UPDATED_AT);
     properties.push((created_key, PropertyValue::DateTime(now)));
     properties.push((updated_key, PropertyValue::DateTime(now)));
+}
+
+/// Inject _valid_from on edge creation if not already provided by user.
+fn inject_edge_valid_from(
+    properties: &mut Vec<(u32, PropertyValue)>,
+    engine: &mut StorageEngine,
+    params: &Params,
+) {
+    let valid_from_key = engine.get_or_create_prop_key(TEMPORAL_PROP_VALID_FROM);
+    // Only inject if user didn't already set _valid_from
+    let already_set = properties.iter().any(|(k, _)| *k == valid_from_key);
+    if !already_set {
+        let now = get_query_timestamp(params);
+        properties.push((valid_from_key, PropertyValue::DateTime(now)));
+    }
 }
 
 /// Validate that no system properties are being set by the user in a map literal.
@@ -214,6 +239,8 @@ fn create_chain(
 
                 if temporal_enabled {
                     inject_create_timestamps(&mut rel_props, engine, params);
+                    // BB-T3: Auto-inject _valid_from on edge CREATE
+                    inject_edge_valid_from(&mut rel_props, engine, params);
                 }
 
                 // Create edge based on direction
@@ -411,6 +438,87 @@ mod tests {
         assert!(records[0].contains_key("b"));
         assert_eq!(engine.node_count(), 2);
         assert_eq!(engine.edge_count(), 1);
+    }
+
+    // BB-T1: is_system_property does NOT include _valid_from/_valid_to
+    #[test]
+    fn test_valid_from_is_not_system_property() {
+        assert!(!is_system_property("_valid_from"));
+        assert!(!is_system_property("_valid_to"));
+    }
+
+    // BB-T1: is_temporal_edge_property recognizes _valid_from/_valid_to
+    #[test]
+    fn test_temporal_edge_property_detection() {
+        assert!(is_temporal_edge_property("_valid_from"));
+        assert!(is_temporal_edge_property("_valid_to"));
+        assert!(!is_temporal_edge_property("_created_at"));
+        assert!(!is_temporal_edge_property("name"));
+    }
+
+    // BB-T3: Edge CREATE injects _valid_from
+    #[test]
+    fn test_create_edge_injects_valid_from() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let pattern = Pattern {
+            chains: vec![PatternChain {
+                elements: vec![
+                    PatternElement::Node(NodePattern {
+                        variable: Some("a".to_string()),
+                        labels: vec!["Person".to_string()],
+                        properties: None,
+                    }),
+                    PatternElement::Relationship(RelationshipPattern {
+                        variable: Some("r".to_string()),
+                        rel_types: vec!["KNOWS".to_string()],
+                        direction: RelDirection::Outgoing,
+                        properties: None,
+                        min_hops: None,
+                        max_hops: None,
+                    }),
+                    PatternElement::Node(NodePattern {
+                        variable: Some("b".to_string()),
+                        labels: vec!["Person".to_string()],
+                        properties: None,
+                    }),
+                ],
+            }],
+        };
+
+        let mut params = Params::new();
+        params.insert(
+            "__query_start_ms__".to_string(),
+            Value::Int64(1_700_000_000_000),
+        );
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params);
+        let records = result.expect("should succeed");
+
+        // Get the edge and verify it has _valid_from
+        if let Some(Value::Edge(eid)) = records[0].get("r") {
+            let edge = engine.get_edge(*eid).expect("edge exists");
+            let valid_from_key = engine
+                .catalog()
+                .prop_key_id("_valid_from")
+                .expect("_valid_from key");
+            let has_valid_from = edge.properties.iter().any(|(k, _)| *k == valid_from_key);
+            assert!(has_valid_from, "edge should have _valid_from property");
+
+            // Also verify _created_at and _updated_at
+            let created_key = engine
+                .catalog()
+                .prop_key_id("_created_at")
+                .expect("_created_at key");
+            let updated_key = engine
+                .catalog()
+                .prop_key_id("_updated_at")
+                .expect("_updated_at key");
+            assert!(edge.properties.iter().any(|(k, _)| *k == created_key));
+            assert!(edge.properties.iter().any(|(k, _)| *k == updated_key));
+        } else {
+            panic!("expected edge value for 'r'");
+        }
     }
 
     #[test]

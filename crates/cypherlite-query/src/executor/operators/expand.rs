@@ -1,5 +1,6 @@
 // ExpandOp: edge traversal (linked-list walk, O(degree))
 
+use crate::executor::operators::temporal_filter::{is_edge_temporally_valid, TemporalFilter};
 use crate::executor::{Record, Value};
 use crate::parser::ast::RelDirection;
 use cypherlite_core::NodeId;
@@ -8,6 +9,10 @@ use cypherlite_storage::StorageEngine;
 /// Expand from source records along edges.
 /// For each source record, find edges matching direction and type,
 /// and produce new records with rel_var and target_var bindings.
+///
+/// When `temporal_filter` is Some, edges that fail temporal validity
+/// are skipped (DD-T2).
+#[allow(clippy::too_many_arguments)]
 pub fn execute_expand(
     source_records: Vec<Record>,
     src_var: &str,
@@ -16,6 +21,7 @@ pub fn execute_expand(
     rel_type_id: Option<u32>,
     direction: &RelDirection,
     engine: &StorageEngine,
+    temporal_filter: Option<&TemporalFilter>,
 ) -> Vec<Record> {
     let mut results = Vec::new();
 
@@ -31,6 +37,13 @@ pub fn execute_expand(
             // Filter by relationship type if specified
             if let Some(tid) = rel_type_id {
                 if edge.rel_type_id != tid {
+                    continue;
+                }
+            }
+
+            // Temporal filter: skip edges that are not temporally valid
+            if let Some(tf) = temporal_filter {
+                if !is_edge_temporally_valid(edge.edge_id, tf, engine) {
                     continue;
                 }
             }
@@ -122,6 +135,7 @@ mod tests {
             Some(knows_type),
             &RelDirection::Outgoing,
             &engine,
+            None,
         );
 
         assert_eq!(results.len(), 2);
@@ -156,6 +170,7 @@ mod tests {
             Some(knows_type),
             &RelDirection::Incoming,
             &engine,
+            None,
         );
 
         assert_eq!(results.len(), 1);
@@ -187,6 +202,7 @@ mod tests {
             Some(likes_type),
             &RelDirection::Outgoing,
             &engine,
+            None,
         );
 
         assert!(results.is_empty());
@@ -217,6 +233,7 @@ mod tests {
             None,
             &RelDirection::Undirected,
             &engine,
+            None,
         );
 
         assert_eq!(results.len(), 1);

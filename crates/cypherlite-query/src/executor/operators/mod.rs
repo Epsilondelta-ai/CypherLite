@@ -14,5 +14,6 @@ pub mod sort;
 pub mod optional_expand;
 pub mod unwind;
 pub mod var_length_expand;
+pub mod temporal_filter;
 pub mod temporal_scan;
 pub mod with;

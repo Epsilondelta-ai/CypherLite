@@ -120,6 +120,10 @@ pub enum Token {
     #[regex("(?i)drop", priority = 10)]
     Drop,
 
+    // -- P5 Keywords (Edge Indexes) ------------------------------------------
+    #[regex("(?i)edge", priority = 10)]
+    Edge,
+
     // -- P4 Keywords (Temporal) ---------------------------------------------
     #[regex("(?i)at", priority = 10)]
     At,
@@ -406,6 +410,7 @@ mod tests {
             ("unwind", Token::Unwind),
             ("index", Token::Index),
             ("drop", Token::Drop),
+            ("edge", Token::Edge),
         ];
         for (input, expected) in kw_pairs {
             assert_eq!(

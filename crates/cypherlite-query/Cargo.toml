@@ -1,8 +1,16 @@
 [package]
 name = "cypherlite-query"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.84"
+
+[features]
+default = ["temporal-core"]
+temporal-core = ["cypherlite-core/temporal-core", "cypherlite-storage/temporal-core"]
+temporal-edge = ["temporal-core", "cypherlite-core/temporal-edge", "cypherlite-storage/temporal-edge"]
+subgraph = ["temporal-edge", "cypherlite-core/subgraph", "cypherlite-storage/subgraph"]
+hypergraph = ["subgraph", "cypherlite-core/hypergraph", "cypherlite-storage/hypergraph"]
+full-temporal = ["hypergraph", "cypherlite-core/full-temporal", "cypherlite-storage/full-temporal"]
 
 [dependencies]
 cypherlite-core    = { path = "../cypherlite-core" }
@@ -16,4 +24,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 name = "query_bench"
+harness = false
+
+[[bench]]
+name = "temporal_edge"
 harness = false

@@ -115,13 +115,22 @@ pub struct UnwindClause {
     pub variable: String,
 }
 
-/// CREATE INDEX [name] ON :Label(property)
+/// The target kind of a property index.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IndexTarget {
+    /// Index on a node label.
+    NodeLabel(String),
+    /// Index on a relationship type.
+    RelationshipType(String),
+}
+
+/// CREATE INDEX [name] ON :Label(property) or CREATE INDEX [name] ON :REL_TYPE(property)
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateIndexClause {
     /// Optional index name.
     pub name: Option<String>,
-    /// Label the index applies to.
-    pub label: String,
+    /// Label or relationship type the index applies to.
+    pub target: IndexTarget,
     /// Property key the index covers.
     pub property: String,
 }
