@@ -14,3 +14,6 @@ pub use config::{DatabaseConfig, SyncMode};
 pub use error::{CypherLiteError, Result};
 pub use traits::{LabelRegistry, TransactionView};
 pub use types::{Direction, EdgeId, NodeId, NodeRecord, PageId, PropertyValue, RelationshipRecord};
+
+#[cfg(feature = "subgraph")]
+pub use types::{GraphEntity, SubgraphId, SubgraphRecord};

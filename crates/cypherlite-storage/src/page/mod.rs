@@ -10,6 +10,10 @@ pub const PAGE_SIZE: usize = 4096;
 pub const MAGIC: u32 = 0x4359_4C54;
 
 /// Current database format version.
+#[cfg(feature = "subgraph")]
+pub const FORMAT_VERSION: u32 = 4;
+/// Current database format version.
+#[cfg(not(feature = "subgraph"))]
 pub const FORMAT_VERSION: u32 = 3;
 
 /// Header page is always at page 0.
@@ -129,8 +133,16 @@ pub struct DatabaseHeader {
     pub version_store_root_page: u64,
     /// Bit flags for enabled database features.
     /// Added in format version 3, stored at bytes 44-47.
-    /// Bit 0: temporal-core, Bit 1: temporal-edge.
+    /// Bit 0: temporal-core, Bit 1: temporal-edge, Bit 2: subgraph.
     pub feature_flags: u32,
+    /// Root page of the subgraph store (0 = no subgraph store allocated).
+    /// Added in format version 4, stored at bytes 48-55.
+    #[cfg(feature = "subgraph")]
+    pub subgraph_root_page: u64,
+    /// Next available subgraph ID.
+    /// Added in format version 4, stored at bytes 56-63.
+    #[cfg(feature = "subgraph")]
+    pub next_subgraph_id: u64,
 }
 
 impl DatabaseHeader {
@@ -138,6 +150,9 @@ impl DatabaseHeader {
     pub const FLAG_TEMPORAL_CORE: u32 = 1 << 0;
     /// Feature flag bit: temporal-edge is enabled.
     pub const FLAG_TEMPORAL_EDGE: u32 = 1 << 1;
+    /// Feature flag bit: subgraph is enabled.
+    #[cfg(feature = "subgraph")]
+    pub const FLAG_SUBGRAPH: u32 = 1 << 2;
 
     /// Creates a new database header with default values.
     /// Feature flags are set based on compiled Cargo features.
@@ -152,6 +167,10 @@ impl DatabaseHeader {
             next_edge_id: 1,
             version_store_root_page: 0,
             feature_flags: Self::compiled_feature_flags(),
+            #[cfg(feature = "subgraph")]
+            subgraph_root_page: 0,
+            #[cfg(feature = "subgraph")]
+            next_subgraph_id: 1,
         }
     }
 
@@ -163,6 +182,10 @@ impl DatabaseHeader {
         #[cfg(feature = "temporal-edge")]
         {
             flags |= Self::FLAG_TEMPORAL_EDGE;
+        }
+        #[cfg(feature = "subgraph")]
+        {
+            flags |= Self::FLAG_SUBGRAPH;
         }
         flags
     }
@@ -181,6 +204,12 @@ impl DatabaseHeader {
         page[36..44].copy_from_slice(&self.version_store_root_page.to_le_bytes());
         // AA-T2: feature_flags at bytes 44-47
         page[44..48].copy_from_slice(&self.feature_flags.to_le_bytes());
+        // GG-003: subgraph_root_page at bytes 48-55, next_subgraph_id at bytes 56-63
+        #[cfg(feature = "subgraph")]
+        {
+            page[48..56].copy_from_slice(&self.subgraph_root_page.to_le_bytes());
+            page[56..64].copy_from_slice(&self.next_subgraph_id.to_le_bytes());
+        }
         page
     }
 
@@ -206,6 +235,25 @@ impl DatabaseHeader {
             Self::FLAG_TEMPORAL_CORE
         };
 
+        // GG-003: subgraph fields at bytes 48-55, 56-63 (v4+)
+        #[cfg(feature = "subgraph")]
+        let subgraph_root_page = if version >= 4 {
+            u64::from_le_bytes([
+                page[48], page[49], page[50], page[51], page[52], page[53], page[54], page[55],
+            ])
+        } else {
+            0 // Auto-migrate: pre-v4 databases have no subgraph store
+        };
+
+        #[cfg(feature = "subgraph")]
+        let next_subgraph_id = if version >= 4 {
+            u64::from_le_bytes([
+                page[56], page[57], page[58], page[59], page[60], page[61], page[62], page[63],
+            ])
+        } else {
+            0 // Auto-migrate: pre-v4 databases have no subgraph IDs
+        };
+
         Self {
             magic: u32::from_le_bytes([page[0], page[1], page[2], page[3]]),
             version,
@@ -220,6 +268,10 @@ impl DatabaseHeader {
             ]),
             version_store_root_page,
             feature_flags,
+            #[cfg(feature = "subgraph")]
+            subgraph_root_page,
+            #[cfg(feature = "subgraph")]
+            next_subgraph_id,
         }
     }
 }
@@ -297,6 +349,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_update)]
     fn test_database_header_roundtrip() {
         let hdr = DatabaseHeader {
             magic: MAGIC,
@@ -308,6 +361,7 @@ mod tests {
             next_edge_id: 99,
             version_store_root_page: 0,
             feature_flags: DatabaseHeader::FLAG_TEMPORAL_CORE,
+            ..DatabaseHeader::new()
         };
         let page = hdr.to_page();
         let decoded = DatabaseHeader::from_page(&page);
@@ -351,7 +405,8 @@ mod tests {
         assert_eq!(decoded.version_store_root_page, 0); // auto-migrated to 0
     }
 
-    // AA-T2: FORMAT_VERSION is now 3
+    // AA-T2: FORMAT_VERSION is now 3 (without subgraph feature)
+    #[cfg(not(feature = "subgraph"))]
     #[test]
     fn test_format_version_is_3() {
         assert_eq!(FORMAT_VERSION, 3);
@@ -417,5 +472,125 @@ mod tests {
         assert_eq!(PageType::BTreeLeaf as u8, 3);
         assert_eq!(PageType::Overflow as u8, 4);
         assert_eq!(PageType::Data as u8, 5);
+    }
+
+    // ======================================================================
+    // GG-003: DatabaseHeader v4 with subgraph fields
+    // ======================================================================
+
+    #[cfg(feature = "subgraph")]
+    mod subgraph_header_tests {
+        use super::*;
+
+        // GG-003: FORMAT_VERSION bumped to 4 when subgraph feature is compiled
+        #[test]
+        fn test_format_version_is_4() {
+            assert_eq!(FORMAT_VERSION, 4);
+        }
+
+        // GG-003: FLAG_SUBGRAPH is bit 2 (0x04)
+        #[test]
+        fn test_flag_subgraph_constant() {
+            assert_eq!(DatabaseHeader::FLAG_SUBGRAPH, 0x04);
+        }
+
+        // GG-003: New header fields have correct defaults
+        #[test]
+        fn test_database_header_new_subgraph_fields() {
+            let hdr = DatabaseHeader::new();
+            assert_eq!(hdr.subgraph_root_page, 0);
+            assert_eq!(hdr.next_subgraph_id, 1);
+            // Should include FLAG_SUBGRAPH in compiled flags
+            assert!(hdr.feature_flags & DatabaseHeader::FLAG_SUBGRAPH != 0);
+        }
+
+        // GG-003: subgraph_root_page roundtrip
+        #[test]
+        fn test_subgraph_root_page_roundtrip() {
+            let hdr = DatabaseHeader {
+                subgraph_root_page: 42,
+                ..DatabaseHeader::new()
+            };
+            let page = hdr.to_page();
+            let decoded = DatabaseHeader::from_page(&page);
+            assert_eq!(decoded.subgraph_root_page, 42);
+        }
+
+        // GG-003: next_subgraph_id roundtrip
+        #[test]
+        fn test_next_subgraph_id_roundtrip() {
+            let hdr = DatabaseHeader {
+                next_subgraph_id: 999,
+                ..DatabaseHeader::new()
+            };
+            let page = hdr.to_page();
+            let decoded = DatabaseHeader::from_page(&page);
+            assert_eq!(decoded.next_subgraph_id, 999);
+        }
+
+        // GG-003: Full header roundtrip with all fields
+        #[test]
+        fn test_database_header_v4_full_roundtrip() {
+            let hdr = DatabaseHeader {
+                magic: MAGIC,
+                version: FORMAT_VERSION,
+                page_count: 100,
+                root_node_page: 5,
+                root_edge_page: 10,
+                next_node_id: 42,
+                next_edge_id: 99,
+                version_store_root_page: 7,
+                feature_flags: DatabaseHeader::FLAG_TEMPORAL_CORE
+                    | DatabaseHeader::FLAG_TEMPORAL_EDGE
+                    | DatabaseHeader::FLAG_SUBGRAPH,
+                subgraph_root_page: 15,
+                next_subgraph_id: 200,
+            };
+            let page = hdr.to_page();
+            let decoded = DatabaseHeader::from_page(&page);
+            assert_eq!(decoded.magic, MAGIC);
+            assert_eq!(decoded.version, FORMAT_VERSION);
+            assert_eq!(decoded.page_count, 100);
+            assert_eq!(decoded.root_node_page, 5);
+            assert_eq!(decoded.root_edge_page, 10);
+            assert_eq!(decoded.next_node_id, 42);
+            assert_eq!(decoded.next_edge_id, 99);
+            assert_eq!(decoded.version_store_root_page, 7);
+            assert_eq!(decoded.subgraph_root_page, 15);
+            assert_eq!(decoded.next_subgraph_id, 200);
+            assert_eq!(
+                decoded.feature_flags,
+                DatabaseHeader::FLAG_TEMPORAL_CORE
+                    | DatabaseHeader::FLAG_TEMPORAL_EDGE
+                    | DatabaseHeader::FLAG_SUBGRAPH
+            );
+        }
+
+        // GG-003: v3->v4 auto-migration (subgraph fields default to 0)
+        #[test]
+        fn test_database_header_v3_migration() {
+            let mut page = [0u8; PAGE_SIZE];
+            page[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+            page[4..8].copy_from_slice(&3u32.to_le_bytes()); // version 3
+            page[8..12].copy_from_slice(&FIRST_DATA_PAGE.to_le_bytes());
+            page[20..28].copy_from_slice(&1u64.to_le_bytes());
+            page[28..36].copy_from_slice(&1u64.to_le_bytes());
+            // v3 feature_flags at bytes 44-47
+            let flags = DatabaseHeader::FLAG_TEMPORAL_CORE | DatabaseHeader::FLAG_TEMPORAL_EDGE;
+            page[44..48].copy_from_slice(&flags.to_le_bytes());
+            // bytes 48-55, 56-63 are zeros (no subgraph fields in v3)
+
+            let decoded = DatabaseHeader::from_page(&page);
+            assert_eq!(decoded.version, 3);
+            assert_eq!(decoded.subgraph_root_page, 0); // auto-migrated
+            assert_eq!(decoded.next_subgraph_id, 0); // auto-migrated
+        }
+
+        // GG-003: compiled_feature_flags includes FLAG_SUBGRAPH
+        #[test]
+        fn test_compiled_feature_flags_includes_subgraph() {
+            let flags = DatabaseHeader::compiled_feature_flags();
+            assert!(flags & DatabaseHeader::FLAG_SUBGRAPH != 0);
+        }
     }
 }

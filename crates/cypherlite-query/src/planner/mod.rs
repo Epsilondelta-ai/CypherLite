@@ -157,6 +157,21 @@ pub enum LogicalPlan {
         start_expr: Expression,
         end_expr: Expression,
     },
+    /// Scan all subgraph entities. Used when MATCH pattern has label "Subgraph".
+    #[cfg(feature = "subgraph")]
+    SubgraphScan {
+        variable: String,
+    },
+    /// CREATE SNAPSHOT: execute a sub-query and materialize results into a subgraph.
+    #[cfg(feature = "subgraph")]
+    CreateSnapshotOp {
+        variable: Option<String>,
+        labels: Vec<String>,
+        properties: Option<MapLiteral>,
+        temporal_anchor: Option<Expression>,
+        sub_plan: Box<LogicalPlan>,
+        return_vars: Vec<String>,
+    },
 }
 
 /// Temporal filter plan for edge validity during AT TIME / BETWEEN TIME queries.
@@ -243,6 +258,10 @@ fn annotate_temporal_filter(plan: &mut LogicalPlan, tfp: &TemporalFilterPlan) {
         | LogicalPlan::CreateIndex { .. }
         | LogicalPlan::CreateEdgeIndex { .. }
         | LogicalPlan::DropIndex { .. } => {}
+        #[cfg(feature = "subgraph")]
+        LogicalPlan::SubgraphScan { .. } => {}
+        #[cfg(feature = "subgraph")]
+        LogicalPlan::CreateSnapshotOp { .. } => {}
     }
 }
 
@@ -303,6 +322,8 @@ impl<'a> LogicalPlanner<'a> {
             Clause::DropIndex(di) => Ok(LogicalPlan::DropIndex {
                 name: di.name.clone(),
             }),
+            #[cfg(feature = "subgraph")]
+            Clause::CreateSnapshot(sc) => self.plan_create_snapshot(sc),
         }
     }
 
@@ -471,6 +492,89 @@ impl<'a> LogicalPlanner<'a> {
 
         let variable = first_node.variable.clone().unwrap_or_default();
 
+        // Check if the label is "Subgraph" -- route to SubgraphScan instead of NodeScan.
+        #[cfg(feature = "subgraph")]
+        let is_subgraph_label = first_node
+            .labels
+            .first()
+            .map(|l| l == "Subgraph")
+            .unwrap_or(false);
+
+        #[cfg(feature = "subgraph")]
+        if is_subgraph_label {
+            let mut plan = LogicalPlan::SubgraphScan {
+                variable: variable.clone(),
+            };
+
+            // Apply inline property filters as a Filter node.
+            if let Some(ref props) = first_node.properties {
+                let predicates: Vec<Expression> = props
+                    .iter()
+                    .map(|(key, val_expr)| {
+                        Expression::BinaryOp(
+                            BinaryOp::Eq,
+                            Box::new(Expression::Property(
+                                Box::new(Expression::Variable(variable.clone())),
+                                key.clone(),
+                            )),
+                            Box::new(val_expr.clone()),
+                        )
+                    })
+                    .collect();
+                let predicate = predicates.into_iter().reduce(|acc, p| {
+                    Expression::BinaryOp(BinaryOp::And, Box::new(acc), Box::new(p))
+                });
+                if let Some(pred) = predicate {
+                    plan = LogicalPlan::Filter {
+                        source: Box::new(plan),
+                        predicate: pred,
+                    };
+                }
+            }
+
+            // Process remaining relationship + node pairs (e.g., -[:CONTAINS]->(n)).
+            while let Some(rel_elem) = elements.next() {
+                let rel = match rel_elem {
+                    PatternElement::Relationship(rp) => rp,
+                    _ => {
+                        return Err(PlanError {
+                            message: "expected relationship after node in pattern".to_string(),
+                        })
+                    }
+                };
+
+                let target_node = match elements.next() {
+                    Some(PatternElement::Node(np)) => np,
+                    _ => {
+                        return Err(PlanError {
+                            message: "expected node after relationship in pattern".to_string(),
+                        })
+                    }
+                };
+
+                let src_var = Self::extract_src_var(&plan);
+                let rel_var = rel.variable.clone();
+                let target_var = target_node.variable.clone().unwrap_or_default();
+
+                let rel_type_id = rel
+                    .rel_types
+                    .first()
+                    .map(|name| self.registry.get_or_create_rel_type(name));
+
+                plan = LogicalPlan::Expand {
+                    source: Box::new(plan),
+                    src_var,
+                    rel_var,
+                    target_var,
+                    rel_type_id,
+                    direction: rel.direction,
+                    temporal_filter: None,
+                };
+            }
+
+            return Ok(plan);
+        }
+
         let label_id = first_node
             .labels
             .first()
@@ -548,6 +652,8 @@ impl<'a> LogicalPlanner<'a> {
             LogicalPlan::Filter { source, .. } => Self::extract_src_var(source),
             LogicalPlan::AsOfScan { source, .. } => Self::extract_src_var(source),
             LogicalPlan::TemporalRangeScan { source, .. } => Self::extract_src_var(source),
+            #[cfg(feature = "subgraph")]
+            LogicalPlan::SubgraphScan { variable, .. } => variable.clone(),
             _ => String::new(),
         }
     }
@@ -561,10 +667,38 @@ impl<'a> LogicalPlanner<'a> {
             message: "RETURN clause requires a preceding data source".to_string(),
         })?;
 
-        let mut plan = LogicalPlan::Project {
-            source: Box::new(source),
-            items: rc.items.clone(),
-            distinct: rc.distinct,
+        // Detect aggregate functions in RETURN items.
+        // If any item contains an aggregate, split into group_keys + aggregates.
+        let has_aggregate = rc.items.iter().any(|item| Self::is_aggregate_expr(&item.expr));
+
+        let mut plan = if has_aggregate {
+            let mut group_keys = Vec::new();
+            let mut aggregates = Vec::new();
+
+            for item in &rc.items {
+                if Self::is_aggregate_expr(&item.expr) {
+                    let alias = item
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| Self::default_agg_name(&item.expr));
+                    let func = Self::extract_aggregate_func(&item.expr)?;
+                    aggregates.push((alias, func));
+                } else {
+                    group_keys.push(item.expr.clone());
+                }
+            }
+
+            LogicalPlan::Aggregate {
+                source: Box::new(source),
+                group_keys,
+                aggregates,
+            }
+        } else {
+            LogicalPlan::Project {
+                source: Box::new(source),
+                items: rc.items.clone(),
+                distinct: rc.distinct,
+            }
         };
 
         // ORDER BY
@@ -764,6 +898,59 @@ impl<'a> LogicalPlanner<'a> {
         Ok(LogicalPlan::RemoveOp {
             source: Box::new(source),
             items: rc.items.clone(),
+        })
+    }
+
+    /// Plan a CREATE SNAPSHOT clause.
+    /// Builds a sub-plan from the FROM MATCH + RETURN clauses, then wraps in CreateSnapshotOp.
+    #[cfg(feature = "subgraph")]
+    fn plan_create_snapshot(
+        &mut self,
+        sc: &crate::parser::ast::CreateSnapshotClause,
+    ) -> Result<LogicalPlan, PlanError> {
+        // Build sub-plan from the FROM MATCH clause.
+        let chain = sc.from_match.pattern.chains.first().ok_or_else(|| PlanError {
+            message: "CREATE SNAPSHOT FROM MATCH clause has no pattern chains".to_string(),
+        })?;
+        let mut sub_plan = self.plan_pattern_chain(chain)?;
+
+        // Apply WHERE predicate if present.
+        if let Some(ref predicate) = sc.from_match.where_clause {
+            sub_plan = LogicalPlan::Filter {
+                source: Box::new(sub_plan),
+                predicate: predicate.clone(),
+            };
+        }
+
+        // Project with the RETURN items.
+        sub_plan = LogicalPlan::Project {
+            source: Box::new(sub_plan),
+            items: sc.from_return.clone(),
+            distinct: false,
+        };
+
+        // Collect variable names from RETURN items.
+        let return_vars: Vec<String> = sc
+            .from_return
+            .iter()
+            .map(|item| {
+                if let Some(ref alias) = item.alias {
+                    alias.clone()
+                } else if let Expression::Variable(name) = &item.expr {
+                    name.clone()
+                } else {
+                    String::new()
+                }
+            })
+            .collect();
+
+        Ok(LogicalPlan::CreateSnapshotOp {
+            variable: sc.variable.clone(),
+            labels: sc.labels.clone(),
+            properties: sc.properties.clone(),
+            temporal_anchor: sc.temporal_anchor.clone(),
+            sub_plan: Box::new(sub_plan),
+            return_vars,
         })
     }
 }

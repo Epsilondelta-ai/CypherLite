@@ -273,6 +273,68 @@ impl<'a> Parser<'a> {
         Ok(DropIndexClause { name })
     }
 
+    /// Parse a CREATE SNAPSHOT clause (HH-001).
+    ///
+    /// Grammar: CREATE SNAPSHOT (var:Label {props}) [AT TIME expr] FROM MATCH pattern [WHERE filter] RETURN items
+    /// The parser has already consumed CREATE and is positioned at SNAPSHOT.
+    #[cfg(feature = "subgraph")]
+    pub fn parse_create_snapshot_clause(&mut self) -> Result<CreateSnapshotClause, ParseError> {
+        self.expect(&Token::Snapshot)?;
+
+        // Parse node pattern: (var:Label {props})
+        self.expect(&Token::LParen)?;
+
+        // Optional variable
+        let variable = if self.check(&Token::Colon) {
+            None
+        } else {
+            match self.peek() {
+                Some(Token::Ident(_) | Token::BacktickIdent(_)) => Some(self.expect_ident()?),
+                _ => None,
+            }
+        };
+
+        // Labels
+        let mut labels = Vec::new();
+        while self.eat(&Token::Colon) {
+            labels.push(self.expect_ident()?);
+        }
+
+        // Optional properties
+        let properties = if self.check(&Token::LBrace) {
+            Some(self.parse_map_literal()?)
+        } else {
+            None
+        };
+
+        self.expect(&Token::RParen)?;
+
+        // Optional AT TIME expr
+        let temporal_anchor = if self.check(&Token::At) {
+            self.advance(); // consume AT
+            self.expect(&Token::Time)?;
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        // FROM MATCH ... [WHERE ...] RETURN ...
+        self.expect(&Token::From)?;
+        let from_match = self.parse_match_clause(false)?;
+
+        self.expect(&Token::Return)?;
+        let from_return = self.parse_return_items()?;
+
+        Ok(CreateSnapshotClause {
+            variable,
+            labels,
+            properties,
+            temporal_anchor,
+            from_match,
+            from_return,
+        })
+    }
+
     /// Parse an optional temporal predicate after MATCH pattern.
     ///
     /// Grammar:
@@ -981,5 +1043,132 @@ mod tests {
 
         assert_eq!(uc.expr, Expression::ListLiteral(vec![]));
         assert_eq!(uc.variable, "x");
+    }
+
+    // ======================================================================
+    // HH-001: parse_create_snapshot_clause (cfg-gated)
+    // ======================================================================
+
+    #[cfg(feature = "subgraph")]
+    mod snapshot_tests {
+        use super::*;
+
+        // HH-001: basic CREATE SNAPSHOT with FROM MATCH ... RETURN
+        #[test]
+        fn snapshot_basic() {
+            let (tokens, input) = make_parser(
+                "CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) RETURN n",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let sc = p.parse_create_snapshot_clause().expect("should parse");
+
+            assert_eq!(sc.variable, Some("s".to_string()));
+            assert_eq!(sc.labels, vec!["Snap".to_string()]);
+            assert!(sc.properties.is_none());
+            assert!(sc.temporal_anchor.is_none());
+            // from_match should be a MATCH (n:Person) clause
+            assert!(!sc.from_match.optional);
+            assert_eq!(sc.from_match.pattern.chains.len(), 1);
+            // from_return should have 1 item: n
+            assert_eq!(sc.from_return.len(), 1);
+            assert_eq!(
+                sc.from_return[0].expr,
+                Expression::Variable("n".to_string())
+            );
+        }
+
+        // HH-001: CREATE SNAPSHOT with properties
+        #[test]
+        fn snapshot_with_properties() {
+            let (tokens, input) = make_parser(
+                "CREATE SNAPSHOT (s:Snap {name: 'test'}) FROM MATCH (n:Person) RETURN n",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let sc = p.parse_create_snapshot_clause().expect("should parse");
+
+            assert_eq!(sc.variable, Some("s".to_string()));
+            assert!(sc.properties.is_some());
+            let props = sc.properties.expect("checked above");
+            assert_eq!(props.len(), 1);
+            assert_eq!(props[0].0, "name");
+        }
+
+        // HH-001: CREATE SNAPSHOT with AT TIME
+        #[test]
+        fn snapshot_with_at_time() {
+            let (tokens, input) = make_parser(
+                "CREATE SNAPSHOT (s:Snap) AT TIME 1000 FROM MATCH (n:Person) RETURN n",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let sc = p.parse_create_snapshot_clause().expect("should parse");
+
+            assert!(sc.temporal_anchor.is_some());
+            assert_eq!(
+                sc.temporal_anchor.expect("checked"),
+                Expression::Literal(Literal::Integer(1000))
+            );
+        }
+
+        // HH-001: CREATE SNAPSHOT with FROM MATCH ... WHERE ... RETURN
+        #[test]
+        fn snapshot_with_where() {
+            let (tokens, input) = make_parser(
+                "CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) WHERE n.age > 30 RETURN n",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let sc = p.parse_create_snapshot_clause().expect("should parse");
+
+            assert!(sc.from_match.where_clause.is_some());
+        }
+
+        // HH-001: CREATE SNAPSHOT with multiple RETURN items
+        #[test]
+        fn snapshot_multiple_return_items() {
+            let (tokens, input) = make_parser(
+                "CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person)-[:KNOWS]->(m) RETURN n, m",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let sc = p.parse_create_snapshot_clause().expect("should parse");
+
+            assert_eq!(sc.from_return.len(), 2);
+        }
+
+        // HH-001: CREATE SNAPSHOT with no variable (anonymous snapshot)
+        #[test]
+        fn snapshot_no_variable() {
+            let (tokens, input) = make_parser(
+                "CREATE SNAPSHOT (:Snap) FROM MATCH (n:Person) RETURN n",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let sc = p.parse_create_snapshot_clause().expect("should parse");
+
+            assert!(sc.variable.is_none());
+            assert_eq!(sc.labels, vec!["Snap".to_string()]);
+        }
+
+        // HH-001: CREATE SNAPSHOT with AT TIME function call
+        #[test]
+        fn snapshot_at_time_function_call() {
+            let (tokens, input) = make_parser(
+                "CREATE SNAPSHOT (s:Snap) AT TIME datetime('2024-01-15T00:00:00Z') FROM MATCH (n:Person) RETURN n",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let sc = p.parse_create_snapshot_clause().expect("should parse");
+
+            assert!(sc.temporal_anchor.is_some());
+            match sc.temporal_anchor.expect("checked") {
+                Expression::FunctionCall { name, .. } => {
+                    assert_eq!(name, "datetime");
+                }
+                _ => panic!("expected function call for temporal anchor"),
+            }
+        }
     }
 }

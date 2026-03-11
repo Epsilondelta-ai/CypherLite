@@ -101,6 +101,16 @@ pub enum CypherLiteError {
         /// The feature flags compiled into this binary.
         compiled_flags: u32,
     },
+
+    /// The requested subgraph does not exist.
+    #[cfg(feature = "subgraph")]
+    #[error("Subgraph not found: {0}")]
+    SubgraphNotFound(u64),
+
+    /// An operation requires subgraph support but the feature is not compiled.
+    #[cfg(feature = "subgraph")]
+    #[error("Feature requires subgraph support (compile with --features subgraph)")]
+    FeatureRequiresSubgraph,
 }
 
 /// Convenience type alias for CypherLite operations.
@@ -272,6 +282,27 @@ mod tests {
         assert_eq!(
             format!("{err}"),
             "Feature incompatible: database requires flags 0x00000003, compiled with 0x00000001"
+        );
+    }
+
+    // ======================================================================
+    // GG-001: SubgraphNotFound error
+    // ======================================================================
+
+    #[cfg(feature = "subgraph")]
+    #[test]
+    fn test_subgraph_not_found_error() {
+        let err = CypherLiteError::SubgraphNotFound(42);
+        assert_eq!(format!("{err}"), "Subgraph not found: 42");
+    }
+
+    #[cfg(feature = "subgraph")]
+    #[test]
+    fn test_feature_requires_subgraph_error() {
+        let err = CypherLiteError::FeatureRequiresSubgraph;
+        assert_eq!(
+            format!("{err}"),
+            "Feature requires subgraph support (compile with --features subgraph)"
         );
     }
 }

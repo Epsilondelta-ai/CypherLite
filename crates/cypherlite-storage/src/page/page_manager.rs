@@ -61,8 +61,8 @@ impl PageManager {
             return Err(CypherLiteError::InvalidMagicNumber);
         }
 
-        // REQ-PAGE-008: Validate version (accept v1, v2 for auto-migration to v3)
-        if header.version != FORMAT_VERSION && header.version != 1 && header.version != 2 {
+        // REQ-PAGE-008: Validate version (accept older versions for auto-migration)
+        if header.version == 0 || header.version > FORMAT_VERSION {
             return Err(CypherLiteError::UnsupportedVersion {
                 found: header.version,
                 supported: FORMAT_VERSION,
@@ -78,6 +78,8 @@ impl PageManager {
             }
             // AA-T3: v2->v3 migration: feature_flags defaults to temporal-core
             // (from_page already sets this for version < 3)
+            // GG-003: v3->v4 migration: subgraph fields default to 0
+            // (from_page already sets subgraph_root_page=0, next_subgraph_id=0 for version < 4)
             header.version = FORMAT_VERSION;
         }
 
@@ -283,8 +285,8 @@ mod tests {
             result,
             Err(CypherLiteError::UnsupportedVersion {
                 found: 99,
-                supported: 3
-            })
+                supported
+            }) if supported == FORMAT_VERSION
         ));
     }
 
@@ -449,13 +451,13 @@ mod tests {
         assert!(matches!(result, Err(CypherLiteError::FeatureIncompatible { .. })));
     }
 
-    // AA-T3: New database gets FORMAT_VERSION 3 with feature flags
+    // AA-T3: New database gets current FORMAT_VERSION with feature flags
     #[test]
-    fn test_new_database_has_v3_header() {
+    fn test_new_database_has_current_format_version_header() {
         let dir = tempdir().expect("tempdir");
         let config = test_config(dir.path());
         let pm = PageManager::create_database(&config).expect("create");
-        assert_eq!(pm.header().version, 3);
+        assert_eq!(pm.header().version, FORMAT_VERSION);
         assert!(pm.header().feature_flags & DatabaseHeader::FLAG_TEMPORAL_CORE != 0);
     }
 }
