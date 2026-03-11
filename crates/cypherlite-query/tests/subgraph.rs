@@ -190,6 +190,145 @@ fn test_aggregate_over_members() {
     assert_eq!(count, Some(3));
 }
 
+// KK-003: Create multiple snapshots of the same data at different times
+#[test]
+fn test_multiple_snapshots_same_data_different_times() {
+    let dir = tempdir().expect("tempdir");
+    let mut db = CypherLite::open(test_config(dir.path())).expect("open");
+
+    // Create nodes
+    db.execute("CREATE (a:Versioned {name: 'Alice'})").expect("create");
+    db.execute("CREATE (b:Versioned {name: 'Bob'})").expect("create");
+
+    // Snapshot at time T1
+    db.execute(
+        "CREATE SNAPSHOT (sg1:Snap {name: 'v1'}) AT TIME 1000000000000 FROM MATCH (n:Versioned) RETURN n"
+    ).expect("snap v1");
+
+    // Snapshot at time T2
+    db.execute(
+        "CREATE SNAPSHOT (sg2:Snap {name: 'v2'}) AT TIME 2000000000000 FROM MATCH (n:Versioned) RETURN n"
+    ).expect("snap v2");
+
+    // Both snapshots should have 2 members each
+    let v1_members = db.execute(
+        "MATCH (sg:Subgraph {name: 'v1'})-[:CONTAINS]->(n) RETURN n.name"
+    ).expect("query v1");
+    assert_eq!(v1_members.rows.len(), 2, "v1 should have 2 members");
+
+    let v2_members = db.execute(
+        "MATCH (sg:Subgraph {name: 'v2'})-[:CONTAINS]->(n) RETURN n.name"
+    ).expect("query v2");
+    assert_eq!(v2_members.rows.len(), 2, "v2 should have 2 members");
+
+    // Different temporal anchors
+    let v1_anchor = db.execute(
+        "MATCH (sg:Subgraph {name: 'v1'}) RETURN sg._temporal_anchor"
+    ).expect("v1 anchor");
+    let v2_anchor = db.execute(
+        "MATCH (sg:Subgraph {name: 'v2'}) RETURN sg._temporal_anchor"
+    ).expect("v2 anchor");
+
+    let a1 = match v1_anchor.rows[0].get("sg._temporal_anchor") {
+        Some(Value::DateTime(ms)) => *ms,
+        Some(Value::Int64(ms)) => *ms,
+        other => panic!("unexpected anchor type: {:?}", other),
+    };
+    let a2 = match v2_anchor.rows[0].get("sg._temporal_anchor") {
+        Some(Value::DateTime(ms)) => *ms,
+        Some(Value::Int64(ms)) => *ms,
+        other => panic!("unexpected anchor type: {:?}", other),
+    };
+    assert_eq!(a1, 1_000_000_000_000);
+    assert_eq!(a2, 2_000_000_000_000);
+}
+
+// KK-003: Query empty subgraph members (snapshot from empty result)
+#[test]
+fn test_query_empty_subgraph_members() {
+    let dir = tempdir().expect("tempdir");
+    let mut db = CypherLite::open(test_config(dir.path())).expect("open");
+
+    // Create snapshot from non-existent label -> empty result
+    db.execute(
+        "CREATE SNAPSHOT (sg:Snap {name: 'empty-snap'}) FROM MATCH (n:NonExistent) RETURN n"
+    ).expect("snap empty");
+
+    // Verify subgraph exists
+    let result = db.execute(
+        "MATCH (sg:Subgraph {name: 'empty-snap'}) RETURN sg.name"
+    ).expect("query subgraph");
+    assert_eq!(result.rows.len(), 1, "subgraph should exist");
+
+    // Verify no members
+    let members = db.execute(
+        "MATCH (sg:Subgraph {name: 'empty-snap'})-[:CONTAINS]->(n) RETURN n"
+    ).expect("query members");
+    assert_eq!(members.rows.len(), 0, "empty subgraph should have 0 members");
+}
+
+// KK-003: List all subgraphs and verify count
+#[test]
+fn test_list_all_subgraphs() {
+    let dir = tempdir().expect("tempdir");
+    let mut db = CypherLite::open(test_config(dir.path())).expect("open");
+
+    // Create 3 subgraphs
+    db.execute("CREATE (a:TypeA {name: 'A'})").expect("create");
+    db.execute("CREATE (b:TypeB {name: 'B'})").expect("create");
+
+    db.execute(
+        "CREATE SNAPSHOT (sg1:Snap {name: 'sg1'}) FROM MATCH (n:TypeA) RETURN n"
+    ).expect("snap1");
+    db.execute(
+        "CREATE SNAPSHOT (sg2:Snap {name: 'sg2'}) FROM MATCH (n:TypeB) RETURN n"
+    ).expect("snap2");
+    db.execute(
+        "CREATE SNAPSHOT (sg3:Snap {name: 'sg3'}) FROM MATCH (n:TypeA) RETURN n"
+    ).expect("snap3");
+
+    // List all subgraphs
+    let result = db.execute(
+        "MATCH (sg:Subgraph) RETURN sg.name"
+    ).expect("list all");
+    assert_eq!(result.rows.len(), 3, "should have 3 subgraphs");
+
+    let mut names: Vec<String> = result.rows.iter()
+        .filter_map(|r| r.get_as::<String>("sg.name"))
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["sg1", "sg2", "sg3"]);
+}
+
+// KK-003: Snapshot with WHERE filter in FROM clause
+#[test]
+fn test_snapshot_with_where_filter() {
+    let dir = tempdir().expect("tempdir");
+    let mut db = CypherLite::open(test_config(dir.path())).expect("open");
+
+    // Create nodes
+    db.execute("CREATE (a:Worker {name: 'Alice', dept: 'eng'})").expect("create");
+    db.execute("CREATE (b:Worker {name: 'Bob', dept: 'sales'})").expect("create");
+    db.execute("CREATE (c:Worker {name: 'Carol', dept: 'eng'})").expect("create");
+
+    // Snapshot with WHERE filter to capture only eng dept
+    db.execute(
+        "CREATE SNAPSHOT (sg:Snap {name: 'eng-team'}) FROM MATCH (n:Worker) WHERE n.dept = 'eng' RETURN n"
+    ).expect("snap with filter");
+
+    // Verify only eng workers are members
+    let members = db.execute(
+        "MATCH (sg:Subgraph {name: 'eng-team'})-[:CONTAINS]->(n) RETURN n.name"
+    ).expect("query members");
+    assert_eq!(members.rows.len(), 2, "should have 2 eng workers");
+
+    let mut names: Vec<String> = members.rows.iter()
+        .filter_map(|r| r.get_as::<String>("n.name"))
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["Alice", "Carol"]);
+}
+
 // JJ-003: Filter subgraphs by temporal anchor
 #[test]
 fn test_filter_subgraph_by_temporal_anchor() {

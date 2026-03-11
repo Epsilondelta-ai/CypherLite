@@ -107,7 +107,9 @@
 - **Keyword collision**: `Snapshot` is a lexer keyword; use `:Snap` for CREATE SNAPSHOT labels and `:Subgraph` for MATCH queries
 - `SubgraphStore::all()` returns iterator over all SubgraphRecord values
 - `StorageEngine::scan_subgraphs()` returns `Vec<&SubgraphRecord>` (cfg-gated)
-- Integration tests in `crates/cypherlite-query/tests/subgraph.rs` (7 tests, all cfg-gated)
+- Integration tests in `crates/cypherlite-query/tests/subgraph.rs` (11 tests, all cfg-gated)
+- Proptest in `crates/cypherlite-query/tests/proptest_subgraph.rs` (4 tests, cfg-gated)
+- Criterion benchmarks in `crates/cypherlite-query/benches/subgraph.rs` (5 benchmarks, required-features = ["subgraph"])
 - Aggregate tests use `WITH count(*) AS total RETURN total` pattern (default_agg_name generates `"count(..)"` not `"count(n)"`)
 
 ## Test Counts
@@ -124,3 +126,6 @@
 - After Phase 6c+6d (subgraph): 1127 tests (+34 new: 10 RelationshipRecord entity, 5 Value::Subgraph, 8 lexer, 7 parser unit, 4 parser integration)
 - After Phase 6e (default): 1043 tests (unchanged, new tests only with subgraph feature)
 - After Phase 6e (subgraph): 1139 tests (+12 new: 2 subgraph_scan unit, 7 integration, 3 plan_return aggregate improvements)
+- After Phase 6f (default): 1043 tests (unchanged)
+- After Phase 6f (subgraph): 1144 tests (+8 new: 4 proptest, 4 integration edge cases)
+- Version bumped to 0.6.0 across all three crates
