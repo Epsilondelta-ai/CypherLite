@@ -18,6 +18,13 @@ pub fn eval(
         Expression::Literal(lit) => Ok(eval_literal(lit)),
         Expression::Variable(name) => Ok(record.get(name).cloned().unwrap_or(Value::Null)),
         Expression::Property(inner_expr, prop_name) => {
+            // Check for temporal property override (from AT TIME / BETWEEN TIME queries)
+            if let Expression::Variable(var_name) = inner_expr.as_ref() {
+                let temporal_key = format!("__temporal_props__{}", var_name);
+                if let Some(Value::List(props_list)) = record.get(&temporal_key) {
+                    return eval_temporal_property_access(props_list, prop_name, engine);
+                }
+            }
             let inner = eval(inner_expr, record, engine, params)?;
             eval_property_access(&inner, prop_name, engine)
         }
@@ -182,6 +189,34 @@ fn eval_literal(lit: &Literal) -> Value {
         Literal::String(s) => Value::String(s.clone()),
         Literal::Bool(b) => Value::Bool(*b),
         Literal::Null => Value::Null,
+    }
+}
+
+/// Access a property on a Value. For Node/Edge, look up from engine.
+/// Access a property from temporal version properties.
+/// The props_list is a List of [prop_key_id, value] pairs.
+fn eval_temporal_property_access(
+    props_list: &[Value],
+    prop_name: &str,
+    engine: &StorageEngine,
+) -> Result<Value, ExecutionError> {
+    let prop_key_id = engine.catalog().prop_key_id(prop_name);
+    match prop_key_id {
+        Some(kid) => {
+            for item in props_list {
+                if let Value::List(pair) = item {
+                    if pair.len() == 2 {
+                        if let Value::Int64(k) = &pair[0] {
+                            if *k as u32 == kid {
+                                return Ok(pair[1].clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Value::Null)
+        }
+        None => Ok(Value::Null),
     }
 }
 

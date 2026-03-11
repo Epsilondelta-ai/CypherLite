@@ -138,6 +138,17 @@ pub enum LogicalPlan {
         prop_key: String,
         lookup_value: Expression,
     },
+    /// AT TIME query: find node/edge versions at a specific point in time.
+    AsOfScan {
+        source: Box<LogicalPlan>,
+        timestamp_expr: Expression,
+    },
+    /// BETWEEN TIME query: find all versions within a time range.
+    TemporalRangeScan {
+        source: Box<LogicalPlan>,
+        start_expr: Expression,
+        end_expr: Expression,
+    },
 }
 
 /// Supported aggregate functions.
@@ -238,6 +249,25 @@ impl<'a> LogicalPlanner<'a> {
             // Simple approach: wrap previous in the new scan chain.
             // For now, just use the new plan (covers most test cases).
             let _ = prev;
+        }
+
+        // Apply temporal predicate if present.
+        if let Some(ref tp) = mc.temporal_predicate {
+            match tp {
+                crate::parser::ast::TemporalPredicate::AsOf(expr) => {
+                    plan = LogicalPlan::AsOfScan {
+                        source: Box::new(plan),
+                        timestamp_expr: expr.clone(),
+                    };
+                }
+                crate::parser::ast::TemporalPredicate::Between(start, end) => {
+                    plan = LogicalPlan::TemporalRangeScan {
+                        source: Box::new(plan),
+                        start_expr: start.clone(),
+                        end_expr: end.clone(),
+                    };
+                }
+            }
         }
 
         // Apply WHERE predicate as Filter.
@@ -420,6 +450,8 @@ impl<'a> LogicalPlanner<'a> {
             LogicalPlan::VarLengthExpand { target_var, .. } => target_var.clone(),
             LogicalPlan::OptionalExpand { target_var, .. } => target_var.clone(),
             LogicalPlan::Filter { source, .. } => Self::extract_src_var(source),
+            LogicalPlan::AsOfScan { source, .. } => Self::extract_src_var(source),
+            LogicalPlan::TemporalRangeScan { source, .. } => Self::extract_src_var(source),
             _ => String::new(),
         }
     }

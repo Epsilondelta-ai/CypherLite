@@ -164,6 +164,22 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
             rel_type_id,
             direction,
         },
+        LogicalPlan::AsOfScan {
+            source,
+            timestamp_expr,
+        } => LogicalPlan::AsOfScan {
+            source: Box::new(apply_rules(*source)),
+            timestamp_expr,
+        },
+        LogicalPlan::TemporalRangeScan {
+            source,
+            start_expr,
+            end_expr,
+        } => LogicalPlan::TemporalRangeScan {
+            source: Box::new(apply_rules(*source)),
+            start_expr,
+            end_expr,
+        },
         // Leaf nodes: no children to optimize
         plan @ LogicalPlan::NodeScan { .. }
         | plan @ LogicalPlan::IndexScan { .. }

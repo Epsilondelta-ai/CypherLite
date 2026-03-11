@@ -352,6 +352,32 @@ pub fn execute(
             engine,
             params,
         ),
+        LogicalPlan::AsOfScan {
+            source,
+            timestamp_expr,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            operators::temporal_scan::execute_as_of_scan(
+                source_records,
+                timestamp_expr,
+                engine,
+                params,
+            )
+        }
+        LogicalPlan::TemporalRangeScan {
+            source,
+            start_expr,
+            end_expr,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            operators::temporal_scan::execute_temporal_range_scan(
+                source_records,
+                start_expr,
+                end_expr,
+                engine,
+                params,
+            )
+        }
     }
 }
 
