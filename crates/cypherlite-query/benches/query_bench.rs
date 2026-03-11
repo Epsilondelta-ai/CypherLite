@@ -2,6 +2,7 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use cypherlite_core::{DatabaseConfig, SyncMode};
+use cypherlite_query::executor::{Params, Value};
 use cypherlite_query::lexer::lex;
 use cypherlite_query::parser::parse_query;
 use cypherlite_query::CypherLite;
@@ -218,6 +219,126 @@ fn bench_merge_vs_create(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 4 benchmarks: temporal operations
+// ---------------------------------------------------------------------------
+
+fn bench_datetime_parse(c: &mut Criterion) {
+    // Benchmark parsing datetime strings through CypherLite's datetime() function.
+    let dir = tempdir().expect("tempdir");
+    let mut db = CypherLite::open(test_config(dir.path())).expect("open");
+
+    c.bench_function("datetime_parse", |b| {
+        b.iter(|| {
+            let result = db
+                .execute("RETURN datetime('2024-06-15T12:30:45Z')")
+                .expect("datetime parse");
+            assert_eq!(result.rows.len(), 1);
+        });
+    });
+}
+
+fn bench_lex_temporal_query(c: &mut Criterion) {
+    // Benchmark lexing a temporal query with AT TIME clause.
+    const TEMPORAL_QUERY: &str =
+        "MATCH (n:Person) AT TIME 1000 WHERE n.age > 30 RETURN n.name, n.age";
+
+    c.bench_function("lex_temporal", |b| {
+        b.iter(|| {
+            let _ = lex(TEMPORAL_QUERY).expect("lex temporal");
+        });
+    });
+}
+
+fn bench_parse_temporal_query(c: &mut Criterion) {
+    const AT_TIME_QUERY: &str =
+        "MATCH (n:Person) AT TIME 1000 WHERE n.age > 30 RETURN n.name, n.age";
+    const BETWEEN_TIME_QUERY: &str =
+        "MATCH (n:Person) BETWEEN TIME 1000 AND 5000 RETURN n.name, n.age";
+
+    c.bench_function("parse_at_time", |b| {
+        b.iter(|| {
+            let _ = parse_query(AT_TIME_QUERY).expect("parse at time");
+        });
+    });
+
+    c.bench_function("parse_between_time", |b| {
+        b.iter(|| {
+            let _ = parse_query(BETWEEN_TIME_QUERY).expect("parse between time");
+        });
+    });
+}
+
+fn bench_at_time_query(c: &mut Criterion) {
+    // Pre-populate a database with a node and several version updates, then benchmark AT TIME.
+    let dir = tempdir().expect("tempdir");
+    let mut db = CypherLite::open(test_config(dir.path())).expect("open");
+
+    // Create node at time 1000
+    let mut params = Params::new();
+    params.insert("__query_start_ms__".to_string(), Value::Int64(1000));
+    db.execute_with_params("CREATE (n:Person {name: 'Alice', age: 25})", params)
+        .expect("create");
+
+    // Create 10 version updates
+    for i in 1..=10 {
+        let mut params = Params::new();
+        params.insert(
+            "__query_start_ms__".to_string(),
+            Value::Int64(1000 + i * 500),
+        );
+        db.execute_with_params(
+            &format!("MATCH (n:Person) SET n.age = {}", 25 + i),
+            params,
+        )
+        .expect("update");
+    }
+
+    c.bench_function("at_time_10_versions", |b| {
+        b.iter(|| {
+            let result = db
+                .execute("MATCH (n:Person) AT TIME 3500 RETURN n.age")
+                .expect("at time query");
+            assert_eq!(result.rows.len(), 1);
+        });
+    });
+}
+
+fn bench_between_time_query(c: &mut Criterion) {
+    // Pre-populate a database with a node and several version updates, then benchmark BETWEEN TIME.
+    let dir = tempdir().expect("tempdir");
+    let mut db = CypherLite::open(test_config(dir.path())).expect("open");
+
+    // Create node at time 1000
+    let mut params = Params::new();
+    params.insert("__query_start_ms__".to_string(), Value::Int64(1000));
+    db.execute_with_params("CREATE (n:BtPerson {name: 'Alice', age: 25})", params)
+        .expect("create");
+
+    // Create 10 version updates
+    for i in 1..=10 {
+        let mut params = Params::new();
+        params.insert(
+            "__query_start_ms__".to_string(),
+            Value::Int64(1000 + i * 500),
+        );
+        db.execute_with_params(
+            &format!("MATCH (n:BtPerson) SET n.age = {}", 25 + i),
+            params,
+        )
+        .expect("update");
+    }
+
+    c.bench_function("between_time_10_versions", |b| {
+        b.iter(|| {
+            let result = db
+                .execute("MATCH (n:BtPerson) BETWEEN TIME 500 AND 6500 RETURN n.age")
+                .expect("between time query");
+            assert!(result.rows.len() >= 2);
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Criterion groups
 // ---------------------------------------------------------------------------
 
@@ -232,6 +353,11 @@ criterion_group!(
     bench_execute_filter,
     bench_index_scan_vs_full_scan,
     bench_var_length_path,
-    bench_merge_vs_create
+    bench_merge_vs_create,
+    bench_datetime_parse,
+    bench_lex_temporal_query,
+    bench_parse_temporal_query,
+    bench_at_time_query,
+    bench_between_time_query
 );
 criterion_main!(benches);
