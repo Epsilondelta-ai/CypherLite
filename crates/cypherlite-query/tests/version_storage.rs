@@ -8,7 +8,6 @@
 
 use cypherlite_core::{DatabaseConfig, LabelRegistry, SyncMode};
 use cypherlite_query::api::CypherLite;
-use cypherlite_query::executor::Value;
 use cypherlite_storage::version::VersionRecord;
 use tempfile::tempdir;
 

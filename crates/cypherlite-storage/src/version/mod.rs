@@ -100,7 +100,7 @@ impl Default for VersionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cypherlite_core::{Direction, EdgeId, NodeId, PageId, PropertyValue};
+    use cypherlite_core::{Direction, EdgeId, NodeId, PropertyValue};
 
     fn sample_node(id: u64, name: &str) -> NodeRecord {
         NodeRecord {

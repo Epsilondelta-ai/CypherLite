@@ -174,7 +174,7 @@ proptest! {
         );
         // Should always find at least B (1 hop away)
         prop_assert!(
-            result.rows.len() >= 1,
+            !result.rows.is_empty(),
             "should find at least B from A"
         );
     }

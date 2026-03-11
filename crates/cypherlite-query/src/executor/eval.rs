@@ -1059,7 +1059,7 @@ mod tests {
             &engine,
             &params,
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3600_000 + 30 * 60_000)));
+        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
     }
 
     #[test]
@@ -1081,7 +1081,7 @@ mod tests {
             &engine,
             &params,
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3600_000 + 30 * 60_000)));
+        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
     }
 
     #[test]
@@ -1104,7 +1104,7 @@ mod tests {
             &engine,
             &params,
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 1 * 3600_000 + 30 * 60_000)));
+        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 3_600_000 + 30 * 60_000)));
     }
 
     #[test]
