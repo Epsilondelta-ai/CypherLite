@@ -60,6 +60,10 @@ impl EdgeStore {
             next_out_edge: prev_out_edge,
             next_in_edge: prev_in_edge,
             properties,
+            #[cfg(feature = "subgraph")]
+            start_is_subgraph: false,
+            #[cfg(feature = "subgraph")]
+            end_is_subgraph: false,
         };
 
         self.tree.insert(edge_id.0, record);

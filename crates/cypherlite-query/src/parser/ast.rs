@@ -20,6 +20,8 @@ pub enum Clause {
     Unwind(UnwindClause),
     CreateIndex(CreateIndexClause),
     DropIndex(DropIndexClause),
+    #[cfg(feature = "subgraph")]
+    CreateSnapshot(CreateSnapshotClause),
 }
 
 /// Temporal predicate for time-travel queries.
@@ -247,4 +249,26 @@ pub enum BinaryOp {
 pub enum UnaryOp {
     Not,
     Neg,
+}
+
+// -- Subgraph Snapshot --
+
+/// CREATE SNAPSHOT clause for materializing query results into a subgraph.
+///
+/// Syntax: CREATE SNAPSHOT (var:Label {props}) [AT TIME expr] FROM MATCH pattern [WHERE filter] RETURN items
+#[cfg(feature = "subgraph")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateSnapshotClause {
+    /// Optional variable name for the snapshot subgraph.
+    pub variable: Option<String>,
+    /// Labels for the snapshot subgraph.
+    pub labels: Vec<String>,
+    /// Properties to set on the snapshot subgraph.
+    pub properties: Option<MapLiteral>,
+    /// Optional temporal anchor (AT TIME expr).
+    pub temporal_anchor: Option<Expression>,
+    /// The FROM MATCH clause defining the source pattern.
+    pub from_match: MatchClause,
+    /// The FROM RETURN items defining what to capture.
+    pub from_return: Vec<ReturnItem>,
 }

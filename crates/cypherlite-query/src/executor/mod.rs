@@ -22,6 +22,9 @@ pub enum Value {
     Edge(EdgeId),
     /// DateTime as milliseconds since Unix epoch.
     DateTime(i64),
+    /// A subgraph entity reference.
+    #[cfg(feature = "subgraph")]
+    Subgraph(cypherlite_core::SubgraphId),
 }
 
 /// Convert from storage PropertyValue to executor Value.
@@ -57,6 +60,10 @@ impl TryFrom<Value> for PropertyValue {
             }
             Value::DateTime(ms) => Ok(PropertyValue::DateTime(ms)),
             Value::Node(_) | Value::Edge(_) => {
+                Err("cannot convert graph entity to property".into())
+            }
+            #[cfg(feature = "subgraph")]
+            Value::Subgraph(_) => {
                 Err("cannot convert graph entity to property".into())
             }
         }
@@ -706,5 +713,57 @@ mod tests {
             PropertyValue::try_from(Value::DateTime(1_700_000_000_000)),
             Ok(PropertyValue::DateTime(1_700_000_000_000))
         );
+    }
+
+    // ======================================================================
+    // II-002: Value::Subgraph variant (cfg-gated)
+    // ======================================================================
+
+    #[cfg(feature = "subgraph")]
+    mod subgraph_value_tests {
+        use super::*;
+        use cypherlite_core::SubgraphId;
+
+        // II-002: Value::Subgraph construction
+        #[test]
+        fn test_value_subgraph_creation() {
+            let val = Value::Subgraph(SubgraphId(42));
+            assert_eq!(val, Value::Subgraph(SubgraphId(42)));
+        }
+
+        // II-002: Value::Subgraph is not convertible to PropertyValue
+        #[test]
+        fn test_value_subgraph_try_into_property_value_fails() {
+            let result = PropertyValue::try_from(Value::Subgraph(SubgraphId(1)));
+            assert!(result.is_err());
+            assert!(result
+                .expect_err("should error")
+                .contains("cannot convert graph entity"));
+        }
+
+        // II-002: Value::Subgraph inequality with Node
+        #[test]
+        fn test_value_subgraph_ne_node() {
+            let node_val = Value::Node(NodeId(1));
+            let subgraph_val = Value::Subgraph(SubgraphId(1));
+            assert_ne!(node_val, subgraph_val);
+        }
+
+        // II-002: Value::Subgraph clone
+        #[test]
+        fn test_value_subgraph_clone() {
+            let val = Value::Subgraph(SubgraphId(7));
+            let cloned = val.clone();
+            assert_eq!(val, cloned);
+        }
+
+        // II-002: Value::Subgraph debug
+        #[test]
+        fn test_value_subgraph_debug() {
+            let val = Value::Subgraph(SubgraphId(99));
+            let debug = format!("{:?}", val);
+            assert!(debug.contains("Subgraph"));
+            assert!(debug.contains("99"));
+        }
     }
 }

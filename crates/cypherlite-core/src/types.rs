@@ -114,6 +114,74 @@ pub struct RelationshipRecord {
     pub next_in_edge: Option<EdgeId>,
     /// Key-value property pairs stored on this edge.
     pub properties: Vec<(u32, PropertyValue)>,
+    /// Whether the start endpoint is a subgraph (vs. a regular node).
+    #[cfg(feature = "subgraph")]
+    #[serde(default)]
+    pub start_is_subgraph: bool,
+    /// Whether the end endpoint is a subgraph (vs. a regular node).
+    #[cfg(feature = "subgraph")]
+    #[serde(default)]
+    pub end_is_subgraph: bool,
+}
+
+#[cfg(feature = "subgraph")]
+impl RelationshipRecord {
+    /// Returns the start endpoint as a `GraphEntity`.
+    pub fn start_entity(&self) -> GraphEntity {
+        if self.start_is_subgraph {
+            GraphEntity::Subgraph(SubgraphId(self.start_node.0))
+        } else {
+            GraphEntity::Node(self.start_node)
+        }
+    }
+
+    /// Returns the end endpoint as a `GraphEntity`.
+    pub fn end_entity(&self) -> GraphEntity {
+        if self.end_is_subgraph {
+            GraphEntity::Subgraph(SubgraphId(self.end_node.0))
+        } else {
+            GraphEntity::Node(self.end_node)
+        }
+    }
+
+    /// Returns true if either endpoint is a subgraph.
+    pub fn is_subgraph_edge(&self) -> bool {
+        self.start_is_subgraph || self.end_is_subgraph
+    }
+
+    /// Construct a RelationshipRecord from GraphEntity endpoints.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_entities(
+        edge_id: EdgeId,
+        start: GraphEntity,
+        end: GraphEntity,
+        rel_type_id: u32,
+        direction: Direction,
+        next_out_edge: Option<EdgeId>,
+        next_in_edge: Option<EdgeId>,
+        properties: Vec<(u32, PropertyValue)>,
+    ) -> Self {
+        let (start_node, start_is_subgraph) = match start {
+            GraphEntity::Node(id) => (id, false),
+            GraphEntity::Subgraph(id) => (NodeId(id.0), true),
+        };
+        let (end_node, end_is_subgraph) = match end {
+            GraphEntity::Node(id) => (id, false),
+            GraphEntity::Subgraph(id) => (NodeId(id.0), true),
+        };
+        Self {
+            edge_id,
+            start_node,
+            end_node,
+            rel_type_id,
+            direction,
+            next_out_edge,
+            next_in_edge,
+            properties,
+            start_is_subgraph,
+            end_is_subgraph,
+        }
+    }
 }
 
 impl PropertyValue {
@@ -324,6 +392,10 @@ mod tests {
             next_out_edge: None,
             next_in_edge: None,
             properties: vec![],
+            #[cfg(feature = "subgraph")]
+            start_is_subgraph: false,
+            #[cfg(feature = "subgraph")]
+            end_is_subgraph: false,
         };
         assert_eq!(edge.edge_id, EdgeId(1));
         assert_eq!(edge.start_node, NodeId(10));
@@ -343,6 +415,10 @@ mod tests {
             next_out_edge: Some(EdgeId(2)),
             next_in_edge: Some(EdgeId(3)),
             properties: vec![],
+            #[cfg(feature = "subgraph")]
+            start_is_subgraph: false,
+            #[cfg(feature = "subgraph")]
+            end_is_subgraph: false,
         };
         assert_eq!(edge.next_out_edge, Some(EdgeId(2)));
         assert_eq!(edge.next_in_edge, Some(EdgeId(3)));
@@ -407,6 +483,10 @@ mod tests {
             next_out_edge: Some(EdgeId(2)),
             next_in_edge: None,
             properties: vec![(1, PropertyValue::Bool(false))],
+            #[cfg(feature = "subgraph")]
+            start_is_subgraph: false,
+            #[cfg(feature = "subgraph")]
+            end_is_subgraph: false,
         };
         let encoded = bincode::serialize(&edge).expect("serialize");
         let decoded: RelationshipRecord = bincode::deserialize(&encoded).expect("deserialize");
@@ -680,6 +760,209 @@ mod tests {
             let entity = GraphEntity::Node(NodeId(1));
             let debug = format!("{:?}", entity);
             assert!(debug.contains("Node"));
+        }
+
+        // ======================================================================
+        // II-002: RelationshipRecord GraphEntity extension
+        // ======================================================================
+
+        // II-002: RelationshipRecord has start_is_subgraph and end_is_subgraph fields
+        #[test]
+        fn test_relationship_record_subgraph_flags_default_false() {
+            let edge = RelationshipRecord {
+                edge_id: EdgeId(1),
+                start_node: NodeId(10),
+                end_node: NodeId(20),
+                rel_type_id: 1,
+                direction: Direction::Outgoing,
+                next_out_edge: None,
+                next_in_edge: None,
+                properties: vec![],
+                start_is_subgraph: false,
+                end_is_subgraph: false,
+            };
+            assert!(!edge.start_is_subgraph);
+            assert!(!edge.end_is_subgraph);
+        }
+
+        // II-002: start_entity() returns GraphEntity::Node when start_is_subgraph is false
+        #[test]
+        fn test_relationship_record_start_entity_node() {
+            let edge = RelationshipRecord {
+                edge_id: EdgeId(1),
+                start_node: NodeId(10),
+                end_node: NodeId(20),
+                rel_type_id: 1,
+                direction: Direction::Outgoing,
+                next_out_edge: None,
+                next_in_edge: None,
+                properties: vec![],
+                start_is_subgraph: false,
+                end_is_subgraph: false,
+            };
+            assert_eq!(edge.start_entity(), GraphEntity::Node(NodeId(10)));
+        }
+
+        // II-002: start_entity() returns GraphEntity::Subgraph when start_is_subgraph is true
+        #[test]
+        fn test_relationship_record_start_entity_subgraph() {
+            let edge = RelationshipRecord {
+                edge_id: EdgeId(1),
+                start_node: NodeId(5), // raw u64 value, interpreted as SubgraphId
+                end_node: NodeId(20),
+                rel_type_id: 1,
+                direction: Direction::Outgoing,
+                next_out_edge: None,
+                next_in_edge: None,
+                properties: vec![],
+                start_is_subgraph: true,
+                end_is_subgraph: false,
+            };
+            assert_eq!(edge.start_entity(), GraphEntity::Subgraph(SubgraphId(5)));
+        }
+
+        // II-002: end_entity() returns GraphEntity::Node when end_is_subgraph is false
+        #[test]
+        fn test_relationship_record_end_entity_node() {
+            let edge = RelationshipRecord {
+                edge_id: EdgeId(1),
+                start_node: NodeId(10),
+                end_node: NodeId(20),
+                rel_type_id: 1,
+                direction: Direction::Outgoing,
+                next_out_edge: None,
+                next_in_edge: None,
+                properties: vec![],
+                start_is_subgraph: false,
+                end_is_subgraph: false,
+            };
+            assert_eq!(edge.end_entity(), GraphEntity::Node(NodeId(20)));
+        }
+
+        // II-002: end_entity() returns GraphEntity::Subgraph when end_is_subgraph is true
+        #[test]
+        fn test_relationship_record_end_entity_subgraph() {
+            let edge = RelationshipRecord {
+                edge_id: EdgeId(1),
+                start_node: NodeId(10),
+                end_node: NodeId(7), // raw u64 value, interpreted as SubgraphId
+                rel_type_id: 1,
+                direction: Direction::Outgoing,
+                next_out_edge: None,
+                next_in_edge: None,
+                properties: vec![],
+                start_is_subgraph: false,
+                end_is_subgraph: true,
+            };
+            assert_eq!(edge.end_entity(), GraphEntity::Subgraph(SubgraphId(7)));
+        }
+
+        // II-002: from_entities constructs a record with correct flags
+        #[test]
+        fn test_relationship_record_from_entities_node_to_node() {
+            let edge = RelationshipRecord::from_entities(
+                EdgeId(1),
+                GraphEntity::Node(NodeId(10)),
+                GraphEntity::Node(NodeId(20)),
+                1,
+                Direction::Outgoing,
+                None,
+                None,
+                vec![],
+            );
+            assert_eq!(edge.start_node, NodeId(10));
+            assert_eq!(edge.end_node, NodeId(20));
+            assert!(!edge.start_is_subgraph);
+            assert!(!edge.end_is_subgraph);
+        }
+
+        // II-003: from_entities with subgraph-to-subgraph
+        #[test]
+        fn test_relationship_record_from_entities_subgraph_to_subgraph() {
+            let edge = RelationshipRecord::from_entities(
+                EdgeId(2),
+                GraphEntity::Subgraph(SubgraphId(5)),
+                GraphEntity::Subgraph(SubgraphId(8)),
+                2,
+                Direction::Outgoing,
+                None,
+                None,
+                vec![],
+            );
+            assert_eq!(edge.start_node, NodeId(5)); // same raw id
+            assert_eq!(edge.end_node, NodeId(8));
+            assert!(edge.start_is_subgraph);
+            assert!(edge.end_is_subgraph);
+        }
+
+        // II-004: from_entities with mixed node-to-subgraph
+        #[test]
+        fn test_relationship_record_from_entities_node_to_subgraph() {
+            let edge = RelationshipRecord::from_entities(
+                EdgeId(3),
+                GraphEntity::Node(NodeId(10)),
+                GraphEntity::Subgraph(SubgraphId(7)),
+                1,
+                Direction::Outgoing,
+                None,
+                None,
+                vec![],
+            );
+            assert_eq!(edge.start_node, NodeId(10));
+            assert_eq!(edge.end_node, NodeId(7));
+            assert!(!edge.start_is_subgraph);
+            assert!(edge.end_is_subgraph);
+        }
+
+        // II-004: from_entities with mixed subgraph-to-node
+        #[test]
+        fn test_relationship_record_from_entities_subgraph_to_node() {
+            let edge = RelationshipRecord::from_entities(
+                EdgeId(4),
+                GraphEntity::Subgraph(SubgraphId(3)),
+                GraphEntity::Node(NodeId(20)),
+                1,
+                Direction::Outgoing,
+                None,
+                None,
+                vec![],
+            );
+            assert_eq!(edge.start_node, NodeId(3));
+            assert_eq!(edge.end_node, NodeId(20));
+            assert!(edge.start_is_subgraph);
+            assert!(!edge.end_is_subgraph);
+        }
+
+        // II-002: is_subgraph_edge returns true when either endpoint is subgraph
+        #[test]
+        fn test_relationship_record_is_subgraph_edge() {
+            let node_edge = RelationshipRecord {
+                edge_id: EdgeId(1),
+                start_node: NodeId(1),
+                end_node: NodeId(2),
+                rel_type_id: 1,
+                direction: Direction::Outgoing,
+                next_out_edge: None,
+                next_in_edge: None,
+                properties: vec![],
+                start_is_subgraph: false,
+                end_is_subgraph: false,
+            };
+            assert!(!node_edge.is_subgraph_edge());
+
+            let mixed_edge = RelationshipRecord {
+                edge_id: EdgeId(2),
+                start_node: NodeId(1),
+                end_node: NodeId(2),
+                rel_type_id: 1,
+                direction: Direction::Outgoing,
+                next_out_edge: None,
+                next_in_edge: None,
+                properties: vec![],
+                start_is_subgraph: true,
+                end_is_subgraph: false,
+            };
+            assert!(mixed_edge.is_subgraph_edge());
         }
     }
 }

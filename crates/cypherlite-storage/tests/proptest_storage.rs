@@ -85,6 +85,10 @@ fn arb_relationship_record() -> impl Strategy<Value = RelationshipRecord> {
                 next_out_edge: next_out,
                 next_in_edge: next_in,
                 properties: props,
+                #[cfg(feature = "subgraph")]
+                start_is_subgraph: false,
+                #[cfg(feature = "subgraph")]
+                end_is_subgraph: false,
             },
         )
 }

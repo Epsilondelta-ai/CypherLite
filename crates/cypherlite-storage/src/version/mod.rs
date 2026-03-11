@@ -122,6 +122,10 @@ mod tests {
             next_out_edge: None,
             next_in_edge: None,
             properties: vec![(1, PropertyValue::String("v1".to_string()))],
+            #[cfg(feature = "subgraph")]
+            start_is_subgraph: false,
+            #[cfg(feature = "subgraph")]
+            end_is_subgraph: false,
         }
     }
 

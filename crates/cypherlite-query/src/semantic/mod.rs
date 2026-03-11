@@ -66,6 +66,8 @@ impl<'a> SemanticAnalyzer<'a> {
             Clause::Unwind(u) => self.analyze_unwind(u),
             // DDL clauses: no variable scope validation needed
             Clause::CreateIndex(_) | Clause::DropIndex(_) => Ok(()),
+            #[cfg(feature = "subgraph")]
+            Clause::CreateSnapshot(_) => Ok(()), // TODO: semantic analysis for snapshot
         }
     }
 

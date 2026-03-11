@@ -52,7 +52,7 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
             Some(Token::Match) => Clause::Match(parser.parse_match_clause(false)?),
             Some(Token::Return) => Clause::Return(parser.parse_return_clause()?),
             Some(Token::Create) => {
-                // Peek at next tokens to distinguish CREATE INDEX / CREATE EDGE INDEX from CREATE (pattern)
+                // Peek at next tokens to distinguish CREATE INDEX / CREATE EDGE INDEX / CREATE SNAPSHOT from CREATE (pattern)
                 let next1 = parser.tokens.get(parser.pos + 1).map(|(t, _)| t);
                 let next2 = parser.tokens.get(parser.pos + 2).map(|(t, _)| t);
                 if next1 == Some(&Token::Index) {
@@ -61,6 +61,16 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
                 } else if next1 == Some(&Token::Edge) && next2 == Some(&Token::Index) {
                     parser.advance(); // consume CREATE
                     Clause::CreateIndex(parser.parse_create_edge_index_clause()?)
+                } else if cfg!(feature = "subgraph") && next1 == Some(&Token::Snapshot) {
+                    #[cfg(feature = "subgraph")]
+                    {
+                        parser.advance(); // consume CREATE
+                        Clause::CreateSnapshot(parser.parse_create_snapshot_clause()?)
+                    }
+                    #[cfg(not(feature = "subgraph"))]
+                    {
+                        unreachable!()
+                    }
                 } else {
                     Clause::Create(parser.parse_create_clause()?)
                 }
@@ -748,5 +758,83 @@ mod tests {
         assert!(matches!(&q.clauses[0], Clause::Match(_)));
         assert!(matches!(&q.clauses[1], Clause::Unwind(_)));
         assert!(matches!(&q.clauses[2], Clause::Return(_)));
+    }
+
+    // ======================================================================
+    // HH-001: CREATE SNAPSHOT full query integration tests (cfg-gated)
+    // ======================================================================
+
+    #[cfg(feature = "subgraph")]
+    mod snapshot_integration_tests {
+        use super::*;
+
+        // HH-001: Full CREATE SNAPSHOT query
+        #[test]
+        fn query_create_snapshot_basic() {
+            let q = parse_query(
+                "CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) RETURN n",
+            )
+            .expect("should parse");
+            assert_eq!(q.clauses.len(), 1);
+            assert!(matches!(&q.clauses[0], Clause::CreateSnapshot(_)));
+
+            if let Clause::CreateSnapshot(sc) = &q.clauses[0] {
+                assert_eq!(sc.variable, Some("s".to_string()));
+                assert_eq!(sc.labels, vec!["Snap".to_string()]);
+                assert!(sc.properties.is_none());
+                assert!(sc.temporal_anchor.is_none());
+            } else {
+                panic!("expected CreateSnapshot clause");
+            }
+        }
+
+        // HH-001: CREATE SNAPSHOT with AT TIME
+        #[test]
+        fn query_create_snapshot_with_at_time() {
+            let q = parse_query(
+                "CREATE SNAPSHOT (s:Snap) AT TIME 1000 FROM MATCH (n:Person) RETURN n",
+            )
+            .expect("should parse");
+            assert_eq!(q.clauses.len(), 1);
+
+            if let Clause::CreateSnapshot(sc) = &q.clauses[0] {
+                assert!(sc.temporal_anchor.is_some());
+            } else {
+                panic!("expected CreateSnapshot clause");
+            }
+        }
+
+        // HH-001: CREATE SNAPSHOT with WHERE in FROM MATCH
+        #[test]
+        fn query_create_snapshot_with_where() {
+            let q = parse_query(
+                "CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) WHERE n.age > 30 RETURN n",
+            )
+            .expect("should parse");
+
+            if let Clause::CreateSnapshot(sc) = &q.clauses[0] {
+                assert!(sc.from_match.where_clause.is_some());
+            } else {
+                panic!("expected CreateSnapshot clause");
+            }
+        }
+
+        // HH-001: CREATE SNAPSHOT with properties and complex FROM
+        #[test]
+        fn query_create_snapshot_with_props_and_rel() {
+            let q = parse_query(
+                "CREATE SNAPSHOT (s:Snap {name: 'team'}) FROM MATCH (n:Person)-[:KNOWS]->(m) RETURN n, m",
+            )
+            .expect("should parse");
+
+            if let Clause::CreateSnapshot(sc) = &q.clauses[0] {
+                assert!(sc.properties.is_some());
+                assert_eq!(sc.from_return.len(), 2);
+                // Verify the match pattern has a relationship
+                assert_eq!(sc.from_match.pattern.chains[0].elements.len(), 3);
+            } else {
+                panic!("expected CreateSnapshot clause");
+            }
+        }
     }
 }

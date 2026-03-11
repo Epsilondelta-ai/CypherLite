@@ -303,6 +303,10 @@ impl<'a> LogicalPlanner<'a> {
             Clause::DropIndex(di) => Ok(LogicalPlan::DropIndex {
                 name: di.name.clone(),
             }),
+            #[cfg(feature = "subgraph")]
+            Clause::CreateSnapshot(_) => Err(PlanError {
+                message: "CREATE SNAPSHOT is not yet supported in the planner".to_string(),
+            }),
         }
     }
 

@@ -124,6 +124,12 @@ pub enum Token {
     #[regex("(?i)edge", priority = 10)]
     Edge,
 
+    // -- P6 Keywords (Subgraph/Snapshot) ------------------------------------
+    #[regex("(?i)snapshot", priority = 10)]
+    Snapshot,
+    #[regex("(?i)from", priority = 10)]
+    From,
+
     // -- P4 Keywords (Temporal) ---------------------------------------------
     #[regex("(?i)at", priority = 10)]
     At,
@@ -1134,5 +1140,90 @@ mod tests {
                 Token::Integer(6),
             ]
         );
+    }
+
+    // ======================================================================
+    // HH-001: SNAPSHOT and FROM keyword tokens
+    // ======================================================================
+
+    #[test]
+    fn lex_hh1_snapshot_keyword() {
+        let toks = tokens("SNAPSHOT");
+        assert_eq!(toks, vec![Token::Snapshot]);
+    }
+
+    #[test]
+    fn lex_hh1_snapshot_case_insensitive() {
+        assert_eq!(tokens("snapshot"), vec![Token::Snapshot]);
+        assert_eq!(tokens("Snapshot"), vec![Token::Snapshot]);
+        assert_eq!(tokens("sNaPsHoT"), vec![Token::Snapshot]);
+    }
+
+    #[test]
+    fn lex_hh1_snapshot_not_prefix_of_identifier() {
+        let toks = tokens("snapshots");
+        assert_eq!(toks, vec![Token::Ident("snapshots".to_string())]);
+    }
+
+    #[test]
+    fn lex_hh1_from_keyword() {
+        let toks = tokens("FROM");
+        assert_eq!(toks, vec![Token::From]);
+    }
+
+    #[test]
+    fn lex_hh1_from_case_insensitive() {
+        assert_eq!(tokens("from"), vec![Token::From]);
+        assert_eq!(tokens("From"), vec![Token::From]);
+        assert_eq!(tokens("fRoM"), vec![Token::From]);
+    }
+
+    #[test]
+    fn lex_hh1_from_not_prefix_of_identifier() {
+        let toks = tokens("fromage");
+        assert_eq!(toks, vec![Token::Ident("fromage".to_string())]);
+    }
+
+    #[test]
+    fn lex_hh1_create_snapshot_in_context() {
+        let toks = tokens("CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) RETURN n");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Create,
+                Token::Snapshot,
+                Token::LParen,
+                Token::Ident("s".to_string()),
+                Token::Colon,
+                Token::Ident("Snap".to_string()),
+                Token::RParen,
+                Token::From,
+                Token::Match,
+                Token::LParen,
+                Token::Ident("n".to_string()),
+                Token::Colon,
+                Token::Ident("Person".to_string()),
+                Token::RParen,
+                Token::Return,
+                Token::Ident("n".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_hh1_all_keywords_include_new() {
+        // Verify SNAPSHOT and FROM are recognized alongside existing keywords
+        let kw_pairs = vec![
+            ("snapshot", Token::Snapshot),
+            ("from", Token::From),
+        ];
+        for (input, expected) in kw_pairs {
+            assert_eq!(
+                tokens(input),
+                vec![expected],
+                "keyword '{}' should be recognized",
+                input,
+            );
+        }
     }
 }
