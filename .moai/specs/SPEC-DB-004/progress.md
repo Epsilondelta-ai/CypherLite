@@ -28,7 +28,17 @@
 
 ### Deferred Items
 
-- Y-T4: Temporal index on `_created_at` (auto-creation) — deferred to v0.5
-- Y-T5: Planner integration with temporal index — deferred to v0.5
-- Delta-based version compression — deferred to v0.5
-- Bitemporal queries (valid time + transaction time) — deferred to v0.5
+- Y-T4: Temporal index on `_created_at` (auto-creation) — deferred to SPEC-DB-005 (v0.5)
+- Y-T5: Planner integration with temporal index — deferred to SPEC-DB-005 (v0.5)
+- Delta-based version compression — deferred to v0.8+
+- Bitemporal queries (valid time + transaction time) — deferred to v0.8+
+
+### Successor SPECs (Temporal Hypergraph Roadmap)
+
+| SPEC | Version | Feature | Status |
+|------|---------|---------|--------|
+| SPEC-DB-005 | v0.5 | Temporal Edge Validity & Feature Flags | Draft |
+| SPEC-DB-006 | v0.6 | Subgraph Entities & Temporal Snapshots | Draft |
+| SPEC-DB-007 | v0.7 | Native Hyperedges & Temporal References | Draft |
+
+See `docs/design/05_temporal_hypergraph_roadmap.md` for the full roadmap.

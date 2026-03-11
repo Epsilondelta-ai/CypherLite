@@ -1,8 +1,8 @@
 # CypherLite Documentation Index
 
-**Last Updated**: March 10, 2026
-**Total Documents**: 10 (4 research + 4 design + 2 overview)
-**Total Size**: ~850 KB
+**Last Updated**: March 11, 2026
+**Total Documents**: 11 (3 research + 5 design + 2 overview + 1 roadmap)
+**Total Size**: ~900 KB
 
 ---
 
@@ -616,6 +616,7 @@
 - **Temporal Storage**: [02_storage_engine.md](#storage-engine-design), Section 10
 - **Temporal Queries**: [02_cypher_rdf_temporal.md](#cypher-rdf--temporal), Section 3
 - **Implementation Plan**: [00_master_overview.md](#master-overview), Section 4.3 & [01_core_architecture.md](#core-architecture-design), Section 8 (Phase 4)
+- **Temporal Hypergraph Roadmap**: [05_temporal_hypergraph_roadmap.md](#temporal-hypergraph-roadmap) (v0.5-v0.7 feature flags, edge validity, subgraphs, hyperedges)
 
 ### RDF & Semantic Web
 - **RDF Fundamentals**: [02_cypher_rdf_temporal.md](#cypher-rdf--temporal), Section 2
