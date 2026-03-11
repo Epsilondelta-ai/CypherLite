@@ -1,5 +1,6 @@
 // VarLengthExpandOp: variable-length path traversal using DFS with backtracking
 
+use crate::executor::operators::temporal_filter::{is_edge_temporally_valid, TemporalFilter};
 use crate::executor::{Record, Value};
 use crate::parser::ast::RelDirection;
 use cypherlite_core::NodeId;
@@ -9,6 +10,9 @@ use std::collections::HashSet;
 /// Execute variable-length expansion from source records.
 /// Uses DFS with backtracking to enumerate all paths within [min_hops, max_hops].
 /// Cycle detection: a node cannot appear twice in the same path.
+///
+/// When `temporal_filter` is Some, all edges in each path must pass temporal
+/// validity (DD-T3).
 #[allow(clippy::too_many_arguments)]
 pub fn execute_var_length_expand(
     source_records: Vec<Record>,
@@ -20,6 +24,7 @@ pub fn execute_var_length_expand(
     min_hops: u32,
     max_hops: u32,
     engine: &StorageEngine,
+    temporal_filter: Option<&TemporalFilter>,
 ) -> Vec<Record> {
     let mut results = Vec::new();
 
@@ -55,6 +60,7 @@ pub fn execute_var_length_expand(
             rel_var,
             target_var,
             engine,
+            temporal_filter,
             &mut results,
         );
     }
@@ -75,6 +81,7 @@ fn dfs(
     rel_var: Option<&str>,
     target_var: &str,
     engine: &StorageEngine,
+    temporal_filter: Option<&TemporalFilter>,
     results: &mut Vec<Record>,
 ) {
     if depth > max_hops {
@@ -87,6 +94,13 @@ fn dfs(
         // Filter by relationship type if specified
         if let Some(tid) = rel_type_id {
             if edge.rel_type_id != tid {
+                continue;
+            }
+        }
+
+        // Temporal filter: skip edges that are not temporally valid
+        if let Some(tf) = temporal_filter {
+            if !is_edge_temporally_valid(edge.edge_id, tf, engine) {
                 continue;
             }
         }
@@ -149,6 +163,7 @@ fn dfs(
                     rel_var,
                     target_var,
                     engine,
+                    temporal_filter,
                     results,
                 );
                 visited.remove(&target_id);
@@ -211,6 +226,7 @@ mod tests {
             1,
             1,
             &engine,
+            None,
         );
 
         // Only 1-hop: n0 -> n1
@@ -238,6 +254,7 @@ mod tests {
             1,
             2,
             &engine,
+            None,
         );
 
         // 1-hop: n1, 2-hop: n2
@@ -267,6 +284,7 @@ mod tests {
             1,
             3,
             &engine,
+            None,
         );
 
         // 1-hop: n1, 2-hop: n2, 3-hop: n3
@@ -299,6 +317,7 @@ mod tests {
             1,
             2,
             &engine,
+            None,
         );
 
         assert_eq!(results.len(), 2);
@@ -330,6 +349,7 @@ mod tests {
             1,
             3,
             &engine,
+            None,
         );
 
         assert_eq!(results.len(), 1);
@@ -356,6 +376,7 @@ mod tests {
             1,
             2,
             &engine,
+            None,
         );
 
         // Incoming from n3: 1-hop: n2, 2-hop: n1
@@ -377,6 +398,7 @@ mod tests {
             1,
             3,
             &engine,
+            None,
         );
 
         assert!(results.is_empty());
@@ -401,6 +423,7 @@ mod tests {
             1,
             3,
             &engine,
+            None,
         );
 
         assert!(results.is_empty());
@@ -426,6 +449,7 @@ mod tests {
             1,
             2,
             &engine,
+            None,
         );
 
         // Both results should have r bound to an edge
@@ -463,6 +487,7 @@ mod tests {
             1,
             2,
             &engine,
+            None,
         );
 
         // 1-hop: n1, n2. 2-hop from n1: n3, 2-hop from n2: n3
@@ -498,6 +523,7 @@ mod tests {
             1,
             10,
             &engine,
+            None,
         );
 
         // With cycle detection: n0->n1 (1), n0->n1->n2 (2)
@@ -528,6 +554,7 @@ mod tests {
             1,
             5,
             &engine,
+            None,
         );
 
         // n0->n1 (1 hop). n1->n1 is blocked (self loop, already visited)
@@ -562,6 +589,7 @@ mod tests {
             2,
             2,
             &engine,
+            None,
         );
 
         // 2-hop paths: n0->n1->n3 and n0->n2->n3
@@ -596,6 +624,7 @@ mod tests {
             1,
             5,
             &engine,
+            None,
         );
 
         assert_eq!(results.len(), 1);
@@ -624,6 +653,7 @@ mod tests {
             2,
             2,
             &engine,
+            None,
         );
 
         // Exact 2-hop: only n2
@@ -653,6 +683,7 @@ mod tests {
             0,
             1,
             &engine,
+            None,
         );
 
         // 0-hop: n0 itself (with r=Null), 1-hop: n1
@@ -693,6 +724,7 @@ mod tests {
             0,
             1,
             &engine,
+            None,
         );
 
         // Only zero-hop match
@@ -726,6 +758,7 @@ mod tests {
             1,
             1,
             &engine,
+            None,
         );
 
         assert_eq!(results.len(), 2);
@@ -754,6 +787,7 @@ mod tests {
             1,
             1,
             &engine,
+            None,
         );
 
         assert_eq!(results.len(), 1);

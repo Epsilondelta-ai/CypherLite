@@ -22,6 +22,7 @@ pub enum LogicalPlan {
         target_var: String,
         rel_type_id: Option<u32>,
         direction: RelDirection,
+        temporal_filter: Option<TemporalFilterPlan>,
     },
     /// Filter rows by a predicate expression.
     Filter {
@@ -134,6 +135,7 @@ pub enum LogicalPlan {
         direction: RelDirection,
         min_hops: u32,
         max_hops: u32,
+        temporal_filter: Option<TemporalFilterPlan>,
     },
     /// Index-based scan: look up nodes by label + property value using an index.
     /// The executor checks at runtime whether an index actually exists.
@@ -155,6 +157,16 @@ pub enum LogicalPlan {
         start_expr: Expression,
         end_expr: Expression,
     },
+}
+
+/// Temporal filter plan for edge validity during AT TIME / BETWEEN TIME queries.
+/// Expressions are evaluated at execution time to produce concrete timestamps.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TemporalFilterPlan {
+    /// Filter edges valid at a specific timestamp.
+    AsOf(Expression),
+    /// Filter edges with validity overlapping [start, end].
+    Between(Expression, Expression),
 }
 
 /// Supported aggregate functions.
@@ -180,6 +192,59 @@ impl std::error::Error for PlanError {}
 
 /// Default maximum hops for unbounded variable-length paths.
 pub const DEFAULT_MAX_HOPS: u32 = 10;
+
+/// Walk a logical plan tree and set temporal_filter on Expand/VarLengthExpand nodes.
+/// This is called when a MATCH clause has a temporal predicate (AT TIME / BETWEEN TIME)
+/// so that edge traversal also filters edges by temporal validity.
+fn annotate_temporal_filter(plan: &mut LogicalPlan, tfp: &TemporalFilterPlan) {
+    match plan {
+        LogicalPlan::Expand {
+            source,
+            temporal_filter,
+            ..
+        } => {
+            *temporal_filter = Some(tfp.clone());
+            annotate_temporal_filter(source, tfp);
+        }
+        LogicalPlan::VarLengthExpand {
+            source,
+            temporal_filter,
+            ..
+        } => {
+            *temporal_filter = Some(tfp.clone());
+            annotate_temporal_filter(source, tfp);
+        }
+        LogicalPlan::Filter { source, .. }
+        | LogicalPlan::Project { source, .. }
+        | LogicalPlan::Sort { source, .. }
+        | LogicalPlan::Skip { source, .. }
+        | LogicalPlan::Limit { source, .. }
+        | LogicalPlan::Aggregate { source, .. }
+        | LogicalPlan::SetOp { source, .. }
+        | LogicalPlan::RemoveOp { source, .. }
+        | LogicalPlan::With { source, .. }
+        | LogicalPlan::Unwind { source, .. }
+        | LogicalPlan::DeleteOp { source, .. }
+        | LogicalPlan::OptionalExpand { source, .. }
+        | LogicalPlan::AsOfScan { source, .. }
+        | LogicalPlan::TemporalRangeScan { source, .. } => {
+            annotate_temporal_filter(source, tfp);
+        }
+        LogicalPlan::CreateOp { source, .. }
+        | LogicalPlan::MergeOp { source, .. } => {
+            if let Some(s) = source {
+                annotate_temporal_filter(s, tfp);
+            }
+        }
+        // Leaf nodes: nothing to annotate
+        LogicalPlan::NodeScan { .. }
+        | LogicalPlan::IndexScan { .. }
+        | LogicalPlan::EmptySource
+        | LogicalPlan::CreateIndex { .. }
+        | LogicalPlan::CreateEdgeIndex { .. }
+        | LogicalPlan::DropIndex { .. } => {}
+    }
+}
 
 /// Logical planner that converts a parsed Query AST into a LogicalPlan tree.
 pub struct LogicalPlanner<'a> {
@@ -270,6 +335,18 @@ impl<'a> LogicalPlanner<'a> {
 
         // Apply temporal predicate if present.
         if let Some(ref tp) = mc.temporal_predicate {
+            // DD-T4: Annotate Expand/VarLengthExpand nodes with temporal filter
+            // so edges are also filtered temporally during traversal.
+            let tfp = match tp {
+                crate::parser::ast::TemporalPredicate::AsOf(expr) => {
+                    TemporalFilterPlan::AsOf(expr.clone())
+                }
+                crate::parser::ast::TemporalPredicate::Between(start, end) => {
+                    TemporalFilterPlan::Between(start.clone(), end.clone())
+                }
+            };
+            annotate_temporal_filter(&mut plan, &tfp);
+
             match tp {
                 crate::parser::ast::TemporalPredicate::AsOf(expr) => {
                     plan = LogicalPlan::AsOfScan {
@@ -443,6 +520,7 @@ impl<'a> LogicalPlanner<'a> {
                     direction: rel.direction,
                     min_hops: min,
                     max_hops: max,
+                    temporal_filter: None,
                 };
             } else {
                 plan = LogicalPlan::Expand {
@@ -452,6 +530,7 @@ impl<'a> LogicalPlanner<'a> {
                     target_var,
                     rel_type_id,
                     direction: rel.direction,
+                    temporal_filter: None,
                 };
             }
         }

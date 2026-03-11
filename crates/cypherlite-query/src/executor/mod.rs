@@ -3,7 +3,7 @@ pub mod eval;
 pub mod operators;
 
 use crate::parser::ast::*;
-use crate::planner::LogicalPlan;
+use crate::planner::{LogicalPlan, TemporalFilterPlan};
 use cypherlite_core::{EdgeId, LabelRegistry, NodeId, PropertyValue};
 use cypherlite_storage::StorageEngine;
 use std::collections::HashMap;
@@ -111,8 +111,10 @@ pub fn execute(
             target_var,
             rel_type_id,
             direction,
+            temporal_filter,
         } => {
             let source_records = execute(source, engine, params)?;
+            let tf = resolve_temporal_filter(temporal_filter, engine, params)?;
             Ok(operators::expand::execute_expand(
                 source_records,
                 src_var,
@@ -121,6 +123,7 @@ pub fn execute(
                 *rel_type_id,
                 direction,
                 engine,
+                tf.as_ref(),
             ))
         }
         LogicalPlan::Filter { source, predicate } => {
@@ -354,8 +357,10 @@ pub fn execute(
             direction,
             min_hops,
             max_hops,
+            temporal_filter,
         } => {
             let source_records = execute(source, engine, params)?;
+            let tf = resolve_temporal_filter(temporal_filter, engine, params)?;
             Ok(operators::var_length_expand::execute_var_length_expand(
                 source_records,
                 src_var,
@@ -366,6 +371,7 @@ pub fn execute(
                 *min_hops,
                 *max_hops,
                 engine,
+                tf.as_ref(),
             ))
         }
         LogicalPlan::OptionalExpand {
@@ -426,6 +432,46 @@ pub fn execute(
                 params,
             )
         }
+    }
+}
+
+/// Resolve a TemporalFilterPlan into a concrete TemporalFilter by evaluating expressions.
+fn resolve_temporal_filter(
+    plan: &Option<TemporalFilterPlan>,
+    engine: &mut StorageEngine,
+    params: &Params,
+) -> Result<Option<operators::temporal_filter::TemporalFilter>, ExecutionError> {
+    let tfp = match plan {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let empty_record = Record::new();
+    match tfp {
+        TemporalFilterPlan::AsOf(expr) => {
+            let val = eval::eval(expr, &empty_record, engine, params)?;
+            let ms = extract_timestamp(val)?;
+            Ok(Some(operators::temporal_filter::TemporalFilter::AsOf(ms)))
+        }
+        TemporalFilterPlan::Between(start_expr, end_expr) => {
+            let start_val = eval::eval(start_expr, &empty_record, engine, params)?;
+            let end_val = eval::eval(end_expr, &empty_record, engine, params)?;
+            let start_ms = extract_timestamp(start_val)?;
+            let end_ms = extract_timestamp(end_val)?;
+            Ok(Some(operators::temporal_filter::TemporalFilter::Between(
+                start_ms, end_ms,
+            )))
+        }
+    }
+}
+
+/// Extract a timestamp (i64 millis) from a Value.
+fn extract_timestamp(val: Value) -> Result<i64, ExecutionError> {
+    match val {
+        Value::DateTime(ms) => Ok(ms),
+        Value::Int64(ms) => Ok(ms),
+        _ => Err(ExecutionError {
+            message: "temporal filter expression must evaluate to DateTime or integer".to_string(),
+        }),
     }
 }
 
