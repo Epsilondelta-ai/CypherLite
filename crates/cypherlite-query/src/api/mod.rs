@@ -140,6 +140,16 @@ impl CypherLite {
         // 4. Optimize (index scan, limit pushdown, constant folding, projection pruning)
         let plan = crate::planner::optimize::optimize(plan);
 
+        // 4.5. Inject query start time for now() function
+        let mut params = params;
+        if !params.contains_key("__query_start_ms__") {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            params.insert("__query_start_ms__".to_string(), Value::Int64(now_ms));
+        }
+
         // 5. Execute
         let records = crate::executor::execute(&plan, &mut self.engine, &params)
             .map_err(|e| CypherLiteError::ExecutionError(e.message))?;

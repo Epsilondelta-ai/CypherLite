@@ -84,6 +84,10 @@ pub enum CypherLiteError {
     /// A constraint (e.g. uniqueness) was violated.
     #[error("Constraint violation: {0}")]
     ConstraintViolation(String),
+
+    /// A datetime string could not be parsed.
+    #[error("Invalid datetime format: {0}")]
+    InvalidDateTimeFormat(String),
 }
 
 /// Convenience type alias for CypherLite operations.
@@ -222,6 +226,16 @@ mod tests {
         assert_eq!(
             format!("{err}"),
             "Constraint violation: unique key violated"
+        );
+    }
+
+    // U-002: InvalidDateTimeFormat error
+    #[test]
+    fn test_invalid_datetime_format_error() {
+        let err = CypherLiteError::InvalidDateTimeFormat("bad input".to_string());
+        assert_eq!(
+            format!("{err}"),
+            "Invalid datetime format: bad input"
         );
     }
 }
