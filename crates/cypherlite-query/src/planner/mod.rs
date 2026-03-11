@@ -108,10 +108,16 @@ pub enum LogicalPlan {
     },
     /// Empty source (produces one empty row).
     EmptySource,
-    /// CREATE INDEX DDL operation.
+    /// CREATE INDEX DDL operation (node label index).
     CreateIndex {
         name: Option<String>,
         label: String,
+        property: String,
+    },
+    /// CREATE EDGE INDEX DDL operation (relationship type index).
+    CreateEdgeIndex {
+        name: Option<String>,
+        rel_type: String,
         property: String,
     },
     /// DROP INDEX DDL operation.
@@ -213,11 +219,22 @@ impl<'a> LogicalPlanner<'a> {
             Clause::With(wc) => self.plan_with(wc, current),
             Clause::Unwind(uc) => self.plan_unwind(uc, current),
             Clause::Merge(mc) => Ok(self.plan_merge(mc, current)),
-            Clause::CreateIndex(ci) => Ok(LogicalPlan::CreateIndex {
-                name: ci.name.clone(),
-                label: ci.label.clone(),
-                property: ci.property.clone(),
-            }),
+            Clause::CreateIndex(ci) => match &ci.target {
+                crate::parser::ast::IndexTarget::NodeLabel(label) => {
+                    Ok(LogicalPlan::CreateIndex {
+                        name: ci.name.clone(),
+                        label: label.clone(),
+                        property: ci.property.clone(),
+                    })
+                }
+                crate::parser::ast::IndexTarget::RelationshipType(rel_type) => {
+                    Ok(LogicalPlan::CreateEdgeIndex {
+                        name: ci.name.clone(),
+                        rel_type: rel_type.clone(),
+                        property: ci.property.clone(),
+                    })
+                }
+            },
             Clause::DropIndex(di) => Ok(LogicalPlan::DropIndex {
                 name: di.name.clone(),
             }),

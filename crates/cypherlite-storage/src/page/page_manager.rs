@@ -61,19 +61,35 @@ impl PageManager {
             return Err(CypherLiteError::InvalidMagicNumber);
         }
 
-        // REQ-PAGE-008: Validate version (accept v1 for auto-migration to v2)
-        if header.version != FORMAT_VERSION && header.version != 1 {
+        // REQ-PAGE-008: Validate version (accept v1, v2 for auto-migration to v3)
+        if header.version != FORMAT_VERSION && header.version != 1 && header.version != 2 {
             return Err(CypherLiteError::UnsupportedVersion {
                 found: header.version,
                 supported: FORMAT_VERSION,
             });
         }
 
-        // W-004: Auto-migrate v1 headers to v2
+        // Auto-migrate old headers to current FORMAT_VERSION
         let mut header = header;
-        if header.version == 1 {
+        if header.version < FORMAT_VERSION {
+            // W-004: v1->v2 migration
+            if header.version < 2 {
+                header.version_store_root_page = 0;
+            }
+            // AA-T3: v2->v3 migration: feature_flags defaults to temporal-core
+            // (from_page already sets this for version < 3)
             header.version = FORMAT_VERSION;
-            header.version_store_root_page = 0;
+        }
+
+        // AA-T4: Feature compatibility check
+        let compiled = super::DatabaseHeader::compiled_feature_flags();
+        let db_flags = header.feature_flags;
+        // If the database requires features we don't have compiled in, reject
+        if (db_flags & !compiled) != 0 {
+            return Err(CypherLiteError::FeatureIncompatible {
+                db_flags,
+                compiled_flags: compiled,
+            });
         }
 
         Ok(Self {
@@ -199,7 +215,7 @@ impl PageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page::FIRST_DATA_PAGE;
+    use crate::page::{DatabaseHeader, FIRST_DATA_PAGE};
     use tempfile::tempdir;
 
     fn test_config(dir: &std::path::Path) -> DatabaseConfig {
@@ -267,7 +283,7 @@ mod tests {
             result,
             Err(CypherLiteError::UnsupportedVersion {
                 found: 99,
-                supported: 2
+                supported: 3
             })
         ));
     }
@@ -377,5 +393,69 @@ mod tests {
         }
         let pm = PageManager::open_database(&config).expect("open");
         assert_eq!(pm.header().next_node_id, 42);
+    }
+
+    // AA-T3: Open v2 database auto-migrates to v3
+    #[test]
+    fn test_open_v2_database_migrates_to_v3() {
+        let dir = tempdir().expect("tempdir");
+        let config = test_config(dir.path());
+
+        // Write a v2 header manually
+        let mut hdr = DatabaseHeader::new();
+        hdr.version = 2;
+        hdr.feature_flags = 0; // v2 had no feature_flags field
+        let mut file = File::create(&config.path).expect("create");
+        // Manually write v2 format (no feature_flags at bytes 44-47)
+        let mut page = [0u8; PAGE_SIZE];
+        page[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+        page[4..8].copy_from_slice(&2u32.to_le_bytes());
+        page[8..12].copy_from_slice(&FIRST_DATA_PAGE.to_le_bytes());
+        page[20..28].copy_from_slice(&1u64.to_le_bytes());
+        page[28..36].copy_from_slice(&1u64.to_le_bytes());
+        file.write_all(&page).expect("write header");
+        file.write_all(&[0u8; PAGE_SIZE]).expect("write fsm");
+        drop(file);
+
+        let pm = PageManager::open_database(&config).expect("open v2");
+        assert_eq!(pm.header().version, FORMAT_VERSION);
+        // Auto-migrated feature_flags should have temporal-core
+        assert!(pm.header().feature_flags & DatabaseHeader::FLAG_TEMPORAL_CORE != 0);
+    }
+
+    // AA-T4: Database with feature flags not compiled in is rejected
+    #[test]
+    fn test_open_database_with_unsupported_features() {
+        let dir = tempdir().expect("tempdir");
+        let config = test_config(dir.path());
+
+        // Write a v3 header with a feature flag we don't have compiled
+        let mut page = [0u8; PAGE_SIZE];
+        page[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+        page[4..8].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        page[8..12].copy_from_slice(&FIRST_DATA_PAGE.to_le_bytes());
+        page[20..28].copy_from_slice(&1u64.to_le_bytes());
+        page[28..36].copy_from_slice(&1u64.to_le_bytes());
+        // Set a high bit that no current compilation supports
+        let bogus_flags = 0x8000_0000u32;
+        page[44..48].copy_from_slice(&bogus_flags.to_le_bytes());
+
+        let mut file = File::create(&config.path).expect("create");
+        file.write_all(&page).expect("write header");
+        file.write_all(&[0u8; PAGE_SIZE]).expect("write fsm");
+        drop(file);
+
+        let result = PageManager::open_database(&config);
+        assert!(matches!(result, Err(CypherLiteError::FeatureIncompatible { .. })));
+    }
+
+    // AA-T3: New database gets FORMAT_VERSION 3 with feature flags
+    #[test]
+    fn test_new_database_has_v3_header() {
+        let dir = tempdir().expect("tempdir");
+        let config = test_config(dir.path());
+        let pm = PageManager::create_database(&config).expect("create");
+        assert_eq!(pm.header().version, 3);
+        assert!(pm.header().feature_flags & DatabaseHeader::FLAG_TEMPORAL_CORE != 0);
     }
 }

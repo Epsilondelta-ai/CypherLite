@@ -2,7 +2,7 @@
 
 use crate::executor::eval::eval;
 use crate::executor::operators::create::{
-    is_system_property, SYSTEM_PROP_UPDATED_AT,
+    is_system_property, is_temporal_edge_property, SYSTEM_PROP_UPDATED_AT,
 };
 use crate::executor::{ExecutionError, Params, Record, Value};
 use crate::parser::ast::*;
@@ -75,6 +75,7 @@ fn apply_set_property(
     match target {
         Expression::Property(var_expr, prop_name) => {
             // V-003: Block user writes to system properties
+            // BB-T4: _valid_from/_valid_to are temporal but user-settable
             if is_system_property(prop_name) {
                 return Err(ExecutionError {
                     message: format!("System property is read-only: {}", prop_name),
@@ -91,6 +92,16 @@ fn apply_set_property(
 
             match entity {
                 Value::Node(nid) => {
+                    // Block temporal edge properties on nodes
+                    if is_temporal_edge_property(prop_name) {
+                        return Err(ExecutionError {
+                            message: format!(
+                                "Property '{}' is only valid on edges, not nodes",
+                                prop_name
+                            ),
+                        });
+                    }
+
                     let prop_key_id = engine.get_or_create_prop_key(prop_name);
                     // Get current node properties
                     let node = engine.get_node(nid).ok_or_else(|| ExecutionError {
@@ -118,6 +129,36 @@ fn apply_set_property(
 
                     engine.update_node(nid, props).map_err(|e| ExecutionError {
                         message: format!("failed to update node: {}", e),
+                    })?;
+                }
+                Value::Edge(eid) => {
+                    let prop_key_id = engine.get_or_create_prop_key(prop_name);
+                    // Get current edge properties
+                    let edge = engine.get_edge(eid).ok_or_else(|| ExecutionError {
+                        message: format!("edge {} not found", eid.0),
+                    })?;
+                    let mut props = edge.properties.clone();
+
+                    // Update or add the property
+                    let mut found = false;
+                    for (k, v) in &mut props {
+                        if *k == prop_key_id {
+                            *v = pv.clone();
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        props.push((prop_key_id, pv));
+                    }
+
+                    // BB-T5: Update _updated_at timestamp on edge SET
+                    if temporal_enabled {
+                        inject_updated_at(&mut props, engine, params);
+                    }
+
+                    engine.update_edge(eid, props).map_err(|e| ExecutionError {
+                        message: format!("failed to update edge: {}", e),
                     })?;
                 }
                 Value::Null => {
@@ -206,6 +247,30 @@ fn apply_remove_property(
 
                     engine.update_node(nid, props).map_err(|e| ExecutionError {
                         message: format!("failed to update node: {}", e),
+                    })?;
+                }
+                Value::Edge(eid) => {
+                    let prop_key_id = match engine.catalog().prop_key_id(prop_name) {
+                        Some(id) => id,
+                        None => return Ok(()),
+                    };
+
+                    let edge = engine.get_edge(eid).ok_or_else(|| ExecutionError {
+                        message: format!("edge {} not found", eid.0),
+                    })?;
+                    let mut props: Vec<_> = edge
+                        .properties
+                        .iter()
+                        .filter(|(k, _)| *k != prop_key_id)
+                        .cloned()
+                        .collect();
+
+                    if temporal_enabled {
+                        inject_updated_at(&mut props, engine, params);
+                    }
+
+                    engine.update_edge(eid, props).map_err(|e| ExecutionError {
+                        message: format!("failed to update edge: {}", e),
                     })?;
                 }
                 Value::Null => {} // no-op
@@ -404,5 +469,238 @@ mod tests {
         assert!(node.properties.iter().any(|(k, _)| *k == name_key));
         let updated_key = engine.catalog().prop_key_id("_updated_at").expect("key");
         assert!(node.properties.iter().any(|(k, _)| *k == updated_key));
+    }
+
+    // BB-T5: SET property on edge
+    #[test]
+    fn test_set_property_on_edge() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let weight_key = engine.get_or_create_prop_key("weight");
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let eid = engine
+            .create_edge(n1, n2, 1, vec![(weight_key, PropertyValue::Float64(1.0))])
+            .expect("edge");
+
+        let mut record = Record::new();
+        record.insert("r".to_string(), Value::Edge(eid));
+
+        let items = vec![SetItem::Property {
+            target: Expression::Property(
+                Box::new(Expression::Variable("r".to_string())),
+                "weight".to_string(),
+            ),
+            value: Expression::Literal(Literal::Float(2.5)),
+        }];
+
+        let params = Params::new();
+        let result = execute_set(vec![record], &items, &mut engine, &params);
+        assert!(result.is_ok());
+
+        let edge = engine.get_edge(eid).expect("edge exists");
+        let weight_val = edge
+            .properties
+            .iter()
+            .find(|(k, _)| *k == weight_key)
+            .map(|(_, v)| v);
+        assert_eq!(weight_val, Some(&PropertyValue::Float64(2.5)));
+    }
+
+    // BB-T5: SET on edge updates _updated_at
+    #[test]
+    fn test_set_on_edge_updates_updated_at() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let eid = engine.create_edge(n1, n2, 1, vec![]).expect("edge");
+
+        let mut record = Record::new();
+        record.insert("r".to_string(), Value::Edge(eid));
+
+        let items = vec![SetItem::Property {
+            target: Expression::Property(
+                Box::new(Expression::Variable("r".to_string())),
+                "weight".to_string(),
+            ),
+            value: Expression::Literal(Literal::Float(1.0)),
+        }];
+
+        let mut params = Params::new();
+        params.insert(
+            "__query_start_ms__".to_string(),
+            Value::Int64(9_999_999),
+        );
+        let result = execute_set(vec![record], &items, &mut engine, &params);
+        assert!(result.is_ok());
+
+        let edge = engine.get_edge(eid).expect("edge exists");
+        let updated_key = engine
+            .catalog()
+            .prop_key_id("_updated_at")
+            .expect("updated key");
+        let updated_val = edge
+            .properties
+            .iter()
+            .find(|(k, _)| *k == updated_key)
+            .map(|(_, v)| v);
+        assert_eq!(updated_val, Some(&PropertyValue::DateTime(9_999_999)));
+    }
+
+    // BB-T4: SET _valid_from on edge is allowed
+    #[test]
+    fn test_set_valid_from_on_edge_allowed() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let eid = engine.create_edge(n1, n2, 1, vec![]).expect("edge");
+
+        let mut record = Record::new();
+        record.insert("r".to_string(), Value::Edge(eid));
+
+        let items = vec![SetItem::Property {
+            target: Expression::Property(
+                Box::new(Expression::Variable("r".to_string())),
+                "_valid_from".to_string(),
+            ),
+            value: Expression::Literal(Literal::Integer(1_700_000_000_000)),
+        }];
+
+        let params = Params::new();
+        let result = execute_set(vec![record], &items, &mut engine, &params);
+        assert!(result.is_ok());
+
+        let edge = engine.get_edge(eid).expect("edge exists");
+        let vf_key = engine
+            .catalog()
+            .prop_key_id("_valid_from")
+            .expect("valid_from key");
+        let vf_val = edge
+            .properties
+            .iter()
+            .find(|(k, _)| *k == vf_key)
+            .map(|(_, v)| v);
+        assert_eq!(vf_val, Some(&PropertyValue::Int64(1_700_000_000_000)));
+    }
+
+    // BB-T4: SET _valid_to on edge is allowed
+    #[test]
+    fn test_set_valid_to_on_edge_allowed() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let eid = engine.create_edge(n1, n2, 1, vec![]).expect("edge");
+
+        let mut record = Record::new();
+        record.insert("r".to_string(), Value::Edge(eid));
+
+        let items = vec![SetItem::Property {
+            target: Expression::Property(
+                Box::new(Expression::Variable("r".to_string())),
+                "_valid_to".to_string(),
+            ),
+            value: Expression::Literal(Literal::Integer(1_800_000_000_000)),
+        }];
+
+        let params = Params::new();
+        let result = execute_set(vec![record], &items, &mut engine, &params);
+        assert!(result.is_ok());
+    }
+
+    // BB-T4: SET _valid_from on NODE is blocked
+    #[test]
+    fn test_set_valid_from_on_node_blocked() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let nid = engine.create_node(vec![], vec![]);
+
+        let mut record = Record::new();
+        record.insert("n".to_string(), Value::Node(nid));
+
+        let items = vec![SetItem::Property {
+            target: Expression::Property(
+                Box::new(Expression::Variable("n".to_string())),
+                "_valid_from".to_string(),
+            ),
+            value: Expression::Literal(Literal::Integer(1_700_000_000_000)),
+        }];
+
+        let params = Params::new();
+        let result = execute_set(vec![record], &items, &mut engine, &params);
+        assert!(result.is_err());
+    }
+
+    // BB-T5: SET _created_at on edge is blocked (system property)
+    #[test]
+    fn test_set_created_at_on_edge_blocked() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let eid = engine.create_edge(n1, n2, 1, vec![]).expect("edge");
+
+        let mut record = Record::new();
+        record.insert("r".to_string(), Value::Edge(eid));
+
+        let items = vec![SetItem::Property {
+            target: Expression::Property(
+                Box::new(Expression::Variable("r".to_string())),
+                "_created_at".to_string(),
+            ),
+            value: Expression::Literal(Literal::Integer(999)),
+        }];
+
+        let params = Params::new();
+        let result = execute_set(vec![record], &items, &mut engine, &params);
+        assert!(result.is_err());
+    }
+
+    // BB: REMOVE property on edge works
+    #[test]
+    fn test_remove_property_on_edge() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let weight_key = engine.get_or_create_prop_key("weight");
+        let color_key = engine.get_or_create_prop_key("color");
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let eid = engine
+            .create_edge(
+                n1,
+                n2,
+                1,
+                vec![
+                    (weight_key, PropertyValue::Float64(1.0)),
+                    (color_key, PropertyValue::String("red".into())),
+                ],
+            )
+            .expect("edge");
+
+        let mut record = Record::new();
+        record.insert("r".to_string(), Value::Edge(eid));
+
+        let items = vec![RemoveItem::Property(Expression::Property(
+            Box::new(Expression::Variable("r".to_string())),
+            "weight".to_string(),
+        ))];
+
+        let params = Params::new();
+        let result = execute_remove(vec![record], &items, &mut engine, &params);
+        assert!(result.is_ok());
+
+        let edge = engine.get_edge(eid).expect("edge exists");
+        // weight removed, color remains, _updated_at added
+        assert!(edge.properties.iter().any(|(k, _)| *k == color_key));
+        assert!(!edge.properties.iter().any(|(k, _)| *k == weight_key));
     }
 }

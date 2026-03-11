@@ -185,6 +185,7 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
         | plan @ LogicalPlan::IndexScan { .. }
         | plan @ LogicalPlan::EmptySource
         | plan @ LogicalPlan::CreateIndex { .. }
+        | plan @ LogicalPlan::CreateEdgeIndex { .. }
         | plan @ LogicalPlan::DropIndex { .. } => plan,
     }
 }

@@ -3,6 +3,9 @@
 // Provides BTreeMap-backed in-memory property indexes that speed up
 // node lookups by (label_id, prop_key_id, value).
 
+/// Edge property index infrastructure.
+pub mod edge_index;
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 

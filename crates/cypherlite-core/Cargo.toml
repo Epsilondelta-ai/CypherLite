@@ -9,5 +9,13 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
 
+[features]
+default = ["temporal-core"]
+temporal-core = []
+temporal-edge = ["temporal-core"]
+subgraph = ["temporal-edge"]
+hypergraph = ["subgraph"]
+full-temporal = ["hypergraph"]
+
 [dev-dependencies]
 proptest = "1"

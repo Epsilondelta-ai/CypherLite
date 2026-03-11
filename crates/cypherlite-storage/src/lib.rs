@@ -23,6 +23,7 @@ use cypherlite_core::{
 
 use btree::edge_store::EdgeStore;
 use btree::node_store::NodeStore;
+use index::edge_index::EdgeIndexManager;
 use index::IndexManager;
 use page::buffer_pool::BufferPool;
 use page::page_manager::PageManager;
@@ -49,6 +50,7 @@ pub struct StorageEngine {
     edge_store: EdgeStore,
     catalog: catalog::Catalog,
     index_manager: IndexManager,
+    edge_index_manager: EdgeIndexManager,
     version_store: VersionStore,
     config: DatabaseConfig,
 }
@@ -101,6 +103,7 @@ impl StorageEngine {
             edge_store,
             catalog: catalog::Catalog::default(),
             index_manager: IndexManager::new(),
+            edge_index_manager: EdgeIndexManager::new(),
             version_store: VersionStore::new(),
             config,
         })
@@ -206,16 +209,59 @@ impl StorageEngine {
             start_node,
             end_node,
             rel_type_id,
-            properties,
+            properties.clone(),
             &mut self.node_store,
         )?;
         self.page_manager.header_mut().next_edge_id = self.edge_store.next_id();
+        // CC-T5: Auto-update edge indexes on CREATE
+        for (prop_key_id, value) in &properties {
+            if let Some(idx) = self
+                .edge_index_manager
+                .find_index_mut(rel_type_id, *prop_key_id)
+            {
+                idx.insert(value, id);
+            }
+        }
         Ok(id)
     }
 
     /// Get an edge by ID.
     pub fn get_edge(&self, edge_id: EdgeId) -> Option<&RelationshipRecord> {
         self.edge_store.get_edge(edge_id)
+    }
+
+    /// Update an edge's properties.
+    pub fn update_edge(
+        &mut self,
+        edge_id: EdgeId,
+        properties: Vec<(u32, PropertyValue)>,
+    ) -> Result<()> {
+        // CC-T5: Update edge indexes on SET
+        let old_edge = self.edge_store.get_edge(edge_id).cloned();
+        self.edge_store
+            .update_edge(edge_id, properties.clone())?;
+        if let Some(old) = old_edge {
+            let rel_type_id = old.rel_type_id;
+            // Remove old values from indexes
+            for (prop_key_id, old_value) in &old.properties {
+                if let Some(idx) = self
+                    .edge_index_manager
+                    .find_index_mut(rel_type_id, *prop_key_id)
+                {
+                    idx.remove(old_value, edge_id);
+                }
+            }
+            // Insert new values into indexes
+            for (prop_key_id, new_value) in &properties {
+                if let Some(idx) = self
+                    .edge_index_manager
+                    .find_index_mut(rel_type_id, *prop_key_id)
+                {
+                    idx.insert(new_value, edge_id);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Get all edges connected to a node.
@@ -226,7 +272,21 @@ impl StorageEngine {
 
     /// Delete an edge.
     pub fn delete_edge(&mut self, edge_id: EdgeId) -> Result<RelationshipRecord> {
-        self.edge_store.delete_edge(edge_id, &mut self.node_store)
+        // CC-T5: Capture data for index removal
+        let edge_data = self.edge_store.get_edge(edge_id).cloned();
+        let deleted = self.edge_store.delete_edge(edge_id, &mut self.node_store)?;
+        // Remove from edge indexes
+        if let Some(edge) = edge_data {
+            for (prop_key_id, value) in &edge.properties {
+                if let Some(idx) = self
+                    .edge_index_manager
+                    .find_index_mut(edge.rel_type_id, *prop_key_id)
+                {
+                    idx.remove(value, edge_id);
+                }
+            }
+        }
+        Ok(deleted)
     }
 
     // -- Scan operations --
@@ -430,6 +490,39 @@ impl StorageEngine {
     /// Returns a mutable reference to the index manager.
     pub fn index_manager_mut(&mut self) -> &mut IndexManager {
         &mut self.index_manager
+    }
+
+    /// Returns a reference to the edge index manager.
+    pub fn edge_index_manager(&self) -> &EdgeIndexManager {
+        &self.edge_index_manager
+    }
+
+    /// Returns a mutable reference to the edge index manager.
+    pub fn edge_index_manager_mut(&mut self) -> &mut EdgeIndexManager {
+        &mut self.edge_index_manager
+    }
+
+    /// Scan edges by (rel_type_id, prop_key_id, value) using index if available.
+    ///
+    /// If an index exists for (rel_type_id, prop_key_id), uses the fast index lookup.
+    /// Otherwise falls back to linear scan.
+    pub fn scan_edges_by_property(
+        &self,
+        rel_type_id: u32,
+        prop_key_id: u32,
+        value: &PropertyValue,
+    ) -> Vec<EdgeId> {
+        if let Some(idx) = self.edge_index_manager.find_index(rel_type_id, prop_key_id) {
+            idx.lookup(value)
+        } else {
+            // Slow path: linear scan
+            self.edge_store
+                .scan_by_type(rel_type_id)
+                .iter()
+                .filter(|e| e.properties.iter().any(|(k, v)| *k == prop_key_id && v == value))
+                .map(|e| e.edge_id)
+                .collect()
+        }
     }
 
     /// Returns a reference to the catalog.

@@ -283,17 +283,65 @@ pub fn execute(
 
             Ok(vec![])
         }
-        LogicalPlan::DropIndex { name } => {
-            // Remove from index manager
+        LogicalPlan::CreateEdgeIndex {
+            name,
+            rel_type,
+            property,
+        } => {
+            // Resolve relationship type and property names via catalog
+            let rel_type_id = engine.get_or_create_rel_type(rel_type);
+            let prop_key_id = engine.get_or_create_prop_key(property);
+
+            // Generate index name if not provided
+            let index_name = match name {
+                Some(n) => n.clone(),
+                None => format!("eidx_{}_{}", rel_type, property),
+            };
+
+            // Create the edge index
             engine
-                .index_manager_mut()
-                .drop_index(name)
+                .edge_index_manager_mut()
+                .create_index(index_name.clone(), rel_type_id, prop_key_id)
                 .map_err(|e| ExecutionError {
                     message: e.to_string(),
                 })?;
 
-            // Remove from catalog
-            engine.catalog_mut().remove_index_definition(name);
+            // Backfill: index existing edges that match the rel_type + property
+            let edges: Vec<(cypherlite_core::EdgeId, Vec<(u32, cypherlite_core::PropertyValue)>)> = engine
+                .scan_edges_by_type(rel_type_id)
+                .iter()
+                .map(|e| (e.edge_id, e.properties.clone()))
+                .collect();
+            for (eid, props) in &edges {
+                for (pk, v) in props {
+                    if *pk == prop_key_id {
+                        if let Some(idx) = engine
+                            .edge_index_manager_mut()
+                            .find_index_mut(rel_type_id, prop_key_id)
+                        {
+                            idx.insert(v, *eid);
+                        }
+                    }
+                }
+            }
+
+            Ok(vec![])
+        }
+        LogicalPlan::DropIndex { name } => {
+            // Try to remove from node index manager first
+            let removed_node = engine.index_manager_mut().drop_index(name);
+            if removed_node.is_ok() {
+                engine.catalog_mut().remove_index_definition(name);
+                return Ok(vec![]);
+            }
+
+            // If not found as node index, try edge index manager
+            engine
+                .edge_index_manager_mut()
+                .drop_index(name)
+                .map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
 
             Ok(vec![])
         }

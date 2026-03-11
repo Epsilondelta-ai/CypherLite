@@ -84,6 +84,20 @@ impl EdgeStore {
         self.tree.search_mut(&edge_id.0)
     }
 
+    /// Update an edge's properties.
+    pub fn update_edge(
+        &mut self,
+        edge_id: EdgeId,
+        properties: Vec<(u32, PropertyValue)>,
+    ) -> Result<()> {
+        let record = self
+            .tree
+            .search_mut(&edge_id.0)
+            .ok_or(CypherLiteError::EdgeNotFound(edge_id.0))?;
+        record.properties = properties;
+        Ok(())
+    }
+
     /// Get all edges connected to a node by walking the adjacency chain.
     /// REQ-STORE-007: Walk linked list from node's next_edge_id.
     pub fn get_edges_for_node(
@@ -367,6 +381,30 @@ mod tests {
         es.create_edge(n1, n2, 1, vec![], &mut ns).expect("e1");
         let edges = es.scan_by_type(999);
         assert!(edges.is_empty());
+    }
+
+    // BB-T5: update_edge replaces properties
+    #[test]
+    fn test_update_edge_properties() {
+        let (mut ns, mut es) = setup();
+        let n1 = ns.create_node(vec![], vec![]);
+        let n2 = ns.create_node(vec![], vec![]);
+
+        let props = vec![(1, PropertyValue::String("old".into()))];
+        let e1 = es.create_edge(n1, n2, 1, props, &mut ns).expect("e");
+
+        let new_props = vec![(1, PropertyValue::String("new".into()))];
+        es.update_edge(e1, new_props).expect("update");
+
+        let edge = es.get_edge(e1).expect("found");
+        assert_eq!(edge.properties[0].1, PropertyValue::String("new".into()));
+    }
+
+    #[test]
+    fn test_update_nonexistent_edge() {
+        let (_, mut es) = setup();
+        let result = es.update_edge(EdgeId(999), vec![]);
+        assert!(matches!(result, Err(CypherLiteError::EdgeNotFound(999))));
     }
 
     #[test]
