@@ -120,6 +120,16 @@ pub enum Token {
     #[regex("(?i)drop", priority = 10)]
     Drop,
 
+    // -- P4 Keywords (Temporal) ---------------------------------------------
+    #[regex("(?i)at", priority = 10)]
+    At,
+    #[regex("(?i)time", priority = 10)]
+    Time,
+    #[regex("(?i)between", priority = 10)]
+    Between,
+    #[regex("(?i)history", priority = 10)]
+    History,
+
     // -- Literals ----------------------------------------------------------
     /// Floating-point literal (must come before integer to match greedily).
     #[regex(r"[0-9]+\.[0-9]+", lex_float, priority = 3)]
@@ -1006,6 +1016,98 @@ mod tests {
                 Token::Ident("idx_name".to_string()),
             ]
         );
+    }
+
+    // ---- X-T1: AT, TIME, BETWEEN, HISTORY keyword tokens ----------------
+
+    #[test]
+    fn lex_xt1_at_keyword() {
+        let toks = tokens("AT");
+        assert_eq!(toks, vec![Token::At]);
+    }
+
+    #[test]
+    fn lex_xt1_at_case_insensitive() {
+        assert_eq!(tokens("at"), vec![Token::At]);
+        assert_eq!(tokens("At"), vec![Token::At]);
+    }
+
+    #[test]
+    fn lex_xt1_time_keyword() {
+        let toks = tokens("TIME");
+        assert_eq!(toks, vec![Token::Time]);
+    }
+
+    #[test]
+    fn lex_xt1_time_case_insensitive() {
+        assert_eq!(tokens("time"), vec![Token::Time]);
+        assert_eq!(tokens("Time"), vec![Token::Time]);
+    }
+
+    #[test]
+    fn lex_xt1_between_keyword() {
+        let toks = tokens("BETWEEN");
+        assert_eq!(toks, vec![Token::Between]);
+    }
+
+    #[test]
+    fn lex_xt1_between_case_insensitive() {
+        assert_eq!(tokens("between"), vec![Token::Between]);
+        assert_eq!(tokens("Between"), vec![Token::Between]);
+    }
+
+    #[test]
+    fn lex_xt1_history_keyword() {
+        let toks = tokens("HISTORY");
+        assert_eq!(toks, vec![Token::History]);
+    }
+
+    #[test]
+    fn lex_xt1_history_case_insensitive() {
+        assert_eq!(tokens("history"), vec![Token::History]);
+        assert_eq!(tokens("History"), vec![Token::History]);
+    }
+
+    #[test]
+    fn lex_xt1_at_time_in_context() {
+        let toks = tokens("MATCH (n:Person) AT TIME 1000 RETURN n");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Match,
+                Token::LParen,
+                Token::Ident("n".to_string()),
+                Token::Colon,
+                Token::Ident("Person".to_string()),
+                Token::RParen,
+                Token::At,
+                Token::Time,
+                Token::Integer(1000),
+                Token::Return,
+                Token::Ident("n".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_xt1_between_time_in_context() {
+        let toks = tokens("BETWEEN TIME 100 AND 200");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Between,
+                Token::Time,
+                Token::Integer(100),
+                Token::And,
+                Token::Integer(200),
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_xt1_at_not_prefix_of_identifier() {
+        let toks = tokens("atlas");
+        assert_eq!(toks, vec![Token::Ident("atlas".to_string())]);
     }
 
     #[test]

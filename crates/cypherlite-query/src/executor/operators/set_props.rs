@@ -1,6 +1,9 @@
 // SetPropsOp: property mutation for SET/REMOVE clauses
 
 use crate::executor::eval::eval;
+use crate::executor::operators::create::{
+    is_system_property, SYSTEM_PROP_UPDATED_AT,
+};
 use crate::executor::{ExecutionError, Params, Record, Value};
 use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, PropertyValue};
@@ -28,6 +31,38 @@ pub fn execute_set(
     Ok(source_records)
 }
 
+/// Get the current query timestamp from params.
+fn get_query_timestamp(params: &Params) -> i64 {
+    match params.get("__query_start_ms__") {
+        Some(Value::Int64(ms)) => *ms,
+        _ => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    }
+}
+
+/// Update _updated_at on a node's property list.
+fn inject_updated_at(
+    props: &mut Vec<(u32, PropertyValue)>,
+    engine: &mut StorageEngine,
+    params: &Params,
+) {
+    let now = get_query_timestamp(params);
+    let updated_key = engine.get_or_create_prop_key(SYSTEM_PROP_UPDATED_AT);
+    let mut found = false;
+    for (k, v) in props.iter_mut() {
+        if *k == updated_key {
+            *v = PropertyValue::DateTime(now);
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        props.push((updated_key, PropertyValue::DateTime(now)));
+    }
+}
+
 /// Apply a single SET property operation.
 fn apply_set_property(
     target: &Expression,
@@ -39,11 +74,20 @@ fn apply_set_property(
     // target should be Property(Variable(name), prop_name)
     match target {
         Expression::Property(var_expr, prop_name) => {
+            // V-003: Block user writes to system properties
+            if is_system_property(prop_name) {
+                return Err(ExecutionError {
+                    message: format!("System property is read-only: {}", prop_name),
+                });
+            }
+
             let entity = eval(var_expr, record, &*engine, params)?;
             let new_value = eval(value_expr, record, &*engine, params)?;
             let pv = PropertyValue::try_from(new_value).map_err(|e| ExecutionError {
                 message: format!("invalid property value: {}", e),
             })?;
+
+            let temporal_enabled = engine.config().temporal_tracking_enabled;
 
             match entity {
                 Value::Node(nid) => {
@@ -65,6 +109,11 @@ fn apply_set_property(
                     }
                     if !found {
                         props.push((prop_key_id, pv));
+                    }
+
+                    // V-002: Update _updated_at timestamp
+                    if temporal_enabled {
+                        inject_updated_at(&mut props, engine, params);
                     }
 
                     engine.update_node(nid, props).map_err(|e| ExecutionError {
@@ -123,7 +172,15 @@ fn apply_remove_property(
 ) -> Result<(), ExecutionError> {
     match prop_expr {
         Expression::Property(var_expr, prop_name) => {
+            // V-003: Block removal of system properties
+            if is_system_property(prop_name) {
+                return Err(ExecutionError {
+                    message: format!("System property is read-only: {}", prop_name),
+                });
+            }
+
             let entity = eval(var_expr, record, &*engine, params)?;
+            let temporal_enabled = engine.config().temporal_tracking_enabled;
 
             match entity {
                 Value::Node(nid) => {
@@ -135,12 +192,17 @@ fn apply_remove_property(
                     let node = engine.get_node(nid).ok_or_else(|| ExecutionError {
                         message: format!("node {} not found", nid.0),
                     })?;
-                    let props: Vec<_> = node
+                    let mut props: Vec<_> = node
                         .properties
                         .iter()
                         .filter(|(k, _)| *k != prop_key_id)
                         .cloned()
                         .collect();
+
+                    // V-002: Update _updated_at on REMOVE
+                    if temporal_enabled {
+                        inject_updated_at(&mut props, engine, params);
+                    }
 
                     engine.update_node(nid, props).map_err(|e| ExecutionError {
                         message: format!("failed to update node: {}", e),
@@ -337,7 +399,10 @@ mod tests {
         assert!(result.is_ok());
 
         let node = engine.get_node(nid).expect("node exists");
-        assert_eq!(node.properties.len(), 1);
-        assert_eq!(node.properties[0].0, name_key);
+        // After REMOVE, we have: name + _updated_at (temporal tracking is on by default)
+        assert_eq!(node.properties.len(), 2);
+        assert!(node.properties.iter().any(|(k, _)| *k == name_key));
+        let updated_key = engine.catalog().prop_key_id("_updated_at").expect("key");
+        assert!(node.properties.iter().any(|(k, _)| *k == updated_key));
     }
 }

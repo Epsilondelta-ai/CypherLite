@@ -73,6 +73,18 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn analyze_match(&mut self, m: &MatchClause) -> Result<(), SemanticError> {
         self.analyze_pattern_define_with_nullable(&m.pattern, m.optional)?;
+        // Validate temporal predicate expressions if present
+        if let Some(ref tp) = m.temporal_predicate {
+            match tp {
+                crate::parser::ast::TemporalPredicate::AsOf(expr) => {
+                    self.analyze_expression_refs(expr)?;
+                }
+                crate::parser::ast::TemporalPredicate::Between(start, end) => {
+                    self.analyze_expression_refs(start)?;
+                    self.analyze_expression_refs(end)?;
+                }
+            }
+        }
         if let Some(ref where_expr) = m.where_clause {
             self.analyze_expression_refs(where_expr)?;
         }
@@ -496,7 +508,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Return(return_clause(vec![return_item(prop_expr("n", "name"))])),
             ],
@@ -527,7 +539,7 @@ mod tests {
                         rel(Some("r"), &["KNOWS"], RelDirection::Outgoing, None),
                         node(Some("b"), &[], None),
                     ]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Return(return_clause(vec![return_item(prop_expr("b", "name"))])),
             ],
@@ -556,7 +568,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Return(return_clause(vec![return_item(prop_expr("m", "name"))])),
             ],
@@ -637,7 +649,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &[], None)]]),
-                    where_clause: Some(where_expr),
+                    temporal_predicate: None, where_clause: Some(where_expr),
                 }),
                 Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
             ],
@@ -663,7 +675,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &[], None)]]),
-                    where_clause: Some(where_expr),
+                    temporal_predicate: None, where_clause: Some(where_expr),
                 }),
                 Clause::Return(return_clause(vec![return_item(var_expr("n"))])),
             ],
@@ -689,7 +701,7 @@ mod tests {
             clauses: vec![Clause::Match(MatchClause {
                 optional: false,
                 pattern: pattern(vec![vec![node(None, &["Person"], None)]]),
-                where_clause: None,
+                temporal_predicate: None, where_clause: None,
             })],
         };
 
@@ -708,12 +720,12 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &["Company"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
             ],
         };
@@ -732,7 +744,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &[], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Match(MatchClause {
                     optional: false,
@@ -742,7 +754,7 @@ mod tests {
                         RelDirection::Outgoing,
                         None,
                     )]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
             ],
         };
@@ -762,7 +774,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &[], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Set(SetClause {
                     items: vec![SetItem::Property {
@@ -786,7 +798,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &[], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Delete(DeleteClause {
                     detach: true,
@@ -890,7 +902,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &[], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Return(return_clause(vec![return_item(Expression::FunctionCall {
                     name: "count".to_string(),
@@ -928,7 +940,7 @@ mod tests {
                         rel(Some("r"), &["KNOWS"], RelDirection::Outgoing, None),
                         node(Some("m"), &["Person"], None),
                     ]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::With(with_clause(
                     vec![return_item(var_expr("n"))],
@@ -957,7 +969,7 @@ mod tests {
                         rel(Some("r"), &["KNOWS"], RelDirection::Outgoing, None),
                         node(Some("m"), &["Person"], None),
                     ]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::With(with_clause(
                     vec![return_item(var_expr("n"))],
@@ -983,7 +995,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::With(with_clause(
                     vec![ReturnItem {
@@ -1011,7 +1023,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::With(with_clause(
                     vec![ReturnItem {
@@ -1040,7 +1052,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::With(with_clause(
                     vec![return_item(var_expr("n"))],
@@ -1070,7 +1082,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("a"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Match(MatchClause {
                     optional: true,
@@ -1079,7 +1091,7 @@ mod tests {
                         rel(Some("r"), &["KNOWS"], RelDirection::Outgoing, None),
                         node(Some("b"), &[], None),
                     ]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Return(return_clause(vec![
                     return_item(prop_expr("a", "name")),
@@ -1110,7 +1122,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("a"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Match(MatchClause {
                     optional: true,
@@ -1119,7 +1131,7 @@ mod tests {
                         rel(None, &["WORKS_AT"], RelDirection::Outgoing, None),
                         node(Some("c"), &["Company"], None),
                     ]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Return(return_clause(vec![
                     return_item(var_expr("a")),
@@ -1155,7 +1167,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("a"), &["Person"], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Match(MatchClause {
                     optional: true,
@@ -1164,7 +1176,7 @@ mod tests {
                         rel(None, &["KNOWS"], RelDirection::Outgoing, None),
                         node(Some("b"), &[], None),
                     ]]),
-                    where_clause: Some(where_expr),
+                    temporal_predicate: None, where_clause: Some(where_expr),
                 }),
                 Clause::Return(return_clause(vec![
                     return_item(var_expr("a")),
@@ -1215,7 +1227,7 @@ mod tests {
                 Clause::Match(MatchClause {
                     optional: false,
                     pattern: pattern(vec![vec![node(Some("n"), &[], None)]]),
-                    where_clause: None,
+                    temporal_predicate: None, where_clause: None,
                 }),
                 Clause::Unwind(UnwindClause {
                     expr: prop_expr("n", "hobbies"),
@@ -1273,7 +1285,7 @@ mod tests {
                     rel(None, &["KNOWS"], RelDirection::Outgoing, None),
                     node(Some("b"), &[], None),
                 ]]),
-                where_clause: None,
+                temporal_predicate: None, where_clause: None,
             })],
         };
         // Modify the relationship to have variable-length
@@ -1299,7 +1311,7 @@ mod tests {
                     rel(None, &[], RelDirection::Outgoing, None),
                     node(Some("b"), &[], None),
                 ]]),
-                where_clause: None,
+                temporal_predicate: None, where_clause: None,
             })],
         };
         if let Clause::Match(ref mut mc) = query.clauses[0] {
@@ -1328,7 +1340,7 @@ mod tests {
                     rel(None, &[], RelDirection::Outgoing, None),
                     node(Some("b"), &[], None),
                 ]]),
-                where_clause: None,
+                temporal_predicate: None, where_clause: None,
             })],
         };
         if let Clause::Match(ref mut mc) = query.clauses[0] {
@@ -1357,7 +1369,7 @@ mod tests {
                     rel(None, &[], RelDirection::Outgoing, None),
                     node(Some("b"), &[], None),
                 ]]),
-                where_clause: None,
+                temporal_predicate: None, where_clause: None,
             })],
         };
         if let Clause::Match(ref mut mc) = query.clauses[0] {
@@ -1381,7 +1393,7 @@ mod tests {
                     rel(None, &[], RelDirection::Outgoing, None),
                     node(Some("b"), &[], None),
                 ]]),
-                where_clause: None,
+                temporal_predicate: None, where_clause: None,
             })],
         };
         if let Clause::Match(ref mut mc) = query.clauses[0] {
@@ -1405,7 +1417,7 @@ mod tests {
                     rel(None, &[], RelDirection::Outgoing, None),
                     node(Some("b"), &[], None),
                 ]]),
-                where_clause: None,
+                temporal_predicate: None, where_clause: None,
             })],
         };
         if let Clause::Match(ref mut mc) = query.clauses[0] {

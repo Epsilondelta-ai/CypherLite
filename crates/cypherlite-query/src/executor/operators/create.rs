@@ -6,6 +6,54 @@ use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, PropertyValue};
 use cypherlite_storage::StorageEngine;
 
+/// System property names that are automatically managed.
+pub const SYSTEM_PROP_CREATED_AT: &str = "_created_at";
+/// System property name for last-updated timestamp.
+pub const SYSTEM_PROP_UPDATED_AT: &str = "_updated_at";
+
+/// Check if a property name is a system-managed property.
+pub fn is_system_property(name: &str) -> bool {
+    name == SYSTEM_PROP_CREATED_AT || name == SYSTEM_PROP_UPDATED_AT
+}
+
+/// Get the current query timestamp from params.
+fn get_query_timestamp(params: &Params) -> i64 {
+    match params.get("__query_start_ms__") {
+        Some(Value::Int64(ms)) => *ms,
+        _ => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    }
+}
+
+/// Inject _created_at and _updated_at into property list.
+fn inject_create_timestamps(
+    properties: &mut Vec<(u32, PropertyValue)>,
+    engine: &mut StorageEngine,
+    params: &Params,
+) {
+    let now = get_query_timestamp(params);
+    let created_key = engine.get_or_create_prop_key(SYSTEM_PROP_CREATED_AT);
+    let updated_key = engine.get_or_create_prop_key(SYSTEM_PROP_UPDATED_AT);
+    properties.push((created_key, PropertyValue::DateTime(now)));
+    properties.push((updated_key, PropertyValue::DateTime(now)));
+}
+
+/// Validate that no system properties are being set by the user in a map literal.
+pub fn validate_no_system_properties(props: &Option<MapLiteral>) -> Result<(), ExecutionError> {
+    if let Some(map) = props {
+        for (key, _) in map {
+            if is_system_property(key) {
+                return Err(ExecutionError {
+                    message: format!("System property is read-only: {}", key),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Create nodes and edges from a pattern.
 /// Walks each pattern chain, creating nodes and edges as specified.
 pub fn execute_create(
@@ -38,6 +86,7 @@ fn create_chain(
 ) -> Result<(), ExecutionError> {
     let mut elements = chain.elements.iter();
     let mut prev_var: Option<String> = None;
+    let temporal_enabled = engine.config().temporal_tracking_enabled;
 
     while let Some(element) = elements.next() {
         match element {
@@ -50,6 +99,9 @@ fn create_chain(
                     continue;
                 }
 
+                // Validate no system properties in user-specified properties
+                validate_no_system_properties(&np.properties)?;
+
                 // Resolve labels
                 let labels: Vec<u32> = np
                     .labels
@@ -58,7 +110,12 @@ fn create_chain(
                     .collect();
 
                 // Resolve properties
-                let properties = resolve_properties(&np.properties, record, engine, params)?;
+                let mut properties = resolve_properties(&np.properties, record, engine, params)?;
+
+                // Inject timestamps if temporal tracking is enabled
+                if temporal_enabled {
+                    inject_create_timestamps(&mut properties, engine, params);
+                }
 
                 let node_id = engine.create_node(labels, properties);
 
@@ -101,13 +158,21 @@ fn create_chain(
                         }
                     }
                 } else {
+                    // Validate no system properties in target node
+                    validate_no_system_properties(&target_np.properties)?;
+
                     let labels: Vec<u32> = target_np
                         .labels
                         .iter()
                         .map(|l| engine.get_or_create_label(l))
                         .collect();
-                    let properties =
+                    let mut properties =
                         resolve_properties(&target_np.properties, record, engine, params)?;
+
+                    if temporal_enabled {
+                        inject_create_timestamps(&mut properties, engine, params);
+                    }
+
                     let nid = engine.create_node(labels, properties);
                     if !target_var_name.is_empty() {
                         record.insert(target_var_name.to_string(), Value::Node(nid));
@@ -141,8 +206,15 @@ fn create_chain(
                         message: "CREATE relationship requires a type".to_string(),
                     })?;
 
+                // Validate no system properties in relationship
+                validate_no_system_properties(&rp.properties)?;
+
                 // Resolve relationship properties
-                let rel_props = resolve_properties(&rp.properties, record, engine, params)?;
+                let mut rel_props = resolve_properties(&rp.properties, record, engine, params)?;
+
+                if temporal_enabled {
+                    inject_create_timestamps(&mut rel_props, engine, params);
+                }
 
                 // Create edge based on direction
                 let (start, end) = match rp.direction {

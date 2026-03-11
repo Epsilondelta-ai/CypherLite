@@ -22,10 +22,20 @@ pub enum Clause {
     DropIndex(DropIndexClause),
 }
 
+/// Temporal predicate for time-travel queries.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TemporalPredicate {
+    /// AT TIME <expr> -- find the version current at a specific point in time.
+    AsOf(Expression),
+    /// BETWEEN TIME <expr> AND <expr> -- find all versions within a time range.
+    Between(Expression, Expression),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchClause {
     pub optional: bool,
     pub pattern: Pattern,
+    pub temporal_predicate: Option<TemporalPredicate>,
     pub where_clause: Option<Expression>,
 }
 

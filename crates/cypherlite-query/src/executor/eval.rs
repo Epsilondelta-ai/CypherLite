@@ -18,6 +18,13 @@ pub fn eval(
         Expression::Literal(lit) => Ok(eval_literal(lit)),
         Expression::Variable(name) => Ok(record.get(name).cloned().unwrap_or(Value::Null)),
         Expression::Property(inner_expr, prop_name) => {
+            // Check for temporal property override (from AT TIME / BETWEEN TIME queries)
+            if let Expression::Variable(var_name) = inner_expr.as_ref() {
+                let temporal_key = format!("__temporal_props__{}", var_name);
+                if let Some(Value::List(props_list)) = record.get(&temporal_key) {
+                    return eval_temporal_property_access(props_list, prop_name, engine);
+                }
+            }
             let inner = eval(inner_expr, record, engine, params)?;
             eval_property_access(&inner, prop_name, engine)
         }
@@ -128,6 +135,44 @@ pub fn eval(
                         }),
                     }
                 }
+                "datetime" => {
+                    if args.len() != 1 {
+                        return Err(ExecutionError {
+                            message: "datetime() requires exactly one string argument".to_string(),
+                        });
+                    }
+                    let val = eval(&args[0], record, engine, params)?;
+                    match val {
+                        Value::String(s) => {
+                            let millis = parse_iso8601_to_millis(&s).map_err(|e| ExecutionError {
+                                message: e,
+                            })?;
+                            Ok(Value::DateTime(millis))
+                        }
+                        _ => Err(ExecutionError {
+                            message: "datetime() requires a string argument".to_string(),
+                        }),
+                    }
+                }
+                "now" => {
+                    if !args.is_empty() {
+                        return Err(ExecutionError {
+                            message: "now() takes no arguments".to_string(),
+                        });
+                    }
+                    // Read query start time from params
+                    match params.get("__query_start_ms__") {
+                        Some(Value::Int64(ms)) => Ok(Value::DateTime(*ms)),
+                        _ => {
+                            // Fallback: use current system time
+                            let ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            Ok(Value::DateTime(ms))
+                        }
+                    }
+                }
                 _ => Err(ExecutionError {
                     message: format!("unknown function: {}", name),
                 }),
@@ -144,6 +189,34 @@ fn eval_literal(lit: &Literal) -> Value {
         Literal::String(s) => Value::String(s.clone()),
         Literal::Bool(b) => Value::Bool(*b),
         Literal::Null => Value::Null,
+    }
+}
+
+/// Access a property on a Value. For Node/Edge, look up from engine.
+/// Access a property from temporal version properties.
+/// The props_list is a List of [prop_key_id, value] pairs.
+fn eval_temporal_property_access(
+    props_list: &[Value],
+    prop_name: &str,
+    engine: &StorageEngine,
+) -> Result<Value, ExecutionError> {
+    let prop_key_id = engine.catalog().prop_key_id(prop_name);
+    match prop_key_id {
+        Some(kid) => {
+            for item in props_list {
+                if let Value::List(pair) = item {
+                    if pair.len() == 2 {
+                        if let Value::Int64(k) = &pair[0] {
+                            if *k as u32 == kid {
+                                return Ok(pair[1].clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Value::Null)
+        }
+        None => Ok(Value::Null),
     }
 }
 
@@ -251,6 +324,8 @@ pub fn eval_cmp(left: &Value, right: &Value, op: BinaryOp) -> Result<Value, Exec
                 message: "cannot order edge values".to_string(),
             }),
         },
+        // DateTime comparison: follows numeric ordering of underlying i64
+        (Value::DateTime(a), Value::DateTime(b)) => Ok(Value::Bool(cmp_ord(a, b, op))),
         _ => Err(ExecutionError {
             message: "type mismatch in comparison".to_string(),
         }),
@@ -425,6 +500,113 @@ fn eval_unary_op(op: UnaryOp, val: &Value) -> Result<Value, ExecutionError> {
     }
 }
 
+/// Parse an ISO 8601 string to milliseconds since Unix epoch.
+/// Supports: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, YYYY-MM-DDTHH:MM:SSZ, YYYY-MM-DDTHH:MM:SS+HH:MM
+fn parse_iso8601_to_millis(s: &str) -> Result<i64, String> {
+    let s = s.trim();
+    if s.len() < 10 {
+        return Err(format!("invalid datetime: '{}'", s));
+    }
+
+    // Parse date part: YYYY-MM-DD
+    let year: i64 = s[0..4]
+        .parse()
+        .map_err(|_| format!("invalid year in '{}'", s))?;
+    if s.as_bytes()[4] != b'-' {
+        return Err(format!("invalid datetime: '{}'", s));
+    }
+    let month: u32 = s[5..7]
+        .parse()
+        .map_err(|_| format!("invalid month in '{}'", s))?;
+    if s.as_bytes()[7] != b'-' {
+        return Err(format!("invalid datetime: '{}'", s));
+    }
+    let day: u32 = s[8..10]
+        .parse()
+        .map_err(|_| format!("invalid day in '{}'", s))?;
+
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(format!("invalid date values in '{}'", s));
+    }
+
+    let mut hour: u32 = 0;
+    let mut minute: u32 = 0;
+    let mut second: u32 = 0;
+    let mut tz_offset_minutes: i64 = 0;
+
+    let rest = &s[10..];
+    if !rest.is_empty() {
+        // Expect 'T' separator
+        if rest.as_bytes()[0] != b'T' {
+            return Err(format!("expected 'T' separator in '{}'", s));
+        }
+        let time_str = &rest[1..];
+        if time_str.len() < 8 {
+            return Err(format!("incomplete time in '{}'", s));
+        }
+        hour = time_str[0..2]
+            .parse()
+            .map_err(|_| format!("invalid hour in '{}'", s))?;
+        if time_str.as_bytes()[2] != b':' {
+            return Err(format!("invalid time format in '{}'", s));
+        }
+        minute = time_str[3..5]
+            .parse()
+            .map_err(|_| format!("invalid minute in '{}'", s))?;
+        if time_str.as_bytes()[5] != b':' {
+            return Err(format!("invalid time format in '{}'", s));
+        }
+        second = time_str[6..8]
+            .parse()
+            .map_err(|_| format!("invalid second in '{}'", s))?;
+
+        // Parse timezone suffix
+        let tz_part = &time_str[8..];
+        if !tz_part.is_empty() {
+            if tz_part == "Z" {
+                // UTC
+            } else if tz_part.len() == 6
+                && (tz_part.as_bytes()[0] == b'+' || tz_part.as_bytes()[0] == b'-')
+            {
+                let sign: i64 = if tz_part.as_bytes()[0] == b'+' {
+                    1
+                } else {
+                    -1
+                };
+                let tz_hour: i64 = tz_part[1..3]
+                    .parse()
+                    .map_err(|_| format!("invalid timezone hour in '{}'", s))?;
+                let tz_min: i64 = tz_part[4..6]
+                    .parse()
+                    .map_err(|_| format!("invalid timezone minute in '{}'", s))?;
+                tz_offset_minutes = sign * (tz_hour * 60 + tz_min);
+            } else {
+                return Err(format!("invalid timezone in '{}'", s));
+            }
+        }
+    }
+
+    // Convert to days since epoch using Howard Hinnant's algorithm
+    let days = days_from_civil(year, month, day);
+    let total_seconds =
+        days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64
+        - tz_offset_minutes * 60;
+
+    Ok(total_seconds * 1000)
+}
+
+/// Convert (year, month, day) to days since 1970-01-01.
+/// Based on Howard Hinnant's `days_from_civil` algorithm.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let m = if month <= 2 { month + 9 } else { month - 3 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u32; // year of era [0, 399]
+    let doy = (153 * m + 2) / 5 + day - 1; // day of year [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // day of era [0, 146096]
+    era * 146097 + doe as i64 - 719468
+}
+
 /// Utility: compare two Values for sorting. Returns Ordering.
 /// Used by SortOp.
 pub fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
@@ -443,6 +625,7 @@ pub fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         }
         (Value::String(x), Value::String(y)) => x.cmp(y),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::DateTime(x), Value::DateTime(y)) => x.cmp(y),
         _ => Ordering::Equal,
     }
 }
@@ -862,5 +1045,345 @@ mod tests {
             compare_values(&Value::String("a".into()), &Value::String("b".into())),
             Ordering::Less
         );
+    }
+
+    // ======================================================================
+    // U-002: datetime() built-in function
+    // ======================================================================
+
+    #[test]
+    fn test_eval_datetime_date_only() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        // datetime('2024-01-15') -> 2024-01-15T00:00:00.000Z
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "datetime".to_string(),
+                distinct: false,
+                args: vec![Expression::Literal(Literal::String(
+                    "2024-01-15".to_string(),
+                ))],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000)));
+    }
+
+    #[test]
+    fn test_eval_datetime_with_time() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        // datetime('2024-01-15T10:30:00')
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "datetime".to_string(),
+                distinct: false,
+                args: vec![Expression::Literal(Literal::String(
+                    "2024-01-15T10:30:00".to_string(),
+                ))],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
+    }
+
+    #[test]
+    fn test_eval_datetime_with_z_suffix() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "datetime".to_string(),
+                distinct: false,
+                args: vec![Expression::Literal(Literal::String(
+                    "2024-01-15T10:30:00Z".to_string(),
+                ))],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
+    }
+
+    #[test]
+    fn test_eval_datetime_with_timezone_offset() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        // datetime('2024-01-15T10:30:00+09:00') -> UTC 01:30:00
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "datetime".to_string(),
+                distinct: false,
+                args: vec![Expression::Literal(Literal::String(
+                    "2024-01-15T10:30:00+09:00".to_string(),
+                ))],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 3_600_000 + 30 * 60_000)));
+    }
+
+    #[test]
+    fn test_eval_datetime_invalid_format() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "datetime".to_string(),
+                distinct: false,
+                args: vec![Expression::Literal(Literal::String(
+                    "not-a-date".to_string(),
+                ))],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_eval_datetime_wrong_arg_count() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "datetime".to_string(),
+                distinct: false,
+                args: vec![],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_eval_datetime_non_string_arg() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "datetime".to_string(),
+                distinct: false,
+                args: vec![Expression::Literal(Literal::Integer(42))],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert!(result.is_err());
+    }
+
+    // ======================================================================
+    // U-003: now() function
+    // ======================================================================
+
+    #[test]
+    fn test_eval_now_returns_datetime() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let mut params = Params::new();
+        params.insert(
+            "__query_start_ms__".to_string(),
+            Value::Int64(1_700_000_000_000),
+        );
+
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "now".to_string(),
+                distinct: false,
+                args: vec![],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert_eq!(result, Ok(Value::DateTime(1_700_000_000_000)));
+    }
+
+    #[test]
+    fn test_eval_now_no_args() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let mut params = Params::new();
+        params.insert(
+            "__query_start_ms__".to_string(),
+            Value::Int64(1_700_000_000_000),
+        );
+
+        // now() with args should fail
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "now".to_string(),
+                distinct: false,
+                args: vec![Expression::Literal(Literal::Integer(1))],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert!(result.is_err());
+    }
+
+    // ======================================================================
+    // U-004: DateTime comparison operators
+    // ======================================================================
+
+    #[test]
+    fn test_eval_cmp_datetime_eq() {
+        assert_eq!(
+            eval_cmp(
+                &Value::DateTime(1_700_000_000_000),
+                &Value::DateTime(1_700_000_000_000),
+                BinaryOp::Eq
+            ),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            eval_cmp(
+                &Value::DateTime(1_700_000_000_000),
+                &Value::DateTime(1_700_000_000_001),
+                BinaryOp::Eq
+            ),
+            Ok(Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn test_eval_cmp_datetime_lt_gt() {
+        assert_eq!(
+            eval_cmp(
+                &Value::DateTime(1_000),
+                &Value::DateTime(2_000),
+                BinaryOp::Lt
+            ),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            eval_cmp(
+                &Value::DateTime(2_000),
+                &Value::DateTime(1_000),
+                BinaryOp::Gt
+            ),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            eval_cmp(
+                &Value::DateTime(1_000),
+                &Value::DateTime(1_000),
+                BinaryOp::Lte
+            ),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            eval_cmp(
+                &Value::DateTime(1_000),
+                &Value::DateTime(1_000),
+                BinaryOp::Gte
+            ),
+            Ok(Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn test_eval_cmp_datetime_neq() {
+        assert_eq!(
+            eval_cmp(
+                &Value::DateTime(1_000),
+                &Value::DateTime(2_000),
+                BinaryOp::Neq
+            ),
+            Ok(Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn test_eval_cmp_datetime_vs_non_datetime_error() {
+        let result = eval_cmp(
+            &Value::DateTime(1_000),
+            &Value::Int64(1_000),
+            BinaryOp::Eq,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_eval_cmp_datetime_vs_null() {
+        assert_eq!(
+            eval_cmp(&Value::DateTime(1_000), &Value::Null, BinaryOp::Eq),
+            Ok(Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn test_compare_values_datetime_ordering() {
+        use std::cmp::Ordering;
+        assert_eq!(
+            compare_values(&Value::DateTime(1_000), &Value::DateTime(2_000)),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_values(&Value::DateTime(2_000), &Value::DateTime(1_000)),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_values(&Value::DateTime(1_000), &Value::DateTime(1_000)),
+            Ordering::Equal
+        );
+    }
+
+    // U-005: DateTime epoch
+    #[test]
+    fn test_eval_datetime_epoch() {
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let result = eval(
+            &Expression::FunctionCall {
+                name: "datetime".to_string(),
+                distinct: false,
+                args: vec![Expression::Literal(Literal::String(
+                    "1970-01-01".to_string(),
+                ))],
+            },
+            &record,
+            &engine,
+            &params,
+        );
+        assert_eq!(result, Ok(Value::DateTime(0)));
     }
 }

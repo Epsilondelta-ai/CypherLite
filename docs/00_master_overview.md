@@ -1247,30 +1247,97 @@ Each node/relationship:
 
 ---
 
-### Phase 4: Temporal Dimension (v0.4) — Weeks 15-18
+### Phase 4: Temporal Foundation (v0.4) — COMPLETED
 
-**Goals**: Time-aware queries and storage
+**SPEC**: SPEC-DB-004 | **Tests**: 978 | **Status**: Completed
 
 **Deliverables**:
-- [ ] Temporal data model design
-- [ ] Timestamp tracking in storage
-- [ ] Version storage
-- [ ] AT TIME syntax in Cypher
-- [ ] Temporal index (B-tree with time range)
-- [ ] Temporal query execution
+- [x] PropertyValue::DateTime(i64) with manual ISO 8601 parser
+- [x] datetime() / now() built-in functions
+- [x] Automatic _created_at / _updated_at timestamp injection on nodes
+- [x] VersionStore for pre-update node/edge snapshots
+- [x] AT TIME syntax for point-in-time node queries
+- [x] BETWEEN TIME syntax for temporal range node queries
+- [x] System property write protection (_prefixed properties)
 
 **Key Milestones**:
 - Store node versions with timestamps
 - Query: `MATCH (n) AT TIME datetime('2024-01-15') RETURN n`
-- Temporal relationship validity
-
-**Testing**: Temporal correctness tests
+- Version chain traversal API
 
 **Estimated Effort**: 4 weeks
 
 ---
 
-### Phase 5: FFI Bindings (v0.5) — Weeks 19-22
+### Phase 5: Temporal Edge Validity & Feature Flags (v0.5)
+
+**SPEC**: SPEC-DB-005 | **Priority**: P0 | **Depends on**: SPEC-DB-004
+
+**Goals**: Extend temporal model to edges, introduce Cargo feature flags
+
+**Deliverables**:
+- [ ] Cargo feature flags: temporal-core, temporal-edge, subgraph, hypergraph
+- [ ] _valid_from / _valid_to temporal validity periods on edges
+- [ ] Edge property indexes (BTreeMap on (rel_type_id, prop_key_id))
+- [ ] AT TIME / BETWEEN TIME extended to filter edges
+- [ ] Temporal path continuity in variable-length traversals
+- [ ] DatabaseHeader v3 with feature_flags bitmask
+
+**Key Milestones**:
+- AT TIME filters BOTH nodes AND edges
+- Temporal paths: all edges in path must be valid at query time
+- Feature flags enable modular compilation (SQLite model)
+
+**Estimated Effort**: 4 weeks
+
+---
+
+### Phase 6: Subgraph Entities & Temporal Snapshots (v0.6)
+
+**SPEC**: SPEC-DB-006 | **Priority**: P1 | **Depends on**: SPEC-DB-005
+
+**Goals**: First-class subgraph entities with temporal anchors
+
+**Deliverables**:
+- [ ] SubgraphRecord with temporal anchor and membership
+- [ ] SubgraphStore (BTree) + MembershipIndex (forward/reverse)
+- [ ] CREATE SNAPSHOT syntax for materializing time-sliced views
+- [ ] GraphEntity enum (Node | Subgraph) for edge endpoints
+- [ ] Standard edges between subgraph entities
+- [ ] Virtual :CONTAINS relationships for membership queries
+
+**Key Milestones**:
+- Create temporal snapshots: `CREATE SNAPSHOT (sg) AT TIME datetime(...) FROM MATCH ...`
+- Connect subgraphs: `CREATE (sg1)-[:MIGRATION]->(sg2)`
+- Query subgraph members and relationships
+
+**Estimated Effort**: 4 weeks
+
+---
+
+### Phase 7: Native Hyperedges (v0.7)
+
+**SPEC**: SPEC-DB-007 | **Priority**: P2 | **Depends on**: SPEC-DB-006
+
+**Goals**: Native hyperedge support with temporal references
+
+**Deliverables**:
+- [ ] HyperEdgeRecord connecting arbitrary node/subgraph sets
+- [ ] HyperEdgeStore (BTree) + reverse index
+- [ ] TemporalRef: reference "node X at time T"
+- [ ] HYPEREDGE syntax (CREATE, MATCH)
+- [ ] Lazy TemporalRef resolution via VersionStore
+
+**Key Milestones**:
+- Group events: `CREATE HYPEREDGE h:Migration FROM (n1, n2) TO (n3)`
+- Temporal refs: `FROM (person AT TIME datetime('2026-01'), city)`
+- First embedded graph DB with native temporal hyperedge support
+
+**Estimated Effort**: 4-6 weeks
+
+---
+
+### Phase 8: FFI Bindings (v0.8)
 
 **Goals**: Python, Node.js, C interfaces
 
@@ -1285,33 +1352,28 @@ Each node/relationship:
 - Create nodes/relationships from Python
 - Execute queries from Node.js
 - Call via C API
-- Error messages propagate cleanly
-
-**Testing**: Integration tests with each language
 
 **Estimated Effort**: 4 weeks (can parallelize by language)
 
 ---
 
-### Phase 6: Production Hardening (v0.6-v1.0) — Weeks 23+
+### Phase 9: Production Hardening (v0.9-v1.0)
 
-**Goals**: Stability, performance, documentation
+**Goals**: Stability, performance, documentation, plugin API
 
 **Deliverables**:
-- [ ] Comprehensive test suite (unit + integration)
+- [ ] Comprehensive test suite (unit + integration + fuzzing)
 - [ ] Benchmark suite (vs KùzuDB, DuckDB)
 - [ ] Error handling & recovery paths
 - [ ] Configuration options (page size, cache size, etc.)
 - [ ] Documentation (API docs, examples, performance tuning)
 - [ ] Release artifacts (pre-built binaries, npm/PyPI packages)
+- [ ] Public trait-based plugin API (promote internal traits to pub)
 
 **Key Milestones**:
 - 90%+ test coverage
-- Performance targets met (see Section 10)
-- Zero known critical bugs
-- Documentation complete
-
-**Testing**: Fuzzing, stress tests, long-running scenarios
+- Performance targets met
+- Plugin ecosystem enabled (extract temporal features to separate crates)
 
 **Estimated Effort**: Open-ended (ongoing)
 
@@ -1349,15 +1411,19 @@ Each node/relationship:
 ### Timeline Summary
 
 ```
-Phase 1: Storage (v0.1)    ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Week 4
-Phase 2: Query (v0.2)      ████████████░░░░░░░░░░░░░░░░░░░░░░░░  Week 10
-Phase 3: Indexing (v0.3)   ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Week 14
-Phase 4: Temporal (v0.4)   ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Week 18
-Phase 5: Bindings (v0.5)   ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Week 22
-Phase 6: Hardening (v1.0)  ██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  Week 28+
+Phase 1: Storage (v0.1)         ████                              Week 4   [DONE]
+Phase 2: Query (v0.2)           ████████████                      Week 10  [DONE]
+Phase 3: Indexing (v0.3)        ████                              Week 14  [DONE]
+Phase 4: Temporal (v0.4)        ████                              Week 18  [DONE]
+Phase 5: Temporal Edge (v0.5)   ████                              Week 22
+Phase 6: Subgraph (v0.6)       ████                              Week 26
+Phase 7: Hyperedge (v0.7)      ██████                            Week 32
+Phase 8: Bindings (v0.8)       ████                              Week 36
+Phase 9: Hardening (v1.0)      ██████████                        Week 42+
 
 Estimated MVP (Phase 1-3): 14 weeks
-Estimated v1.0 (All Phases): 28+ weeks
+Estimated Temporal Hypergraph (Phase 4-7): 16 weeks
+Estimated v1.0 (All Phases): 42+ weeks
 ```
 
 **Recommended Staffing**:

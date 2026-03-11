@@ -16,6 +16,9 @@ impl<'a> Parser<'a> {
         self.expect(&Token::Match)?;
         let pattern = self.parse_pattern()?;
 
+        // Parse optional temporal predicate: AT TIME <expr> | BETWEEN TIME <expr> AND <expr>
+        let temporal_predicate = self.parse_optional_temporal_predicate()?;
+
         let where_clause = if self.eat(&Token::Where) {
             Some(self.parse_expression()?)
         } else {
@@ -25,6 +28,7 @@ impl<'a> Parser<'a> {
         Ok(MatchClause {
             optional,
             pattern,
+            temporal_predicate,
             where_clause,
         })
     }
@@ -238,6 +242,33 @@ impl<'a> Parser<'a> {
         self.expect(&Token::Index)?;
         let name = self.expect_ident()?;
         Ok(DropIndexClause { name })
+    }
+
+    /// Parse an optional temporal predicate after MATCH pattern.
+    ///
+    /// Grammar:
+    ///   AT TIME <expression>
+    ///   BETWEEN TIME <expression> AND <expression>
+    fn parse_optional_temporal_predicate(
+        &mut self,
+    ) -> Result<Option<TemporalPredicate>, ParseError> {
+        if self.check(&Token::At) {
+            // AT TIME <expr>
+            self.advance(); // consume AT
+            self.expect(&Token::Time)?;
+            let expr = self.parse_expression()?;
+            Ok(Some(TemporalPredicate::AsOf(expr)))
+        } else if self.check(&Token::Between) {
+            // BETWEEN TIME <expr> AND <expr>
+            self.advance(); // consume BETWEEN
+            self.expect(&Token::Time)?;
+            let start = self.parse_expression_no_and()?;
+            self.expect(&Token::And)?;
+            let end = self.parse_expression_no_and()?;
+            Ok(Some(TemporalPredicate::Between(start, end)))
+        } else {
+            Ok(None)
+        }
     }
 
     // -- Helper functions --
@@ -776,6 +807,94 @@ mod tests {
         let mc = p.parse_merge_clause().expect("should parse");
 
         assert_eq!(mc.on_create.len(), 2);
+    }
+
+    // ======================================================================
+    // X-T3: AT TIME / BETWEEN TIME temporal predicate parsing
+    // ======================================================================
+
+    #[test]
+    fn match_at_time_literal() {
+        let (tokens, input) = make_parser("MATCH (n:Person) AT TIME 1000 WHERE n.age > 30");
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_match_clause(false).expect("should parse");
+
+        assert!(mc.temporal_predicate.is_some());
+        match mc.temporal_predicate.as_ref().expect("checked above") {
+            TemporalPredicate::AsOf(expr) => {
+                assert_eq!(*expr, Expression::Literal(Literal::Integer(1000)));
+            }
+            _ => panic!("expected AsOf temporal predicate"),
+        }
+        assert!(mc.where_clause.is_some());
+    }
+
+    #[test]
+    fn match_at_time_function_call() {
+        let (tokens, input) =
+            make_parser("MATCH (n:Person) AT TIME datetime('2024-01-15T00:00:00Z')");
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_match_clause(false).expect("should parse");
+
+        assert!(mc.temporal_predicate.is_some());
+        match mc.temporal_predicate.as_ref().expect("checked above") {
+            TemporalPredicate::AsOf(Expression::FunctionCall { name, .. }) => {
+                assert_eq!(name, "datetime");
+            }
+            _ => panic!("expected AsOf with datetime function call"),
+        }
+    }
+
+    #[test]
+    fn match_at_time_no_where() {
+        let (tokens, input) = make_parser("MATCH (n:Person) AT TIME 1000");
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_match_clause(false).expect("should parse");
+
+        assert!(mc.temporal_predicate.is_some());
+        assert!(mc.where_clause.is_none());
+    }
+
+    #[test]
+    fn match_no_temporal_predicate() {
+        let (tokens, input) = make_parser("MATCH (n:Person) WHERE n.age > 30");
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_match_clause(false).expect("should parse");
+
+        assert!(mc.temporal_predicate.is_none());
+        assert!(mc.where_clause.is_some());
+    }
+
+    // Y-T1: BETWEEN TIME ... AND ... parsing
+    #[test]
+    fn match_between_time() {
+        let (tokens, input) = make_parser("MATCH (n:Person) BETWEEN TIME 100 AND 200");
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_match_clause(false).expect("should parse");
+
+        assert!(mc.temporal_predicate.is_some());
+        match mc.temporal_predicate.as_ref().expect("checked above") {
+            TemporalPredicate::Between(start, end) => {
+                assert_eq!(*start, Expression::Literal(Literal::Integer(100)));
+                assert_eq!(*end, Expression::Literal(Literal::Integer(200)));
+            }
+            _ => panic!("expected Between temporal predicate"),
+        }
+    }
+
+    #[test]
+    fn match_between_time_with_where() {
+        let (tokens, input) =
+            make_parser("MATCH (n:Person) BETWEEN TIME 100 AND 200 WHERE n.age > 30");
+        let mut p = Parser::new(&tokens, &input);
+        let mc = p.parse_match_clause(false).expect("should parse");
+
+        assert!(mc.temporal_predicate.is_some());
+        assert!(matches!(
+            mc.temporal_predicate.as_ref().expect("checked"),
+            TemporalPredicate::Between(_, _)
+        ));
+        assert!(mc.where_clause.is_some());
     }
 
     // ======================================================================

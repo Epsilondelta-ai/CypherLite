@@ -74,6 +74,7 @@ impl Ord for PropertyValueKey {
                 }
                 Ordering::Equal
             }
+            (PropertyValue::DateTime(a), PropertyValue::DateTime(b)) => a.cmp(b),
             _ => Ordering::Equal, // same discriminant means same variant
         }
     }
@@ -473,5 +474,51 @@ mod tests {
     fn test_index_manager_find_index_not_found() {
         let mgr = IndexManager::new();
         assert!(mgr.find_index(99, 99).is_none());
+    }
+
+    // ======================================================================
+    // U-001/U-004: PropertyValueKey ordering includes DateTime
+    // ======================================================================
+
+    #[test]
+    fn test_property_value_key_ord_datetime() {
+        let a = PropertyValueKey(PropertyValue::DateTime(1_000));
+        let b = PropertyValueKey(PropertyValue::DateTime(2_000));
+        assert!(a < b);
+        assert_eq!(
+            PropertyValueKey(PropertyValue::DateTime(1_000)).cmp(
+                &PropertyValueKey(PropertyValue::DateTime(1_000))
+            ),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_property_value_key_datetime_after_array() {
+        // DateTime (tag 7) should come after Array (tag 6)
+        let array_k = PropertyValueKey(PropertyValue::Array(vec![]));
+        let dt_k = PropertyValueKey(PropertyValue::DateTime(0));
+        assert!(array_k < dt_k);
+    }
+
+    #[test]
+    fn test_property_index_datetime_range_query() {
+        let mut idx = PropertyIndex::new();
+        // Insert DateTime values
+        for i in 1..=5 {
+            idx.insert(
+                &PropertyValue::DateTime(i * 1_000_000),
+                NodeId(i as u64),
+            );
+        }
+
+        // Range [2M, 4M] should return nodes 2, 3, 4
+        let result = idx.range(
+            &PropertyValue::DateTime(2_000_000),
+            &PropertyValue::DateTime(4_000_000),
+        );
+        let mut ids: Vec<u64> = result.iter().map(|n| n.0).collect();
+        ids.sort();
+        assert_eq!(ids, vec![2, 3, 4]);
     }
 }

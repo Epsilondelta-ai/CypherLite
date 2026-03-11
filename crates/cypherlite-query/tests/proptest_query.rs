@@ -37,7 +37,8 @@ fn slow_config() -> ProptestConfig {
 const CYPHER_KEYWORDS: &[&str] = &[
     "match", "return", "create", "as", "distinct", "true", "false", "null", "and", "or", "not",
     "is", "count", "where", "set", "remove", "delete", "detach", "optional", "merge", "with",
-    "order", "by", "limit", "skip", "asc", "desc", "on",
+    "order", "by", "limit", "skip", "asc", "desc", "on", "unwind", "index", "drop",
+    "at", "time", "between", "history",
 ];
 
 /// Returns true if the given string is a Cypher keyword (case-insensitive).

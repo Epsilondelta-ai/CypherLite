@@ -59,6 +59,13 @@ impl<'a> Parser<'a> {
         self.parse_expr_bp(0)
     }
 
+    /// Parse an expression but stop before AND/OR (for BETWEEN TIME <expr> AND <expr>).
+    /// This prevents the AND keyword from being consumed as a binary AND operator.
+    pub fn parse_expression_no_and(&mut self) -> Result<Expression, ParseError> {
+        // AND has left bp = 3, so using min_bp = 4 will stop before AND
+        self.parse_expr_bp(4)
+    }
+
     /// Pratt parser core: parse expression with minimum binding power.
     fn parse_expr_bp(&mut self, min_bp: u8) -> Result<Expression, ParseError> {
         // Parse prefix / primary

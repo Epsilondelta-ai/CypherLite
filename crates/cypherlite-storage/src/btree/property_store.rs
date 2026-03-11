@@ -33,6 +33,7 @@ impl PropertyStore {
                 let encoded = bincode::serialize(arr).unwrap_or_default();
                 (6, encoded)
             }
+            PropertyValue::DateTime(ms) => (7, ms.to_le_bytes().to_vec()),
         }
     }
 
@@ -68,6 +69,13 @@ impl PropertyStore {
             6 => {
                 let arr: Vec<PropertyValue> = bincode::deserialize(data).ok()?;
                 Some(PropertyValue::Array(arr))
+            }
+            7 => {
+                if data.len() < 8 {
+                    return None;
+                }
+                let ms = i64::from_le_bytes(data[..8].try_into().ok()?);
+                Some(PropertyValue::DateTime(ms))
             }
             _ => None,
         }
@@ -108,6 +116,7 @@ impl PropertyStore {
             PropertyValue::Bytes(b) => b.len(),
             // Array is bincode-encoded; re-serialize only for this uncommon case.
             PropertyValue::Array(_) => Self::serialize_value(&value).1.len(),
+            PropertyValue::DateTime(_) => 8,
         };
         Some((key_id, value, 5 + value_len))
     }

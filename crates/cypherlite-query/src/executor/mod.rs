@@ -20,6 +20,8 @@ pub enum Value {
     List(Vec<Value>),
     Node(NodeId),
     Edge(EdgeId),
+    /// DateTime as milliseconds since Unix epoch.
+    DateTime(i64),
 }
 
 /// Convert from storage PropertyValue to executor Value.
@@ -33,6 +35,7 @@ impl From<PropertyValue> for Value {
             PropertyValue::String(s) => Value::String(s),
             PropertyValue::Bytes(b) => Value::Bytes(b),
             PropertyValue::Array(a) => Value::List(a.into_iter().map(Value::from).collect()),
+            PropertyValue::DateTime(ms) => Value::DateTime(ms),
         }
     }
 }
@@ -52,6 +55,7 @@ impl TryFrom<Value> for PropertyValue {
                 let items: Result<Vec<_>, _> = l.into_iter().map(PropertyValue::try_from).collect();
                 Ok(PropertyValue::Array(items?))
             }
+            Value::DateTime(ms) => Ok(PropertyValue::DateTime(ms)),
             Value::Node(_) | Value::Edge(_) => {
                 Err("cannot convert graph entity to property".into())
             }
@@ -348,6 +352,32 @@ pub fn execute(
             engine,
             params,
         ),
+        LogicalPlan::AsOfScan {
+            source,
+            timestamp_expr,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            operators::temporal_scan::execute_as_of_scan(
+                source_records,
+                timestamp_expr,
+                engine,
+                params,
+            )
+        }
+        LogicalPlan::TemporalRangeScan {
+            source,
+            start_expr,
+            end_expr,
+        } => {
+            let source_records = execute(source, engine, params)?;
+            operators::temporal_scan::execute_temporal_range_scan(
+                source_records,
+                start_expr,
+                end_expr,
+                engine,
+                params,
+            )
+        }
     }
 }
 
@@ -562,5 +592,25 @@ mod tests {
         let mut records = vec![r1, r2, r3];
         deduplicate_records(&mut records);
         assert_eq!(records.len(), 2);
+    }
+
+    // ======================================================================
+    // U-001: Value::DateTime variant
+    // ======================================================================
+
+    #[test]
+    fn test_value_from_property_value_datetime() {
+        assert_eq!(
+            Value::from(PropertyValue::DateTime(1_700_000_000_000)),
+            Value::DateTime(1_700_000_000_000)
+        );
+    }
+
+    #[test]
+    fn test_value_try_into_property_value_datetime() {
+        assert_eq!(
+            PropertyValue::try_from(Value::DateTime(1_700_000_000_000)),
+            Ok(PropertyValue::DateTime(1_700_000_000_000))
+        );
     }
 }
