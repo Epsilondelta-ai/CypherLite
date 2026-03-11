@@ -15,11 +15,16 @@ pub mod wal;
 pub mod index;
 /// Version storage for pre-update entity snapshots.
 pub mod version;
+/// Subgraph entity storage and membership index.
+#[cfg(feature = "subgraph")]
+pub mod subgraph;
 
 use cypherlite_core::{
     DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId, PropertyValue,
     RelationshipRecord, Result,
 };
+#[cfg(feature = "subgraph")]
+use cypherlite_core::{SubgraphId, SubgraphRecord};
 
 use btree::edge_store::EdgeStore;
 use btree::node_store::NodeStore;
@@ -34,6 +39,10 @@ use wal::checkpoint::Checkpoint;
 use wal::reader::WalReader;
 use wal::recovery::Recovery;
 use wal::writer::WalWriter;
+#[cfg(feature = "subgraph")]
+use subgraph::SubgraphStore;
+#[cfg(feature = "subgraph")]
+use subgraph::membership::MembershipIndex;
 
 /// The main storage engine for CypherLite.
 ///
@@ -52,6 +61,10 @@ pub struct StorageEngine {
     index_manager: IndexManager,
     edge_index_manager: EdgeIndexManager,
     version_store: VersionStore,
+    #[cfg(feature = "subgraph")]
+    subgraph_store: SubgraphStore,
+    #[cfg(feature = "subgraph")]
+    membership_index: MembershipIndex,
     config: DatabaseConfig,
 }
 
@@ -93,6 +106,16 @@ impl StorageEngine {
         // Update tx manager with WAL frame count
         tx_manager.update_current_frame(wal_writer.frame_count());
 
+        // GG-005: Initialize subgraph store from header
+        #[cfg(feature = "subgraph")]
+        let next_subgraph_id = page_manager.header().next_subgraph_id;
+        #[cfg(feature = "subgraph")]
+        let subgraph_store = if next_subgraph_id > 0 {
+            SubgraphStore::new(next_subgraph_id)
+        } else {
+            SubgraphStore::new(1)
+        };
+
         Ok(Self {
             page_manager,
             buffer_pool,
@@ -105,6 +128,10 @@ impl StorageEngine {
             index_manager: IndexManager::new(),
             edge_index_manager: EdgeIndexManager::new(),
             version_store: VersionStore::new(),
+            #[cfg(feature = "subgraph")]
+            subgraph_store,
+            #[cfg(feature = "subgraph")]
+            membership_index: MembershipIndex::new(),
             config,
         })
     }
@@ -543,6 +570,83 @@ impl StorageEngine {
     /// Returns a mutable reference to the version store.
     pub fn version_store_mut(&mut self) -> &mut VersionStore {
         &mut self.version_store
+    }
+
+    // -- Subgraph operations (cfg-gated) --
+
+    /// Create a new subgraph with the given properties and optional temporal anchor.
+    #[cfg(feature = "subgraph")]
+    pub fn create_subgraph(
+        &mut self,
+        properties: Vec<(u32, PropertyValue)>,
+        temporal_anchor: Option<i64>,
+    ) -> SubgraphId {
+        let id = self.subgraph_store.create(properties, temporal_anchor);
+        self.page_manager.header_mut().next_subgraph_id = self.subgraph_store.next_id();
+        id
+    }
+
+    /// Get a subgraph record by ID.
+    #[cfg(feature = "subgraph")]
+    pub fn get_subgraph(&self, id: SubgraphId) -> Option<&SubgraphRecord> {
+        self.subgraph_store.get(id)
+    }
+
+    /// Delete a subgraph by ID. Also removes all memberships.
+    #[cfg(feature = "subgraph")]
+    pub fn delete_subgraph(&mut self, id: SubgraphId) -> cypherlite_core::Result<SubgraphRecord> {
+        // Remove all memberships first
+        self.membership_index.remove_all(id);
+        self.subgraph_store
+            .delete(id)
+            .ok_or(cypherlite_core::CypherLiteError::SubgraphNotFound(id.0))
+    }
+
+    /// Add a node as a member of a subgraph.
+    #[cfg(feature = "subgraph")]
+    pub fn add_member(
+        &mut self,
+        subgraph_id: SubgraphId,
+        node_id: NodeId,
+    ) -> cypherlite_core::Result<()> {
+        if self.subgraph_store.get(subgraph_id).is_none() {
+            return Err(cypherlite_core::CypherLiteError::SubgraphNotFound(
+                subgraph_id.0,
+            ));
+        }
+        if self.node_store.get_node(node_id).is_none() {
+            return Err(cypherlite_core::CypherLiteError::NodeNotFound(node_id.0));
+        }
+        self.membership_index.add(subgraph_id, node_id);
+        Ok(())
+    }
+
+    /// Remove a node from a subgraph.
+    #[cfg(feature = "subgraph")]
+    pub fn remove_member(
+        &mut self,
+        subgraph_id: SubgraphId,
+        node_id: NodeId,
+    ) -> cypherlite_core::Result<()> {
+        if self.subgraph_store.get(subgraph_id).is_none() {
+            return Err(cypherlite_core::CypherLiteError::SubgraphNotFound(
+                subgraph_id.0,
+            ));
+        }
+        self.membership_index.remove(subgraph_id, node_id);
+        Ok(())
+    }
+
+    /// List all node members of a subgraph.
+    #[cfg(feature = "subgraph")]
+    pub fn list_members(&self, subgraph_id: SubgraphId) -> Vec<NodeId> {
+        self.membership_index.members(subgraph_id)
+    }
+
+    /// Get all subgraphs that a node belongs to.
+    #[cfg(feature = "subgraph")]
+    pub fn get_subgraph_memberships(&self, node_id: NodeId) -> Vec<SubgraphId> {
+        self.membership_index.memberships(node_id)
     }
 }
 
@@ -1231,5 +1335,170 @@ mod tests {
         let prop_id = engine.get_or_create_prop_key("name");
         assert_eq!(engine.prop_key_id("name"), Some(prop_id));
         assert_eq!(engine.prop_key_name(prop_id), Some("name"));
+    }
+
+    // ======================================================================
+    // GG-005: StorageEngine subgraph integration tests
+    // ======================================================================
+
+    #[cfg(feature = "subgraph")]
+    mod subgraph_engine_tests {
+        use super::*;
+        use cypherlite_core::SubgraphId;
+
+        fn test_engine_sg(dir: &std::path::Path) -> StorageEngine {
+            let config = DatabaseConfig {
+                path: dir.join("test.cyl"),
+                wal_sync_mode: SyncMode::Normal,
+                ..Default::default()
+            };
+            StorageEngine::open(config).expect("open")
+        }
+
+        // GG-005: Create subgraph via StorageEngine
+        #[test]
+        fn test_engine_create_subgraph() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let id = engine.create_subgraph(vec![], None);
+            assert_eq!(id, SubgraphId(1));
+        }
+
+        // GG-005: Get subgraph via StorageEngine
+        #[test]
+        fn test_engine_get_subgraph() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let id = engine.create_subgraph(
+                vec![(1, PropertyValue::String("test".into()))],
+                Some(1_000),
+            );
+            let record = engine.get_subgraph(id).expect("found");
+            assert_eq!(record.subgraph_id, id);
+            assert_eq!(record.temporal_anchor, Some(1_000));
+        }
+
+        // GG-005: Get nonexistent subgraph returns None
+        #[test]
+        fn test_engine_get_nonexistent_subgraph() {
+            let dir = tempdir().expect("tempdir");
+            let engine = test_engine_sg(dir.path());
+            assert!(engine.get_subgraph(SubgraphId(999)).is_none());
+        }
+
+        // GG-005: Delete subgraph via StorageEngine
+        #[test]
+        fn test_engine_delete_subgraph() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let id = engine.create_subgraph(vec![], None);
+            engine.delete_subgraph(id).expect("delete");
+            assert!(engine.get_subgraph(id).is_none());
+        }
+
+        // GG-005: Delete nonexistent subgraph returns error
+        #[test]
+        fn test_engine_delete_nonexistent_subgraph() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let result = engine.delete_subgraph(SubgraphId(999));
+            assert!(result.is_err());
+        }
+
+        // GG-005: Add member to subgraph
+        #[test]
+        fn test_engine_add_member() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let sg = engine.create_subgraph(vec![], None);
+            let n1 = engine.create_node(vec![], vec![]);
+            engine.add_member(sg, n1).expect("add member");
+            let members = engine.list_members(sg);
+            assert_eq!(members.len(), 1);
+            assert_eq!(members[0], n1);
+        }
+
+        // GG-005: Add member - subgraph not found
+        #[test]
+        fn test_engine_add_member_subgraph_not_found() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let n1 = engine.create_node(vec![], vec![]);
+            let result = engine.add_member(SubgraphId(999), n1);
+            assert!(result.is_err());
+        }
+
+        // GG-005: Add member - node not found
+        #[test]
+        fn test_engine_add_member_node_not_found() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let sg = engine.create_subgraph(vec![], None);
+            let result = engine.add_member(sg, NodeId(999));
+            assert!(result.is_err());
+        }
+
+        // GG-005: Remove member from subgraph
+        #[test]
+        fn test_engine_remove_member() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let sg = engine.create_subgraph(vec![], None);
+            let n1 = engine.create_node(vec![], vec![]);
+            engine.add_member(sg, n1).expect("add");
+            engine.remove_member(sg, n1).expect("remove");
+            assert!(engine.list_members(sg).is_empty());
+        }
+
+        // GG-005: Remove member - subgraph not found
+        #[test]
+        fn test_engine_remove_member_subgraph_not_found() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let n1 = engine.create_node(vec![], vec![]);
+            let result = engine.remove_member(SubgraphId(999), n1);
+            assert!(result.is_err());
+        }
+
+        // GG-005: List members of empty subgraph
+        #[test]
+        fn test_engine_list_members_empty() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let sg = engine.create_subgraph(vec![], None);
+            assert!(engine.list_members(sg).is_empty());
+        }
+
+        // GG-005: Get subgraph memberships for node
+        #[test]
+        fn test_engine_get_subgraph_memberships() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let sg1 = engine.create_subgraph(vec![], None);
+            let sg2 = engine.create_subgraph(vec![], None);
+            let n1 = engine.create_node(vec![], vec![]);
+            engine.add_member(sg1, n1).expect("add1");
+            engine.add_member(sg2, n1).expect("add2");
+            let memberships = engine.get_subgraph_memberships(n1);
+            assert_eq!(memberships.len(), 2);
+            assert!(memberships.contains(&sg1));
+            assert!(memberships.contains(&sg2));
+        }
+
+        // GG-005: Delete subgraph cascades membership removal
+        #[test]
+        fn test_engine_delete_subgraph_cascades_memberships() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_sg(dir.path());
+            let sg = engine.create_subgraph(vec![], None);
+            let n1 = engine.create_node(vec![], vec![]);
+            let n2 = engine.create_node(vec![], vec![]);
+            engine.add_member(sg, n1).expect("add1");
+            engine.add_member(sg, n2).expect("add2");
+            engine.delete_subgraph(sg).expect("delete");
+            // Memberships should be gone
+            assert!(engine.get_subgraph_memberships(n1).is_empty());
+            assert!(engine.get_subgraph_memberships(n2).is_empty());
+        }
     }
 }

@@ -35,6 +35,40 @@ pub enum PropertyValue {
     DateTime(i64),
 }
 
+/// Unique identifier for a subgraph entity.
+#[cfg(feature = "subgraph")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SubgraphId(pub u64);
+
+/// A subgraph record stored in the subgraph store.
+#[cfg(feature = "subgraph")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubgraphRecord {
+    /// Unique identifier for this subgraph.
+    pub subgraph_id: SubgraphId,
+    /// Optional temporal anchor (milliseconds since Unix epoch).
+    pub temporal_anchor: Option<i64>,
+    /// Key-value property pairs stored on this subgraph.
+    pub properties: Vec<(u32, PropertyValue)>,
+}
+
+/// A graph entity that can be either a node or a subgraph.
+#[cfg(feature = "subgraph")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum GraphEntity {
+    /// A regular node in the graph.
+    Node(NodeId),
+    /// A subgraph containing other entities.
+    Subgraph(SubgraphId),
+}
+
+#[cfg(feature = "subgraph")]
+impl From<NodeId> for GraphEntity {
+    fn from(id: NodeId) -> Self {
+        GraphEntity::Node(id)
+    }
+}
+
 /// Direction of a relationship traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
@@ -487,5 +521,165 @@ mod tests {
         let val = PropertyValue::DateTime(-1000);
         let display = format!("{}", val);
         assert_eq!(display, "1969-12-31T23:59:59.000Z");
+    }
+
+    // ======================================================================
+    // GG-001: SubgraphId newtype
+    // ======================================================================
+
+    #[cfg(feature = "subgraph")]
+    mod subgraph_tests {
+        use super::*;
+
+        // GG-001: SubgraphId creation and equality
+        #[test]
+        fn test_subgraph_id_creation_and_equality() {
+            let id1 = SubgraphId(1);
+            let id2 = SubgraphId(1);
+            let id3 = SubgraphId(2);
+            assert_eq!(id1, id2);
+            assert_ne!(id1, id3);
+        }
+
+        // GG-001: SubgraphId is Copy
+        #[test]
+        fn test_subgraph_id_is_copy() {
+            let id = SubgraphId(42);
+            let copied = id;
+            assert_eq!(id, copied); // both usable after copy
+        }
+
+        // GG-001: SubgraphId ordering
+        #[test]
+        fn test_subgraph_id_ordering() {
+            let mut ids = vec![SubgraphId(5), SubgraphId(1), SubgraphId(3)];
+            ids.sort();
+            assert_eq!(ids, vec![SubgraphId(1), SubgraphId(3), SubgraphId(5)]);
+        }
+
+        // GG-001: SubgraphId Hash (usable in HashSet)
+        #[test]
+        fn test_subgraph_id_hash() {
+            use std::collections::HashSet;
+            let mut set = HashSet::new();
+            set.insert(SubgraphId(1));
+            set.insert(SubgraphId(2));
+            set.insert(SubgraphId(1)); // duplicate
+            assert_eq!(set.len(), 2);
+        }
+
+        // GG-001: SubgraphId serialization roundtrip
+        #[test]
+        fn test_subgraph_id_serialization_roundtrip() {
+            let id = SubgraphId(42);
+            let encoded = bincode::serialize(&id).expect("serialize");
+            let decoded: SubgraphId = bincode::deserialize(&encoded).expect("deserialize");
+            assert_eq!(id, decoded);
+        }
+
+        // GG-001: SubgraphId Debug
+        #[test]
+        fn test_subgraph_id_debug() {
+            let id = SubgraphId(99);
+            let debug = format!("{:?}", id);
+            assert!(debug.contains("99"));
+        }
+
+        // GG-002: SubgraphRecord construction
+        #[test]
+        fn test_subgraph_record_creation() {
+            let record = SubgraphRecord {
+                subgraph_id: SubgraphId(1),
+                temporal_anchor: None,
+                properties: vec![],
+            };
+            assert_eq!(record.subgraph_id, SubgraphId(1));
+            assert!(record.temporal_anchor.is_none());
+            assert!(record.properties.is_empty());
+        }
+
+        // GG-002: SubgraphRecord with temporal anchor
+        #[test]
+        fn test_subgraph_record_with_temporal_anchor() {
+            let record = SubgraphRecord {
+                subgraph_id: SubgraphId(1),
+                temporal_anchor: Some(1_700_000_000_000),
+                properties: vec![
+                    (1, PropertyValue::String("test-graph".into())),
+                ],
+            };
+            assert_eq!(record.temporal_anchor, Some(1_700_000_000_000));
+            assert_eq!(record.properties.len(), 1);
+        }
+
+        // GG-002: SubgraphRecord equality
+        #[test]
+        fn test_subgraph_record_equality() {
+            let a = SubgraphRecord {
+                subgraph_id: SubgraphId(1),
+                temporal_anchor: None,
+                properties: vec![(1, PropertyValue::Int64(42))],
+            };
+            let b = a.clone();
+            assert_eq!(a, b);
+        }
+
+        // GG-002: SubgraphRecord Debug
+        #[test]
+        fn test_subgraph_record_debug() {
+            let record = SubgraphRecord {
+                subgraph_id: SubgraphId(1),
+                temporal_anchor: None,
+                properties: vec![],
+            };
+            let debug = format!("{:?}", record);
+            assert!(debug.contains("SubgraphRecord"));
+        }
+
+        // II-001: GraphEntity enum
+        #[test]
+        fn test_graph_entity_node_variant() {
+            let entity = GraphEntity::Node(NodeId(42));
+            assert_eq!(entity, GraphEntity::Node(NodeId(42)));
+        }
+
+        // II-001: GraphEntity subgraph variant
+        #[test]
+        fn test_graph_entity_subgraph_variant() {
+            let entity = GraphEntity::Subgraph(SubgraphId(7));
+            assert_eq!(entity, GraphEntity::Subgraph(SubgraphId(7)));
+        }
+
+        // II-001: GraphEntity From<NodeId>
+        #[test]
+        fn test_graph_entity_from_node_id() {
+            let node_id = NodeId(10);
+            let entity: GraphEntity = node_id.into();
+            assert_eq!(entity, GraphEntity::Node(NodeId(10)));
+        }
+
+        // II-001: GraphEntity inequality between variants
+        #[test]
+        fn test_graph_entity_variant_inequality() {
+            let node = GraphEntity::Node(NodeId(1));
+            let subgraph = GraphEntity::Subgraph(SubgraphId(1));
+            assert_ne!(node, subgraph);
+        }
+
+        // II-001: GraphEntity Clone
+        #[test]
+        fn test_graph_entity_clone() {
+            let entity = GraphEntity::Node(NodeId(5));
+            let cloned = entity.clone();
+            assert_eq!(entity, cloned);
+        }
+
+        // II-001: GraphEntity Debug
+        #[test]
+        fn test_graph_entity_debug() {
+            let entity = GraphEntity::Node(NodeId(1));
+            let debug = format!("{:?}", entity);
+            assert!(debug.contains("Node"));
+        }
     }
 }
