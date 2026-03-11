@@ -1,7 +1,10 @@
 // MergeOp: MERGE clause execution (match-or-create with ON MATCH/ON CREATE SET)
 
 use crate::executor::eval::eval;
-use crate::executor::operators::create::resolve_properties_mut;
+use crate::executor::operators::create::{
+    is_system_property, resolve_properties_mut, validate_no_system_properties,
+    SYSTEM_PROP_CREATED_AT, SYSTEM_PROP_UPDATED_AT,
+};
 use crate::executor::{ExecutionError, Params, Record, Value};
 use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, NodeId, PropertyValue};
@@ -41,6 +44,30 @@ pub fn execute_merge(
     Ok(results)
 }
 
+/// Get the current query timestamp from params.
+fn get_query_timestamp(params: &Params) -> i64 {
+    match params.get("__query_start_ms__") {
+        Some(Value::Int64(ms)) => *ms,
+        _ => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    }
+}
+
+/// Inject _created_at and _updated_at into property list.
+fn inject_create_timestamps(
+    properties: &mut Vec<(u32, PropertyValue)>,
+    engine: &mut StorageEngine,
+    params: &Params,
+) {
+    let now = get_query_timestamp(params);
+    let created_key = engine.get_or_create_prop_key(SYSTEM_PROP_CREATED_AT);
+    let updated_key = engine.get_or_create_prop_key(SYSTEM_PROP_UPDATED_AT);
+    properties.push((created_key, PropertyValue::DateTime(now)));
+    properties.push((updated_key, PropertyValue::DateTime(now)));
+}
+
 /// Merge a single pattern chain. Returns true if any element was created.
 fn merge_chain(
     chain: &PatternChain,
@@ -51,6 +78,7 @@ fn merge_chain(
     let mut elements = chain.elements.iter();
     let mut prev_var: Option<String> = None;
     let mut any_created = false;
+    let temporal_enabled = engine.config().temporal_tracking_enabled;
 
     while let Some(element) = elements.next() {
         match element {
@@ -94,14 +122,22 @@ fn merge_chain(
                         }
                     }
                     None => {
+                        // Validate no system properties
+                        validate_no_system_properties(&np.properties)?;
+
                         // Create the node
                         let labels: Vec<u32> = np
                             .labels
                             .iter()
                             .map(|l| engine.get_or_create_label(l))
                             .collect();
-                        let properties =
+                        let mut properties =
                             resolve_properties_mut(&np.properties, record, engine, params)?;
+
+                        if temporal_enabled {
+                            inject_create_timestamps(&mut properties, engine, params);
+                        }
+
                         let node_id = engine.create_node(labels, properties);
                         if !var_name.is_empty() {
                             record.insert(var_name.to_string(), Value::Node(node_id));
@@ -174,17 +210,24 @@ fn merge_chain(
                             nid
                         }
                         None => {
+                            validate_no_system_properties(&target_np.properties)?;
+
                             let labels: Vec<u32> = target_np
                                 .labels
                                 .iter()
                                 .map(|l| engine.get_or_create_label(l))
                                 .collect();
-                            let properties = resolve_properties_mut(
+                            let mut properties = resolve_properties_mut(
                                 &target_np.properties,
                                 record,
                                 engine,
                                 params,
                             )?;
+
+                            if temporal_enabled {
+                                inject_create_timestamps(&mut properties, engine, params);
+                            }
+
                             let nid = engine.create_node(labels, properties);
                             if !target_var_name.is_empty() {
                                 record.insert(target_var_name.to_string(), Value::Node(nid));
@@ -236,9 +279,16 @@ fn merge_chain(
                         }
                     }
                     None => {
+                        validate_no_system_properties(&rp.properties)?;
+
                         let rel_type_id = engine.get_or_create_rel_type(rel_type_name);
-                        let rel_props =
+                        let mut rel_props =
                             resolve_properties_mut(&rp.properties, record, engine, params)?;
+
+                        if temporal_enabled {
+                            inject_create_timestamps(&mut rel_props, engine, params);
+                        }
+
                         let edge_id = engine
                             .create_edge(start, end, rel_type_id, rel_props)
                             .map_err(|e| ExecutionError {
@@ -359,11 +409,20 @@ fn apply_set_property(
 ) -> Result<(), ExecutionError> {
     match target {
         Expression::Property(var_expr, prop_name) => {
+            // V-003: Block user writes to system properties
+            if is_system_property(prop_name) {
+                return Err(ExecutionError {
+                    message: format!("System property is read-only: {}", prop_name),
+                });
+            }
+
             let entity = eval(var_expr, record, &*engine, params)?;
             let new_value = eval(value_expr, record, &*engine, params)?;
             let pv = PropertyValue::try_from(new_value).map_err(|e| ExecutionError {
                 message: format!("invalid property value: {}", e),
             })?;
+
+            let temporal_enabled = engine.config().temporal_tracking_enabled;
 
             match entity {
                 Value::Node(nid) => {
@@ -383,6 +442,23 @@ fn apply_set_property(
                     }
                     if !found {
                         props.push((prop_key_id, pv));
+                    }
+
+                    // V-002: Update _updated_at
+                    if temporal_enabled {
+                        let now = get_query_timestamp(params);
+                        let updated_key = engine.get_or_create_prop_key(SYSTEM_PROP_UPDATED_AT);
+                        let mut updated_found = false;
+                        for (k, v) in props.iter_mut() {
+                            if *k == updated_key {
+                                *v = PropertyValue::DateTime(now);
+                                updated_found = true;
+                                break;
+                            }
+                        }
+                        if !updated_found {
+                            props.push((updated_key, PropertyValue::DateTime(now)));
+                        }
                     }
 
                     engine.update_node(nid, props).map_err(|e| ExecutionError {

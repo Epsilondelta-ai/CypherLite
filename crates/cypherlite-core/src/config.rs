@@ -22,6 +22,10 @@ pub struct DatabaseConfig {
     pub cache_capacity: usize,
     /// WAL synchronization mode.
     pub wal_sync_mode: SyncMode,
+    /// Enable automatic _created_at / _updated_at timestamp tracking (default: true).
+    pub temporal_tracking_enabled: bool,
+    /// Enable version storage for pre-update snapshots (default: true when temporal tracking enabled).
+    pub version_storage_enabled: bool,
 }
 
 impl Default for DatabaseConfig {
@@ -31,6 +35,8 @@ impl Default for DatabaseConfig {
             page_size: 4096,
             cache_capacity: 256,
             wal_sync_mode: SyncMode::Full,
+            temporal_tracking_enabled: true,
+            version_storage_enabled: true,
         }
     }
 }
@@ -91,6 +97,40 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.cache_capacity, 1024);
+    }
+
+    // V-004: Temporal tracking enabled by default
+    #[test]
+    fn test_default_temporal_tracking_enabled() {
+        let config = DatabaseConfig::default();
+        assert!(config.temporal_tracking_enabled);
+    }
+
+    // V-004: Temporal tracking can be disabled
+    #[test]
+    fn test_temporal_tracking_can_be_disabled() {
+        let config = DatabaseConfig {
+            temporal_tracking_enabled: false,
+            ..Default::default()
+        };
+        assert!(!config.temporal_tracking_enabled);
+    }
+
+    // W-005: Version storage enabled by default
+    #[test]
+    fn test_default_version_storage_enabled() {
+        let config = DatabaseConfig::default();
+        assert!(config.version_storage_enabled);
+    }
+
+    // W-005: Version storage can be disabled
+    #[test]
+    fn test_version_storage_can_be_disabled() {
+        let config = DatabaseConfig {
+            version_storage_enabled: false,
+            ..Default::default()
+        };
+        assert!(!config.version_storage_enabled);
     }
 
     #[test]

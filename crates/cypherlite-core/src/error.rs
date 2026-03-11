@@ -88,6 +88,10 @@ pub enum CypherLiteError {
     /// A datetime string could not be parsed.
     #[error("Invalid datetime format: {0}")]
     InvalidDateTimeFormat(String),
+
+    /// Attempt to write a system-managed property (prefixed with `_`).
+    #[error("System property is read-only: {0}")]
+    SystemPropertyReadOnly(String),
 }
 
 /// Convenience type alias for CypherLite operations.
@@ -226,6 +230,16 @@ mod tests {
         assert_eq!(
             format!("{err}"),
             "Constraint violation: unique key violated"
+        );
+    }
+
+    // V-003: SystemPropertyReadOnly error
+    #[test]
+    fn test_system_property_read_only_error() {
+        let err = CypherLiteError::SystemPropertyReadOnly("_created_at".to_string());
+        assert_eq!(
+            format!("{err}"),
+            "System property is read-only: _created_at"
         );
     }
 
