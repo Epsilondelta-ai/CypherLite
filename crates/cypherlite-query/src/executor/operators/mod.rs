@@ -17,3 +17,5 @@ pub mod var_length_expand;
 pub mod temporal_filter;
 pub mod temporal_scan;
 pub mod with;
+#[cfg(feature = "subgraph")]
+pub mod subgraph_scan;

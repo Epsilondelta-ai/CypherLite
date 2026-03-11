@@ -191,6 +191,24 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
         | plan @ LogicalPlan::CreateIndex { .. }
         | plan @ LogicalPlan::CreateEdgeIndex { .. }
         | plan @ LogicalPlan::DropIndex { .. } => plan,
+        #[cfg(feature = "subgraph")]
+        plan @ LogicalPlan::SubgraphScan { .. } => plan,
+        #[cfg(feature = "subgraph")]
+        LogicalPlan::CreateSnapshotOp {
+            variable,
+            labels,
+            properties,
+            temporal_anchor,
+            sub_plan,
+            return_vars,
+        } => LogicalPlan::CreateSnapshotOp {
+            variable,
+            labels,
+            properties,
+            temporal_anchor,
+            sub_plan: Box::new(apply_rules(*sub_plan)),
+            return_vars,
+        },
     }
 }
 

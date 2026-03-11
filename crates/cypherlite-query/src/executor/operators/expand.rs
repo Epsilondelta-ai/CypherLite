@@ -4,6 +4,8 @@ use crate::executor::operators::temporal_filter::{is_edge_temporally_valid, Temp
 use crate::executor::{Record, Value};
 use crate::parser::ast::RelDirection;
 use cypherlite_core::NodeId;
+#[cfg(feature = "subgraph")]
+use cypherlite_core::LabelRegistry;
 use cypherlite_storage::StorageEngine;
 
 /// Expand from source records along edges.
@@ -26,6 +28,32 @@ pub fn execute_expand(
     let mut results = Vec::new();
 
     for record in source_records {
+        // Check if source is a Subgraph and rel_type is "CONTAINS" -- virtual edge expansion.
+        #[cfg(feature = "subgraph")]
+        {
+            if let Some(Value::Subgraph(sg_id)) = record.get(src_var) {
+                // Check if the relationship type is "CONTAINS"
+                let is_contains = rel_type_id.is_some_and(|tid| {
+                    engine.catalog().rel_type_name(tid) == Some("CONTAINS")
+                });
+                if is_contains {
+                    // Virtual :CONTAINS expansion via MembershipIndex
+                    let members = engine.list_members(*sg_id);
+                    for node_id in members {
+                        let mut new_record = record.clone();
+                        if let Some(rv) = rel_var {
+                            // No physical edge for virtual :CONTAINS, bind Null
+                            new_record.insert(rv.to_string(), Value::Null);
+                        }
+                        new_record
+                            .insert(target_var.to_string(), Value::Node(node_id));
+                        results.push(new_record);
+                    }
+                    continue;
+                }
+            }
+        }
+
         let src_node_id = match record.get(src_var) {
             Some(Value::Node(nid)) => *nid,
             _ => continue,

@@ -261,6 +261,35 @@ fn eval_property_access(
                 None => Ok(Value::Null),
             }
         }
+        #[cfg(feature = "subgraph")]
+        Value::Subgraph(sg_id) => {
+            // Special property: _temporal_anchor maps to SubgraphRecord.temporal_anchor
+            if prop_name == "_temporal_anchor" {
+                let sg = engine.get_subgraph(*sg_id).ok_or_else(|| ExecutionError {
+                    message: format!("subgraph {} not found", sg_id.0),
+                })?;
+                return match sg.temporal_anchor {
+                    Some(ms) => Ok(Value::Int64(ms)),
+                    None => Ok(Value::Null),
+                };
+            }
+            // Regular property access on SubgraphRecord.properties
+            let sg = engine.get_subgraph(*sg_id).ok_or_else(|| ExecutionError {
+                message: format!("subgraph {} not found", sg_id.0),
+            })?;
+            let prop_key_id = engine.catalog().prop_key_id(prop_name);
+            match prop_key_id {
+                Some(kid) => {
+                    for (k, v) in &sg.properties {
+                        if *k == kid {
+                            return Ok(Value::from(v.clone()));
+                        }
+                    }
+                    Ok(Value::Null)
+                }
+                None => Ok(Value::Null),
+            }
+        }
         Value::Null => Ok(Value::Null),
         _ => Err(ExecutionError {
             message: format!("cannot access property '{}' on non-entity value", prop_name),

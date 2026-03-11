@@ -72,6 +72,11 @@ impl SubgraphStore {
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
+
+    /// Returns an iterator over all subgraph records.
+    pub fn all(&self) -> impl Iterator<Item = &SubgraphRecord> {
+        self.records.values()
+    }
 }
 
 impl Default for SubgraphStore {

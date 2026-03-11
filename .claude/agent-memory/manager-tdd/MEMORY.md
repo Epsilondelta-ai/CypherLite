@@ -78,6 +78,38 @@
 - `page_manager.rs` version check: `header.version == 0 || header.version > FORMAT_VERSION` (accepts all older versions)
 - Tests checking hardcoded FORMAT_VERSION values need `#[cfg(not(feature = "subgraph"))]` guard
 
+## GraphEntity Extension (Phase 6c) Patterns
+- `RelationshipRecord` has cfg-gated `start_is_subgraph: bool`, `end_is_subgraph: bool` with `#[serde(default)]`
+- Helper methods in cfg-gated impl block: `start_entity()`, `end_entity()`, `is_subgraph_edge()`, `from_entities()`
+- `from_entities()` uses `#[allow(clippy::too_many_arguments)]` (8 params)
+- `Value::Subgraph(SubgraphId)` in executor mod.rs - TryFrom returns error (cannot convert to property)
+- When adding cfg-gated fields to RelationshipRecord, update struct literals in: edge_store.rs, version/mod.rs, proptest_storage.rs
+- GraphEntity::{Node,Subgraph} used by from_entities to set start/end_node and is_subgraph flags
+
+## CREATE SNAPSHOT Parser (Phase 6d) Patterns
+- Lexer tokens: `Snapshot` and `From` with `priority = 10` and `(?i)` case-insensitive regex
+- `CreateSnapshotClause` AST: variable, labels, properties, temporal_anchor, from_match, from_return
+- Clause dispatch in parser/mod.rs: check `next1 == Some(&Token::Snapshot)` after CREATE
+- Uses `cfg!(feature = "subgraph")` runtime check + `#[cfg(feature = "subgraph")]` compile-time block
+- Syntax: `CREATE SNAPSHOT (var:Label {props}) AT TIME expr FROM MATCH pattern WHERE filter RETURN items`
+
+## Subgraph Planner/Executor (Phase 6e) Patterns
+- `LogicalPlan::SubgraphScan { variable }` - scans all subgraphs via `engine.scan_subgraphs()`
+- `LogicalPlan::CreateSnapshotOp { variable, labels, properties, temporal_anchor, sub_plan, return_vars }` - executes inner query, creates subgraph with matched nodes
+- Planner detects `:Subgraph` label in MATCH patterns and routes to SubgraphScan (not NodeScan)
+- SubgraphScan binds `Value::Subgraph(SubgraphId)` to variable; inline property filters become Filter nodes
+- Virtual `:CONTAINS` expansion in expand.rs: checks `Value::Subgraph` + rel_type "CONTAINS", uses `engine.list_members()` instead of edge traversal
+- Property access on `Value::Subgraph`: `_temporal_anchor` maps to `SubgraphRecord.temporal_anchor`, regular props via `prop_key_id`
+- `execute_create_snapshot`: runs sub-plan, collects unique NodeIds from return vars, creates subgraph + adds members
+- Default temporal anchor: reads `__query_start_ms__` from params when no explicit AT TIME
+- `_created_at` injected as `PropertyValue::DateTime(now_ms)` on snapshot creation
+- `plan_return` now detects aggregates (was only in `plan_with`); converts `RETURN count(n)` to Aggregate plan node
+- **Keyword collision**: `Snapshot` is a lexer keyword; use `:Snap` for CREATE SNAPSHOT labels and `:Subgraph` for MATCH queries
+- `SubgraphStore::all()` returns iterator over all SubgraphRecord values
+- `StorageEngine::scan_subgraphs()` returns `Vec<&SubgraphRecord>` (cfg-gated)
+- Integration tests in `crates/cypherlite-query/tests/subgraph.rs` (7 tests, all cfg-gated)
+- Aggregate tests use `WITH count(*) AS total RETURN total` pattern (default_agg_name generates `"count(..)"` not `"count(n)"`)
+
 ## Test Counts
 - Baseline before Group R: 729 tests
 - After Group R: 791 tests (+62 new)
@@ -88,3 +120,7 @@
 - After Groups DD/EE/FF: 1035 tests (+20 new: 8 temporal_filter unit, 9 temporal_edge integration, 3 proptest)
 - After Groups GG/II (default): 1035 tests (unchanged, new tests only with subgraph feature)
 - After Groups GG/II (subgraph): 1093 tests (+58 new: 18 core types, 10 subgraph store, 11 membership, 9 header v4, 14 engine integration, -1 cfg-gated, -3 format_version adjustments)
+- After Phase 6c+6d (default): 1043 tests (+8 lexer tests for Snapshot/From tokens)
+- After Phase 6c+6d (subgraph): 1127 tests (+34 new: 10 RelationshipRecord entity, 5 Value::Subgraph, 8 lexer, 7 parser unit, 4 parser integration)
+- After Phase 6e (default): 1043 tests (unchanged, new tests only with subgraph feature)
+- After Phase 6e (subgraph): 1139 tests (+12 new: 2 subgraph_scan unit, 7 integration, 3 plan_return aggregate improvements)

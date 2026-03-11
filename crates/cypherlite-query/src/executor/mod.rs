@@ -413,6 +413,29 @@ pub fn execute(
             engine,
             params,
         ),
+        #[cfg(feature = "subgraph")]
+        LogicalPlan::SubgraphScan { variable } => {
+            Ok(operators::subgraph_scan::execute_subgraph_scan(variable, engine))
+        }
+        #[cfg(feature = "subgraph")]
+        LogicalPlan::CreateSnapshotOp {
+            variable,
+            labels: _,
+            properties,
+            temporal_anchor,
+            sub_plan,
+            return_vars,
+        } => {
+            execute_create_snapshot(
+                variable.as_deref(),
+                properties,
+                temporal_anchor.as_ref(),
+                sub_plan,
+                return_vars,
+                engine,
+                params,
+            )
+        }
         LogicalPlan::AsOfScan {
             source,
             timestamp_expr,
@@ -497,6 +520,100 @@ fn eval_count_expr(expr: &Expression) -> Result<usize, ExecutionError> {
             message: "SKIP/LIMIT count must be a literal integer".to_string(),
         }),
     }
+}
+
+/// Execute a CREATE SNAPSHOT operation.
+/// 1. Execute the sub-plan (FROM MATCH ... RETURN ...) to collect node IDs.
+/// 2. Create a SubgraphRecord with properties and temporal anchor.
+/// 3. Add all matched nodes as members via MembershipIndex.
+/// 4. Return a record with the subgraph variable bound if specified.
+#[cfg(feature = "subgraph")]
+#[allow(clippy::too_many_arguments)]
+fn execute_create_snapshot(
+    variable: Option<&str>,
+    properties: &Option<crate::parser::ast::MapLiteral>,
+    temporal_anchor_expr: Option<&crate::parser::ast::Expression>,
+    sub_plan: &LogicalPlan,
+    return_vars: &[String],
+    engine: &mut StorageEngine,
+    params: &Params,
+) -> Result<Vec<Record>, ExecutionError> {
+    use cypherlite_core::{LabelRegistry, PropertyValue, SubgraphId};
+
+    // 1. Execute sub-plan to collect results.
+    let sub_records = execute(sub_plan, engine, params)?;
+
+    // 2. Collect unique node IDs from the results.
+    let mut node_ids = Vec::new();
+    for record in &sub_records {
+        for var in return_vars {
+            if let Some(Value::Node(nid)) = record.get(var) {
+                if !node_ids.contains(nid) {
+                    node_ids.push(*nid);
+                }
+            }
+        }
+    }
+
+    // 3. Resolve properties for the subgraph.
+    let empty_record = Record::new();
+    let sg_props = match properties {
+        Some(map) => {
+            let mut result = Vec::new();
+            for (key, expr) in map {
+                let value = eval::eval(expr, &empty_record, engine, params)?;
+                let pv = PropertyValue::try_from(value).map_err(|e| ExecutionError {
+                    message: format!("invalid property value for '{}': {}", key, e),
+                })?;
+                let key_id = engine.get_or_create_prop_key(key);
+                result.push((key_id, pv));
+            }
+            result
+        }
+        None => vec![],
+    };
+
+    // 4. Resolve temporal anchor.
+    let temporal_anchor = match temporal_anchor_expr {
+        Some(expr) => {
+            let val = eval::eval(expr, &empty_record, engine, params)?;
+            let ms = extract_timestamp(val)?;
+            Some(ms)
+        }
+        None => {
+            // HH-003: Default temporal anchor is current timestamp.
+            match params.get("__query_start_ms__") {
+                Some(Value::Int64(ms)) => Some(*ms),
+                _ => None,
+            }
+        }
+    };
+
+    // 5. Inject _created_at timestamp.
+    let mut final_props = sg_props;
+    let now = match params.get("__query_start_ms__") {
+        Some(Value::Int64(ms)) => *ms,
+        _ => 0,
+    };
+    let created_key = engine.get_or_create_prop_key("_created_at");
+    final_props.push((created_key, PropertyValue::DateTime(now)));
+
+    // 6. Create the subgraph.
+    let sg_id: SubgraphId = engine.create_subgraph(final_props, temporal_anchor);
+
+    // 7. Add all matched nodes as members.
+    for nid in &node_ids {
+        engine.add_member(sg_id, *nid).map_err(|e| ExecutionError {
+            message: format!("failed to add member to subgraph: {}", e),
+        })?;
+    }
+
+    // 8. Return result record.
+    let mut result_record = Record::new();
+    if let Some(var) = variable {
+        result_record.insert(var.to_string(), Value::Subgraph(sg_id));
+    }
+    Ok(vec![result_record])
 }
 
 /// Deduplicate records by comparing all key-value pairs.

@@ -648,6 +648,12 @@ impl StorageEngine {
     pub fn get_subgraph_memberships(&self, node_id: NodeId) -> Vec<SubgraphId> {
         self.membership_index.memberships(node_id)
     }
+
+    /// Scan all subgraph records.
+    #[cfg(feature = "subgraph")]
+    pub fn scan_subgraphs(&self) -> Vec<&SubgraphRecord> {
+        self.subgraph_store.all().collect()
+    }
 }
 
 impl LabelRegistry for StorageEngine {
