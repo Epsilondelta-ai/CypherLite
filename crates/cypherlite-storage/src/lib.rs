@@ -13,6 +13,8 @@ pub mod transaction;
 pub mod wal;
 /// Property index infrastructure for fast node lookups.
 pub mod index;
+/// Version storage for pre-update entity snapshots.
+pub mod version;
 
 use cypherlite_core::{
     DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId, PropertyValue,
@@ -26,6 +28,7 @@ use page::buffer_pool::BufferPool;
 use page::page_manager::PageManager;
 use page::PAGE_SIZE;
 use transaction::mvcc::TransactionManager;
+use version::VersionStore;
 use wal::checkpoint::Checkpoint;
 use wal::reader::WalReader;
 use wal::recovery::Recovery;
@@ -46,6 +49,7 @@ pub struct StorageEngine {
     edge_store: EdgeStore,
     catalog: catalog::Catalog,
     index_manager: IndexManager,
+    version_store: VersionStore,
     config: DatabaseConfig,
 }
 
@@ -97,6 +101,7 @@ impl StorageEngine {
             edge_store,
             catalog: catalog::Catalog::default(),
             index_manager: IndexManager::new(),
+            version_store: VersionStore::new(),
             config,
         })
     }
@@ -136,6 +141,14 @@ impl StorageEngine {
     ) -> Result<()> {
         // Capture old properties for index removal
         let old_node = self.node_store.get_node(node_id).cloned();
+
+        // W-002: Pre-update snapshot into VersionStore
+        if self.config.version_storage_enabled {
+            if let Some(ref old) = old_node {
+                self.version_store.snapshot_node(node_id.0, old.clone());
+            }
+        }
+
         self.node_store.update_node(node_id, properties.clone())?;
         // Update indexes: remove old values, insert new values
         if let Some(old) = old_node {
@@ -427,6 +440,16 @@ impl StorageEngine {
     /// Returns a mutable reference to the catalog.
     pub fn catalog_mut(&mut self) -> &mut catalog::Catalog {
         &mut self.catalog
+    }
+
+    /// Returns a reference to the version store.
+    pub fn version_store(&self) -> &VersionStore {
+        &self.version_store
+    }
+
+    /// Returns a mutable reference to the version store.
+    pub fn version_store_mut(&mut self) -> &mut VersionStore {
+        &mut self.version_store
     }
 }
 

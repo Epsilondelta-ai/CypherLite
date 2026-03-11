@@ -61,12 +61,19 @@ impl PageManager {
             return Err(CypherLiteError::InvalidMagicNumber);
         }
 
-        // REQ-PAGE-008: Validate version
-        if header.version != FORMAT_VERSION {
+        // REQ-PAGE-008: Validate version (accept v1 for auto-migration to v2)
+        if header.version != FORMAT_VERSION && header.version != 1 {
             return Err(CypherLiteError::UnsupportedVersion {
                 found: header.version,
                 supported: FORMAT_VERSION,
             });
+        }
+
+        // W-004: Auto-migrate v1 headers to v2
+        let mut header = header;
+        if header.version == 1 {
+            header.version = FORMAT_VERSION;
+            header.version_store_root_page = 0;
         }
 
         Ok(Self {
@@ -260,7 +267,7 @@ mod tests {
             result,
             Err(CypherLiteError::UnsupportedVersion {
                 found: 99,
-                supported: 1
+                supported: 2
             })
         ));
     }

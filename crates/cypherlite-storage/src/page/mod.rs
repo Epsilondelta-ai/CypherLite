@@ -10,7 +10,7 @@ pub const PAGE_SIZE: usize = 4096;
 pub const MAGIC: u32 = 0x4359_4C54;
 
 /// Current database format version.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Header page is always at page 0.
 pub const HEADER_PAGE_ID: u32 = 0;
@@ -124,6 +124,9 @@ pub struct DatabaseHeader {
     pub next_node_id: u64,
     /// Next available edge ID.
     pub next_edge_id: u64,
+    /// Root page of the version store (0 = no version store allocated).
+    /// Added in format version 2, stored at bytes 36-43.
+    pub version_store_root_page: u64,
 }
 
 impl DatabaseHeader {
@@ -137,6 +140,7 @@ impl DatabaseHeader {
             root_edge_page: 0,
             next_node_id: 1,
             next_edge_id: 1,
+            version_store_root_page: 0,
         }
     }
 
@@ -150,14 +154,28 @@ impl DatabaseHeader {
         page[16..20].copy_from_slice(&self.root_edge_page.to_le_bytes());
         page[20..28].copy_from_slice(&self.next_node_id.to_le_bytes());
         page[28..36].copy_from_slice(&self.next_edge_id.to_le_bytes());
+        // W-004: version_store_root_page at bytes 36-43
+        page[36..44].copy_from_slice(&self.version_store_root_page.to_le_bytes());
         page
     }
 
     /// Deserialize the database header from a 4096-byte page.
+    /// Supports both v1 (without version_store_root_page) and v2 formats.
     pub fn from_page(page: &[u8; PAGE_SIZE]) -> Self {
+        let version = u32::from_le_bytes([page[4], page[5], page[6], page[7]]);
+
+        // W-004: Auto-migrate v1 headers (bytes 36-43 are zero = no version store)
+        let version_store_root_page = if version >= 2 {
+            u64::from_le_bytes([
+                page[36], page[37], page[38], page[39], page[40], page[41], page[42], page[43],
+            ])
+        } else {
+            0 // v1 headers have no version store field
+        };
+
         Self {
             magic: u32::from_le_bytes([page[0], page[1], page[2], page[3]]),
-            version: u32::from_le_bytes([page[4], page[5], page[6], page[7]]),
+            version,
             page_count: u32::from_le_bytes([page[8], page[9], page[10], page[11]]),
             root_node_page: u32::from_le_bytes([page[12], page[13], page[14], page[15]]),
             root_edge_page: u32::from_le_bytes([page[16], page[17], page[18], page[19]]),
@@ -167,6 +185,7 @@ impl DatabaseHeader {
             next_edge_id: u64::from_le_bytes([
                 page[28], page[29], page[30], page[31], page[32], page[33], page[34], page[35],
             ]),
+            version_store_root_page,
         }
     }
 }
@@ -240,6 +259,7 @@ mod tests {
         assert_eq!(hdr.page_count, FIRST_DATA_PAGE);
         assert_eq!(hdr.next_node_id, 1);
         assert_eq!(hdr.next_edge_id, 1);
+        assert_eq!(hdr.version_store_root_page, 0);
     }
 
     #[test]
@@ -252,6 +272,7 @@ mod tests {
             root_edge_page: 10,
             next_node_id: 42,
             next_edge_id: 99,
+            version_store_root_page: 0,
         };
         let page = hdr.to_page();
         let decoded = DatabaseHeader::from_page(&page);
@@ -262,6 +283,42 @@ mod tests {
         assert_eq!(decoded.root_edge_page, 10);
         assert_eq!(decoded.next_node_id, 42);
         assert_eq!(decoded.next_edge_id, 99);
+        assert_eq!(decoded.version_store_root_page, 0);
+    }
+
+    // W-004: DatabaseHeader with version_store_root_page
+    #[test]
+    fn test_database_header_version_store_root_page() {
+        let hdr = DatabaseHeader {
+            version_store_root_page: 42,
+            ..DatabaseHeader::new()
+        };
+        let page = hdr.to_page();
+        let decoded = DatabaseHeader::from_page(&page);
+        assert_eq!(decoded.version_store_root_page, 42);
+    }
+
+    // W-004: Auto-migrate v1 header (version_store_root_page = 0)
+    #[test]
+    fn test_database_header_v1_migration() {
+        // Create a v1 header (no version_store_root_page field, bytes 36-43 are zeros)
+        let mut page = [0u8; PAGE_SIZE];
+        page[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+        page[4..8].copy_from_slice(&1u32.to_le_bytes()); // version 1
+        page[8..12].copy_from_slice(&FIRST_DATA_PAGE.to_le_bytes());
+        page[20..28].copy_from_slice(&1u64.to_le_bytes());
+        page[28..36].copy_from_slice(&1u64.to_le_bytes());
+        // bytes 36-43 are zeros (no version store)
+
+        let decoded = DatabaseHeader::from_page(&page);
+        assert_eq!(decoded.version, 1); // preserved as-is in from_page
+        assert_eq!(decoded.version_store_root_page, 0); // auto-migrated to 0
+    }
+
+    // W-004: FORMAT_VERSION is now 2
+    #[test]
+    fn test_format_version_is_2() {
+        assert_eq!(FORMAT_VERSION, 2);
     }
 
     // REQ-PAGE-003: FSM bitmap can track 32768 pages
