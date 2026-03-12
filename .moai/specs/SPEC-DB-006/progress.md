@@ -36,3 +36,5 @@
 - Benchmarks: subgraph criterion benchmarks
 - Integration tests: subgraph creation, querying, snapshot
 - All prior tests continue to pass
+- Tests: not individually counted at completion (sync phase skipped)
+- Coverage: not measured at completion (sync phase skipped)

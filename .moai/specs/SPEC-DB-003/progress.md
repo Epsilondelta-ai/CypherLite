@@ -28,6 +28,7 @@
 - Proptest: 9 property-based tests
 - Benchmarks: 3 criterion benchmarks
 - Lines added: ~9,700
+- Coverage: not measured at completion (sync phase skipped)
 
 ### Known Issues
 

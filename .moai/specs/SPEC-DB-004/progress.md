@@ -25,6 +25,7 @@
 - Proptest: 6 temporal property-based tests
 - Benchmarks: 6 criterion benchmarks (temporal)
 - New tests added: 42 (936 -> 978)
+- Coverage: not measured at completion (sync phase skipped)
 
 ### Deferred Items
 
@@ -37,8 +38,8 @@
 
 | SPEC | Version | Feature | Status |
 |------|---------|---------|--------|
-| SPEC-DB-005 | v0.5 | Temporal Edge Validity & Feature Flags | Draft |
-| SPEC-DB-006 | v0.6 | Subgraph Entities & Temporal Snapshots | Draft |
+| SPEC-DB-005 | v0.5 | Temporal Edge Validity & Feature Flags | Completed |
+| SPEC-DB-006 | v0.6 | Subgraph Entities & Temporal Snapshots | Completed |
 | SPEC-DB-007 | v0.7 | Native Hyperedges & Temporal References | Draft |
 
 See `docs/design/05_temporal_hypergraph_roadmap.md` for the full roadmap.

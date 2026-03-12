@@ -24,3 +24,5 @@
 - Total lines added: ~2,339
 - Proptest: temporal edge property-based tests included
 - All prior tests continue to pass
+- Tests: not individually counted at completion (sync phase skipped)
+- Coverage: not measured at completion (sync phase skipped)
