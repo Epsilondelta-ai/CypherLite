@@ -22,6 +22,10 @@ pub enum Clause {
     DropIndex(DropIndexClause),
     #[cfg(feature = "subgraph")]
     CreateSnapshot(CreateSnapshotClause),
+    #[cfg(feature = "hypergraph")]
+    CreateHyperedge(CreateHyperedgeClause),
+    #[cfg(feature = "hypergraph")]
+    MatchHyperedge(MatchHyperedgeClause),
 }
 
 /// Temporal predicate for time-travel queries.
@@ -217,6 +221,12 @@ pub enum Expression {
     CountStar,
     /// List literal: `[expr, expr, ...]`
     ListLiteral(Vec<Expression>),
+    /// Temporal reference: `expr AT TIME expr` in hyperedge participant lists.
+    #[cfg(feature = "hypergraph")]
+    TemporalRef {
+        node: Box<Expression>,
+        timestamp: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -271,4 +281,32 @@ pub struct CreateSnapshotClause {
     pub from_match: MatchClause,
     /// The FROM RETURN items defining what to capture.
     pub from_return: Vec<ReturnItem>,
+}
+
+/// CREATE HYPEREDGE clause for creating a hyperedge connecting multiple sources and targets.
+///
+/// Syntax: CREATE HYPEREDGE (var:Label) FROM (expr, expr, ...) TO (expr, expr, ...)
+#[cfg(feature = "hypergraph")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateHyperedgeClause {
+    /// Optional variable name for the hyperedge.
+    pub variable: Option<String>,
+    /// Labels (relationship types) for the hyperedge.
+    pub labels: Vec<String>,
+    /// Source participant expressions (FROM list).
+    pub sources: Vec<Expression>,
+    /// Target participant expressions (TO list).
+    pub targets: Vec<Expression>,
+}
+
+/// MATCH HYPEREDGE clause for querying hyperedges.
+///
+/// Syntax: MATCH HYPEREDGE (var:Label)
+#[cfg(feature = "hypergraph")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchHyperedgeClause {
+    /// Optional variable name for the hyperedge.
+    pub variable: Option<String>,
+    /// Labels to filter by.
+    pub labels: Vec<String>,
 }

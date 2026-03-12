@@ -178,6 +178,16 @@ pub fn eval(
                 }),
             }
         }
+        #[cfg(feature = "hypergraph")]
+        Expression::TemporalRef { node, timestamp } => {
+            // Evaluate both sub-expressions and return a placeholder.
+            // The actual interpretation is done in the executor during hyperedge creation.
+            let _node_val = eval(node, record, engine, params)?;
+            let _ts_val = eval(timestamp, record, engine, params)?;
+            // For expression evaluation context, return the node value
+            // (temporal resolution happens at the hyperedge executor level).
+            eval(node, record, engine, params)
+        }
     }
 }
 
@@ -281,6 +291,24 @@ fn eval_property_access(
             match prop_key_id {
                 Some(kid) => {
                     for (k, v) in &sg.properties {
+                        if *k == kid {
+                            return Ok(Value::from(v.clone()));
+                        }
+                    }
+                    Ok(Value::Null)
+                }
+                None => Ok(Value::Null),
+            }
+        }
+        #[cfg(feature = "hypergraph")]
+        Value::Hyperedge(he_id) => {
+            let he = engine.get_hyperedge(*he_id).ok_or_else(|| ExecutionError {
+                message: format!("hyperedge {} not found", he_id.0),
+            })?;
+            let prop_key_id = engine.catalog().prop_key_id(prop_name);
+            match prop_key_id {
+                Some(kid) => {
+                    for (k, v) in &he.properties {
                         if *k == kid {
                             return Ok(Value::from(v.clone()));
                         }
@@ -1414,5 +1442,76 @@ mod tests {
             &params,
         );
         assert_eq!(result, Ok(Value::DateTime(0)));
+    }
+
+    // ── Hypergraph property access tests ───────────────────────────────
+    #[cfg(feature = "hypergraph")]
+    mod hyperedge_property_tests {
+        use super::*;
+
+        #[test]
+        fn test_property_access_on_hyperedge() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let rel_type = engine.get_or_create_rel_type("INVOLVES");
+            let prop_key = engine.get_or_create_prop_key("weight");
+
+            use cypherlite_core::{GraphEntity, PropertyValue};
+            let n1 = engine.create_node(vec![], vec![]);
+            let he_id = engine.create_hyperedge(
+                rel_type,
+                vec![GraphEntity::Node(n1)],
+                vec![],
+                vec![(prop_key, PropertyValue::Int64(42))],
+            );
+
+            let mut record = Record::new();
+            record.insert("he".to_string(), Value::Hyperedge(he_id));
+
+            let expr = Expression::Property(
+                Box::new(Expression::Variable("he".to_string())),
+                "weight".to_string(),
+            );
+            let result = eval(&expr, &record, &engine, &Params::new());
+            assert_eq!(result, Ok(Value::Int64(42)));
+        }
+
+        #[test]
+        fn test_property_access_on_hyperedge_missing_prop() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let rel_type = engine.get_or_create_rel_type("INVOLVES");
+
+            let he_id = engine.create_hyperedge(rel_type, vec![], vec![], vec![]);
+
+            let mut record = Record::new();
+            record.insert("he".to_string(), Value::Hyperedge(he_id));
+
+            let expr = Expression::Property(
+                Box::new(Expression::Variable("he".to_string())),
+                "nonexistent".to_string(),
+            );
+            let result = eval(&expr, &record, &engine, &Params::new());
+            assert_eq!(result, Ok(Value::Null));
+        }
+
+        #[test]
+        fn test_property_access_on_hyperedge_not_found() {
+            let dir = tempdir().expect("tempdir");
+            let engine = test_engine(dir.path());
+
+            let fake_id = cypherlite_core::HyperEdgeId(999);
+            let mut record = Record::new();
+            record.insert("he".to_string(), Value::Hyperedge(fake_id));
+
+            let expr = Expression::Property(
+                Box::new(Expression::Variable("he".to_string())),
+                "weight".to_string(),
+            );
+            let result = eval(&expr, &record, &engine, &Params::new());
+            assert!(result.is_err());
+        }
     }
 }

@@ -25,6 +25,9 @@ pub enum Value {
     /// A subgraph entity reference.
     #[cfg(feature = "subgraph")]
     Subgraph(cypherlite_core::SubgraphId),
+    /// A hyperedge entity reference.
+    #[cfg(feature = "hypergraph")]
+    Hyperedge(cypherlite_core::HyperEdgeId),
 }
 
 /// Convert from storage PropertyValue to executor Value.
@@ -64,6 +67,10 @@ impl TryFrom<Value> for PropertyValue {
             }
             #[cfg(feature = "subgraph")]
             Value::Subgraph(_) => {
+                Err("cannot convert graph entity to property".into())
+            }
+            #[cfg(feature = "hypergraph")]
+            Value::Hyperedge(_) => {
                 Err("cannot convert graph entity to property".into())
             }
         }
@@ -436,6 +443,26 @@ pub fn execute(
                 params,
             )
         }
+        #[cfg(feature = "hypergraph")]
+        LogicalPlan::HyperEdgeScan { variable } => {
+            Ok(operators::hyperedge_scan::execute_hyperedge_scan(variable, engine))
+        }
+        #[cfg(feature = "hypergraph")]
+        LogicalPlan::CreateHyperedgeOp {
+            variable,
+            labels,
+            sources,
+            targets,
+        } => {
+            execute_create_hyperedge(
+                variable.as_deref(),
+                labels,
+                sources,
+                targets,
+                engine,
+                params,
+            )
+        }
         LogicalPlan::AsOfScan {
             source,
             timestamp_expr,
@@ -614,6 +641,104 @@ fn execute_create_snapshot(
         result_record.insert(var.to_string(), Value::Subgraph(sg_id));
     }
     Ok(vec![result_record])
+}
+
+/// Execute a CREATE HYPEREDGE operation.
+/// 1. Resolve source/target participant expressions to GraphEntity values.
+/// 2. Look up or create the rel_type_id from labels via catalog.
+/// 3. Call engine.create_hyperedge() with sources, targets, and empty properties.
+/// 4. Return a record with the hyperedge variable bound if specified.
+#[cfg(feature = "hypergraph")]
+#[allow(clippy::too_many_arguments)]
+fn execute_create_hyperedge(
+    variable: Option<&str>,
+    labels: &[String],
+    sources: &[Expression],
+    targets: &[Expression],
+    engine: &mut StorageEngine,
+    params: &Params,
+) -> Result<Vec<Record>, ExecutionError> {
+    use cypherlite_core::{HyperEdgeId, LabelRegistry};
+
+    let empty_record = Record::new();
+
+    // Resolve the rel_type_id from the first label.
+    let rel_type_id = if let Some(label) = labels.first() {
+        engine.get_or_create_rel_type(label)
+    } else {
+        0
+    };
+
+    // Resolve source participants.
+    let resolved_sources = resolve_hyperedge_participants(sources, &empty_record, engine, params)?;
+    // Resolve target participants.
+    let resolved_targets = resolve_hyperedge_participants(targets, &empty_record, engine, params)?;
+
+    // Create the hyperedge (properties come from subsequent SET clause).
+    let he_id: HyperEdgeId = engine.create_hyperedge(
+        rel_type_id,
+        resolved_sources,
+        resolved_targets,
+        vec![],
+    );
+
+    // Return result record.
+    let mut result_record = Record::new();
+    if let Some(var) = variable {
+        result_record.insert(var.to_string(), Value::Hyperedge(he_id));
+    }
+    Ok(vec![result_record])
+}
+
+/// Resolve a list of hyperedge participant expressions to GraphEntity values.
+#[cfg(feature = "hypergraph")]
+fn resolve_hyperedge_participants(
+    expressions: &[Expression],
+    record: &Record,
+    engine: &mut StorageEngine,
+    params: &Params,
+) -> Result<Vec<cypherlite_core::GraphEntity>, ExecutionError> {
+    use cypherlite_core::GraphEntity;
+
+    let mut entities = Vec::new();
+    for expr in expressions {
+        match expr {
+            Expression::TemporalRef { node, timestamp } => {
+                // Evaluate node expression to get NodeId.
+                let node_val = eval::eval(node, record, engine, params)?;
+                let ts_val = eval::eval(timestamp, record, engine, params)?;
+                let node_id = match node_val {
+                    Value::Node(nid) => nid,
+                    _ => {
+                        return Err(ExecutionError {
+                            message: "temporal reference node must resolve to a Node".to_string(),
+                        })
+                    }
+                };
+                let ts_ms = extract_timestamp(ts_val)?;
+                entities.push(GraphEntity::TemporalRef(node_id, ts_ms));
+            }
+            _ => {
+                // Evaluate the expression to get a Value.
+                let val = eval::eval(expr, record, engine, params)?;
+                match val {
+                    Value::Node(nid) => entities.push(GraphEntity::Node(nid)),
+                    #[cfg(feature = "subgraph")]
+                    Value::Subgraph(sid) => entities.push(GraphEntity::Subgraph(sid)),
+                    Value::Hyperedge(hid) => {
+                        entities.push(GraphEntity::HyperEdge(hid));
+                    }
+                    _ => {
+                        return Err(ExecutionError {
+                            message: "hyperedge participant must resolve to a graph entity"
+                                .to_string(),
+                        })
+                    }
+                }
+            }
+        }
+    }
+    Ok(entities)
 }
 
 /// Deduplicate records by comparing all key-value pairs.
@@ -835,6 +960,58 @@ mod tests {
     // ======================================================================
     // II-002: Value::Subgraph variant (cfg-gated)
     // ======================================================================
+
+    // ======================================================================
+    // MM-001: Value::Hyperedge variant (cfg-gated)
+    // ======================================================================
+
+    #[cfg(feature = "hypergraph")]
+    mod hyperedge_value_tests {
+        use super::*;
+        use cypherlite_core::HyperEdgeId;
+
+        // MM-001: Value::Hyperedge construction
+        #[test]
+        fn test_value_hyperedge_creation() {
+            let val = Value::Hyperedge(HyperEdgeId(42));
+            assert_eq!(val, Value::Hyperedge(HyperEdgeId(42)));
+        }
+
+        // MM-001: Value::Hyperedge is not convertible to PropertyValue
+        #[test]
+        fn test_value_hyperedge_try_into_property_value_fails() {
+            let result = PropertyValue::try_from(Value::Hyperedge(HyperEdgeId(1)));
+            assert!(result.is_err());
+            assert!(result
+                .expect_err("should error")
+                .contains("cannot convert graph entity"));
+        }
+
+        // MM-001: Value::Hyperedge inequality with Node
+        #[test]
+        fn test_value_hyperedge_ne_node() {
+            let node_val = Value::Node(NodeId(1));
+            let hyperedge_val = Value::Hyperedge(HyperEdgeId(1));
+            assert_ne!(node_val, hyperedge_val);
+        }
+
+        // MM-001: Value::Hyperedge clone
+        #[test]
+        fn test_value_hyperedge_clone() {
+            let val = Value::Hyperedge(HyperEdgeId(7));
+            let cloned = val.clone();
+            assert_eq!(val, cloned);
+        }
+
+        // MM-001: Value::Hyperedge debug
+        #[test]
+        fn test_value_hyperedge_debug() {
+            let val = Value::Hyperedge(HyperEdgeId(99));
+            let debug = format!("{:?}", val);
+            assert!(debug.contains("Hyperedge"));
+            assert!(debug.contains("99"));
+        }
+    }
 
     #[cfg(feature = "subgraph")]
     mod subgraph_value_tests {

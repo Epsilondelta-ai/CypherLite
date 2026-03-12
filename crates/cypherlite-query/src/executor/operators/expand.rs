@@ -28,6 +28,45 @@ pub fn execute_expand(
     let mut results = Vec::new();
 
     for record in source_records {
+        // Check if source is a Hyperedge -- virtual :INVOLVES expansion.
+        #[cfg(feature = "hypergraph")]
+        {
+            if let Some(Value::Hyperedge(he_id)) = record.get(src_var) {
+                if let Some(he_rec) = engine.get_hyperedge(*he_id) {
+                    // Filter by rel_type if specified
+                    let type_matches = rel_type_id
+                        .map_or(true, |tid| he_rec.rel_type_id == tid);
+                    if type_matches {
+                        // Emit all source and target participant nodes
+                        for entity in he_rec.sources.iter().chain(he_rec.targets.iter()) {
+                            let target_value = match entity {
+                                cypherlite_core::GraphEntity::Node(nid) => Value::Node(*nid),
+                                #[cfg(feature = "subgraph")]
+                                cypherlite_core::GraphEntity::Subgraph(sid) => {
+                                    Value::Subgraph(*sid)
+                                }
+                                cypherlite_core::GraphEntity::HyperEdge(hid) => {
+                                    Value::Hyperedge(*hid)
+                                }
+                                #[cfg(feature = "hypergraph")]
+                                cypherlite_core::GraphEntity::TemporalRef(nid, _) => {
+                                    Value::Node(*nid)
+                                }
+                            };
+                            let mut new_record = record.clone();
+                            if let Some(rv) = rel_var {
+                                // No physical edge for virtual :INVOLVES, bind Null
+                                new_record.insert(rv.to_string(), Value::Null);
+                            }
+                            new_record.insert(target_var.to_string(), target_value);
+                            results.push(new_record);
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+
         // Check if source is a Subgraph and rel_type is "CONTAINS" -- virtual edge expansion.
         #[cfg(feature = "subgraph")]
         {
@@ -266,5 +305,160 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].get("b"), Some(&Value::Node(n1)));
+    }
+
+    // ── Hypergraph :INVOLVES virtual expansion tests ───────────────────
+    #[cfg(feature = "hypergraph")]
+    mod involves_tests {
+        use super::*;
+
+        #[test]
+        fn test_involves_expands_to_source_and_target_nodes() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let involves_type = engine.get_or_create_rel_type("INVOLVES");
+            let n1 = engine.create_node(vec![], vec![]);
+            let n2 = engine.create_node(vec![], vec![]);
+            let n3 = engine.create_node(vec![], vec![]);
+
+            use cypherlite_core::GraphEntity;
+            engine.create_hyperedge(
+                involves_type,
+                vec![GraphEntity::Node(n1)],
+                vec![GraphEntity::Node(n2), GraphEntity::Node(n3)],
+                vec![],
+            );
+
+            // Source record: he bound to the hyperedge
+            let he_id = cypherlite_core::HyperEdgeId(1);
+            let mut source = Record::new();
+            source.insert("he".to_string(), Value::Hyperedge(he_id));
+
+            let results = execute_expand(
+                vec![source],
+                "he",
+                Some("r"),
+                "n",
+                Some(involves_type),
+                &RelDirection::Outgoing,
+                &engine,
+                None,
+            );
+
+            // Should return all sources + targets = 3 nodes
+            assert_eq!(results.len(), 3);
+            for r in &results {
+                assert!(r.contains_key("he"));
+                assert!(r.contains_key("n"));
+                // Virtual edge: rel_var is Null
+                assert_eq!(r.get("r"), Some(&Value::Null));
+                assert!(matches!(r.get("n"), Some(Value::Node(_))));
+            }
+        }
+
+        #[test]
+        fn test_involves_no_matching_type() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let involves_type = engine.get_or_create_rel_type("INVOLVES");
+            let other_type = engine.get_or_create_rel_type("OTHER");
+            let n1 = engine.create_node(vec![], vec![]);
+
+            use cypherlite_core::GraphEntity;
+            engine.create_hyperedge(
+                involves_type,
+                vec![GraphEntity::Node(n1)],
+                vec![],
+                vec![],
+            );
+
+            let he_id = cypherlite_core::HyperEdgeId(1);
+            let mut source = Record::new();
+            source.insert("he".to_string(), Value::Hyperedge(he_id));
+
+            // Ask for OTHER type, but hyperedge is INVOLVES -> mismatch
+            let results = execute_expand(
+                vec![source],
+                "he",
+                None,
+                "n",
+                Some(other_type),
+                &RelDirection::Outgoing,
+                &engine,
+                None,
+            );
+
+            assert!(results.is_empty());
+        }
+
+        #[test]
+        fn test_involves_empty_hyperedge() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let involves_type = engine.get_or_create_rel_type("INVOLVES");
+
+            engine.create_hyperedge(
+                involves_type,
+                vec![],
+                vec![],
+                vec![],
+            );
+
+            let he_id = cypherlite_core::HyperEdgeId(1);
+            let mut source = Record::new();
+            source.insert("he".to_string(), Value::Hyperedge(he_id));
+
+            let results = execute_expand(
+                vec![source],
+                "he",
+                None,
+                "n",
+                Some(involves_type),
+                &RelDirection::Outgoing,
+                &engine,
+                None,
+            );
+
+            assert!(results.is_empty());
+        }
+
+        #[test]
+        fn test_involves_no_rel_type_filter_matches_all() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let involves_type = engine.get_or_create_rel_type("INVOLVES");
+            let n1 = engine.create_node(vec![], vec![]);
+
+            use cypherlite_core::GraphEntity;
+            engine.create_hyperedge(
+                involves_type,
+                vec![GraphEntity::Node(n1)],
+                vec![],
+                vec![],
+            );
+
+            let he_id = cypherlite_core::HyperEdgeId(1);
+            let mut source = Record::new();
+            source.insert("he".to_string(), Value::Hyperedge(he_id));
+
+            // No rel_type filter (None) -> should still expand all participants
+            let results = execute_expand(
+                vec![source],
+                "he",
+                None,
+                "n",
+                None,
+                &RelDirection::Outgoing,
+                &engine,
+                None,
+            );
+
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].get("n"), Some(&Value::Node(n1)));
+        }
     }
 }

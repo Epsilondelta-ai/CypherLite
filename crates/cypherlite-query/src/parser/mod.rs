@@ -49,10 +49,27 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
                 }
                 Clause::Match(parser.parse_match_clause(true)?)
             }
-            Some(Token::Match) => Clause::Match(parser.parse_match_clause(false)?),
+            Some(Token::Match) => {
+                // Peek at next token to distinguish MATCH HYPEREDGE from MATCH (pattern)
+                let next1 = parser.tokens.get(parser.pos + 1).map(|(t, _)| t);
+                #[cfg(feature = "hypergraph")]
+                {
+                    if next1 == Some(&Token::Hyperedge) {
+                        parser.advance(); // consume MATCH
+                        Clause::MatchHyperedge(parser.parse_match_hyperedge_clause()?)
+                    } else {
+                        Clause::Match(parser.parse_match_clause(false)?)
+                    }
+                }
+                #[cfg(not(feature = "hypergraph"))]
+                {
+                    let _ = next1;
+                    Clause::Match(parser.parse_match_clause(false)?)
+                }
+            }
             Some(Token::Return) => Clause::Return(parser.parse_return_clause()?),
             Some(Token::Create) => {
-                // Peek at next tokens to distinguish CREATE INDEX / CREATE EDGE INDEX / CREATE SNAPSHOT from CREATE (pattern)
+                // Peek at next tokens to distinguish CREATE INDEX / CREATE EDGE INDEX / CREATE SNAPSHOT / CREATE HYPEREDGE from CREATE (pattern)
                 let next1 = parser.tokens.get(parser.pos + 1).map(|(t, _)| t);
                 let next2 = parser.tokens.get(parser.pos + 2).map(|(t, _)| t);
                 if next1 == Some(&Token::Index) {
@@ -61,18 +78,27 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
                 } else if next1 == Some(&Token::Edge) && next2 == Some(&Token::Index) {
                     parser.advance(); // consume CREATE
                     Clause::CreateIndex(parser.parse_create_edge_index_clause()?)
-                } else if cfg!(feature = "subgraph") && next1 == Some(&Token::Snapshot) {
-                    #[cfg(feature = "subgraph")]
-                    {
-                        parser.advance(); // consume CREATE
-                        Clause::CreateSnapshot(parser.parse_create_snapshot_clause()?)
-                    }
-                    #[cfg(not(feature = "subgraph"))]
-                    {
-                        unreachable!()
-                    }
                 } else {
-                    Clause::Create(parser.parse_create_clause()?)
+                    // Feature-gated CREATE dispatch: HYPEREDGE and SNAPSHOT
+                    // Use labeled block to produce Clause value with cfg-gated early breaks.
+                    #[allow(unused_labels)]
+                    'create_dispatch: {
+                        #[cfg(feature = "hypergraph")]
+                        if next1 == Some(&Token::Hyperedge) {
+                            parser.advance(); // consume CREATE
+                            break 'create_dispatch Clause::CreateHyperedge(
+                                parser.parse_create_hyperedge_clause()?,
+                            );
+                        }
+                        #[cfg(feature = "subgraph")]
+                        if next1 == Some(&Token::Snapshot) {
+                            parser.advance(); // consume CREATE
+                            break 'create_dispatch Clause::CreateSnapshot(
+                                parser.parse_create_snapshot_clause()?,
+                            );
+                        }
+                        Clause::Create(parser.parse_create_clause()?)
+                    }
                 }
             }
             Some(Token::Set) => Clause::Set(parser.parse_set_clause()?),

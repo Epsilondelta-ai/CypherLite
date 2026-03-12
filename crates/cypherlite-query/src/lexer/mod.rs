@@ -130,6 +130,11 @@ pub enum Token {
     #[regex("(?i)from", priority = 10)]
     From,
 
+    // -- P7 Keywords (Hypergraph) --------------------------------------------
+    #[cfg(feature = "hypergraph")]
+    #[regex("(?i)hyperedge", priority = 10)]
+    Hyperedge,
+
     // -- P4 Keywords (Temporal) ---------------------------------------------
     #[regex("(?i)at", priority = 10)]
     At,
@@ -1223,6 +1228,72 @@ mod tests {
                 vec![expected],
                 "keyword '{}' should be recognized",
                 input,
+            );
+        }
+    }
+
+    // ======================================================================
+    // MM-001: HYPEREDGE keyword token (cfg-gated)
+    // ======================================================================
+
+    #[cfg(feature = "hypergraph")]
+    mod hypergraph_lexer_tests {
+        use super::*;
+
+        #[test]
+        fn lex_mm1_hyperedge_keyword() {
+            let toks = tokens("HYPEREDGE");
+            assert_eq!(toks, vec![Token::Hyperedge]);
+        }
+
+        #[test]
+        fn lex_mm1_hyperedge_case_insensitive() {
+            assert_eq!(tokens("hyperedge"), vec![Token::Hyperedge]);
+            assert_eq!(tokens("Hyperedge"), vec![Token::Hyperedge]);
+            assert_eq!(tokens("hYpErEdGe"), vec![Token::Hyperedge]);
+        }
+
+        #[test]
+        fn lex_mm1_hyperedge_not_prefix_of_identifier() {
+            let toks = tokens("hyperedges");
+            assert_eq!(toks, vec![Token::Ident("hyperedges".to_string())]);
+        }
+
+        #[test]
+        fn lex_mm1_hyperedge_in_create_context() {
+            let toks = tokens("CREATE HYPEREDGE h FROM (a) TO (b)");
+            assert_eq!(
+                toks,
+                vec![
+                    Token::Create,
+                    Token::Hyperedge,
+                    Token::Ident("h".to_string()),
+                    Token::From,
+                    Token::LParen,
+                    Token::Ident("a".to_string()),
+                    Token::RParen,
+                    Token::Ident("TO".to_string()),
+                    Token::LParen,
+                    Token::Ident("b".to_string()),
+                    Token::RParen,
+                ]
+            );
+        }
+
+        #[test]
+        fn lex_mm1_hyperedge_in_match_context() {
+            let toks = tokens("MATCH HYPEREDGE (h:GroupMigration)");
+            assert_eq!(
+                toks,
+                vec![
+                    Token::Match,
+                    Token::Hyperedge,
+                    Token::LParen,
+                    Token::Ident("h".to_string()),
+                    Token::Colon,
+                    Token::Ident("GroupMigration".to_string()),
+                    Token::RParen,
+                ]
             );
         }
     }

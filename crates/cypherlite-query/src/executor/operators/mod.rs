@@ -19,3 +19,5 @@ pub mod temporal_scan;
 pub mod with;
 #[cfg(feature = "subgraph")]
 pub mod subgraph_scan;
+#[cfg(feature = "hypergraph")]
+pub mod hyperedge_scan;

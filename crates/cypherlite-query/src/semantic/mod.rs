@@ -68,6 +68,10 @@ impl<'a> SemanticAnalyzer<'a> {
             Clause::CreateIndex(_) | Clause::DropIndex(_) => Ok(()),
             #[cfg(feature = "subgraph")]
             Clause::CreateSnapshot(_) => Ok(()), // TODO: semantic analysis for snapshot
+            #[cfg(feature = "hypergraph")]
+            Clause::CreateHyperedge(_) => Ok(()), // TODO: semantic analysis for hyperedge
+            #[cfg(feature = "hypergraph")]
+            Clause::MatchHyperedge(_) => Ok(()), // TODO: semantic analysis for match hyperedge
         }
     }
 
@@ -372,6 +376,11 @@ impl<'a> SemanticAnalyzer<'a> {
                 Ok(())
             }
             Expression::Literal(_) | Expression::Parameter(_) | Expression::CountStar => Ok(()),
+            #[cfg(feature = "hypergraph")]
+            Expression::TemporalRef { node, timestamp } => {
+                self.analyze_expression_refs(node)?;
+                self.analyze_expression_refs(timestamp)
+            }
         }
     }
 }
