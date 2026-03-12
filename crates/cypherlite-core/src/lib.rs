@@ -17,3 +17,6 @@ pub use types::{Direction, EdgeId, NodeId, NodeRecord, PageId, PropertyValue, Re
 
 #[cfg(feature = "subgraph")]
 pub use types::{GraphEntity, SubgraphId, SubgraphRecord};
+
+#[cfg(feature = "hypergraph")]
+pub use types::{HyperEdgeId, HyperEdgeRecord};

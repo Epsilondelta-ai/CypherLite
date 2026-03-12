@@ -52,6 +52,27 @@ pub struct SubgraphRecord {
     pub properties: Vec<(u32, PropertyValue)>,
 }
 
+/// Unique identifier for a hyperedge entity.
+#[cfg(feature = "hypergraph")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct HyperEdgeId(pub u64);
+
+/// A hyperedge record connecting multiple sources to multiple targets.
+#[cfg(feature = "hypergraph")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct HyperEdgeRecord {
+    /// Unique identifier for this hyperedge.
+    pub id: HyperEdgeId,
+    /// Relationship type ID for this hyperedge.
+    pub rel_type_id: u32,
+    /// Source endpoints (nodes, subgraphs, or other hyperedges).
+    pub sources: Vec<GraphEntity>,
+    /// Target endpoints (nodes, subgraphs, or other hyperedges).
+    pub targets: Vec<GraphEntity>,
+    /// Key-value property pairs stored on this hyperedge.
+    pub properties: Vec<(u32, PropertyValue)>,
+}
+
 /// A graph entity that can be either a node or a subgraph.
 #[cfg(feature = "subgraph")]
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +81,12 @@ pub enum GraphEntity {
     Node(NodeId),
     /// A subgraph containing other entities.
     Subgraph(SubgraphId),
+    /// A hyperedge connecting multiple sources and targets.
+    #[cfg(feature = "hypergraph")]
+    HyperEdge(HyperEdgeId),
+    /// A temporal reference to a node at a specific point in time.
+    #[cfg(feature = "hypergraph")]
+    TemporalRef(NodeId, i64),
 }
 
 #[cfg(feature = "subgraph")]
@@ -164,10 +191,18 @@ impl RelationshipRecord {
         let (start_node, start_is_subgraph) = match start {
             GraphEntity::Node(id) => (id, false),
             GraphEntity::Subgraph(id) => (NodeId(id.0), true),
+            #[cfg(feature = "hypergraph")]
+            GraphEntity::HyperEdge(id) => (NodeId(id.0), false),
+            #[cfg(feature = "hypergraph")]
+            GraphEntity::TemporalRef(id, _) => (id, false),
         };
         let (end_node, end_is_subgraph) = match end {
             GraphEntity::Node(id) => (id, false),
             GraphEntity::Subgraph(id) => (NodeId(id.0), true),
+            #[cfg(feature = "hypergraph")]
+            GraphEntity::HyperEdge(id) => (NodeId(id.0), false),
+            #[cfg(feature = "hypergraph")]
+            GraphEntity::TemporalRef(id, _) => (id, false),
         };
         Self {
             edge_id,
@@ -931,6 +966,201 @@ mod tests {
             assert_eq!(edge.end_node, NodeId(20));
             assert!(edge.start_is_subgraph);
             assert!(!edge.end_is_subgraph);
+        }
+
+        // ======================================================================
+        // HH-001: HyperEdgeId and HyperEdgeRecord tests
+        // ======================================================================
+
+        #[cfg(feature = "hypergraph")]
+        mod hypergraph_tests {
+            use super::*;
+
+            // HH-001: HyperEdgeId creation and equality
+            #[test]
+            fn test_hyperedge_id_creation_and_equality() {
+                let id1 = HyperEdgeId(1);
+                let id2 = HyperEdgeId(1);
+                let id3 = HyperEdgeId(2);
+                assert_eq!(id1, id2);
+                assert_ne!(id1, id3);
+            }
+
+            // HH-001: HyperEdgeId is Copy
+            #[test]
+            fn test_hyperedge_id_is_copy() {
+                let id = HyperEdgeId(42);
+                let copied = id;
+                assert_eq!(id, copied);
+            }
+
+            // HH-001: HyperEdgeId ordering
+            #[test]
+            fn test_hyperedge_id_ordering() {
+                let mut ids = vec![HyperEdgeId(5), HyperEdgeId(1), HyperEdgeId(3)];
+                ids.sort();
+                assert_eq!(ids, vec![HyperEdgeId(1), HyperEdgeId(3), HyperEdgeId(5)]);
+            }
+
+            // HH-001: HyperEdgeId Hash (usable in HashSet)
+            #[test]
+            fn test_hyperedge_id_hash() {
+                use std::collections::HashSet;
+                let mut set = HashSet::new();
+                set.insert(HyperEdgeId(1));
+                set.insert(HyperEdgeId(2));
+                set.insert(HyperEdgeId(1)); // duplicate
+                assert_eq!(set.len(), 2);
+            }
+
+            // HH-001: HyperEdgeId serialization roundtrip
+            #[test]
+            fn test_hyperedge_id_serialization_roundtrip() {
+                let id = HyperEdgeId(42);
+                let encoded = bincode::serialize(&id).expect("serialize");
+                let decoded: HyperEdgeId = bincode::deserialize(&encoded).expect("deserialize");
+                assert_eq!(id, decoded);
+            }
+
+            // HH-001: HyperEdgeId Debug
+            #[test]
+            fn test_hyperedge_id_debug() {
+                let id = HyperEdgeId(99);
+                let debug = format!("{:?}", id);
+                assert!(debug.contains("99"));
+            }
+
+            // HH-002: HyperEdgeRecord creation
+            #[test]
+            fn test_hyperedge_record_creation() {
+                let record = HyperEdgeRecord {
+                    id: HyperEdgeId(1),
+                    rel_type_id: 5,
+                    sources: vec![GraphEntity::Node(NodeId(10))],
+                    targets: vec![GraphEntity::Node(NodeId(20))],
+                    properties: vec![],
+                };
+                assert_eq!(record.id, HyperEdgeId(1));
+                assert_eq!(record.rel_type_id, 5);
+                assert_eq!(record.sources.len(), 1);
+                assert_eq!(record.targets.len(), 1);
+                assert!(record.properties.is_empty());
+            }
+
+            // HH-002: HyperEdgeRecord with multiple sources and targets
+            #[test]
+            fn test_hyperedge_record_multi_sources_targets() {
+                let record = HyperEdgeRecord {
+                    id: HyperEdgeId(2),
+                    rel_type_id: 3,
+                    sources: vec![
+                        GraphEntity::Node(NodeId(1)),
+                        GraphEntity::Node(NodeId(2)),
+                        GraphEntity::Node(NodeId(3)),
+                    ],
+                    targets: vec![
+                        GraphEntity::Node(NodeId(10)),
+                        GraphEntity::Subgraph(SubgraphId(1)),
+                    ],
+                    properties: vec![(1, PropertyValue::String("weight".into()))],
+                };
+                assert_eq!(record.sources.len(), 3);
+                assert_eq!(record.targets.len(), 2);
+                assert_eq!(record.properties.len(), 1);
+            }
+
+            // HH-002: HyperEdgeRecord clone and equality
+            #[test]
+            fn test_hyperedge_record_clone_equality() {
+                let record = HyperEdgeRecord {
+                    id: HyperEdgeId(1),
+                    rel_type_id: 5,
+                    sources: vec![GraphEntity::Node(NodeId(10))],
+                    targets: vec![GraphEntity::Node(NodeId(20))],
+                    properties: vec![(1, PropertyValue::Int64(42))],
+                };
+                let cloned = record.clone();
+                assert_eq!(record, cloned);
+            }
+
+            // HH-002: HyperEdgeRecord Debug
+            #[test]
+            fn test_hyperedge_record_debug() {
+                let record = HyperEdgeRecord {
+                    id: HyperEdgeId(1),
+                    rel_type_id: 0,
+                    sources: vec![],
+                    targets: vec![],
+                    properties: vec![],
+                };
+                let debug = format!("{:?}", record);
+                assert!(debug.contains("HyperEdgeRecord"));
+            }
+
+            // HH-003: GraphEntity HyperEdge variant
+            #[test]
+            fn test_graph_entity_hyperedge_variant() {
+                let entity = GraphEntity::HyperEdge(HyperEdgeId(42));
+                assert_eq!(entity, GraphEntity::HyperEdge(HyperEdgeId(42)));
+                assert_ne!(entity, GraphEntity::Node(NodeId(42)));
+            }
+
+            // HH-003: GraphEntity TemporalRef variant
+            #[test]
+            fn test_graph_entity_temporal_ref_variant() {
+                let entity = GraphEntity::TemporalRef(NodeId(10), 1_700_000_000_000);
+                assert_eq!(
+                    entity,
+                    GraphEntity::TemporalRef(NodeId(10), 1_700_000_000_000)
+                );
+                assert_ne!(entity, GraphEntity::Node(NodeId(10)));
+            }
+
+            // HH-003: GraphEntity new variants are Clone + Debug
+            #[test]
+            fn test_graph_entity_hyperedge_clone_debug() {
+                let entity = GraphEntity::HyperEdge(HyperEdgeId(5));
+                let cloned = entity.clone();
+                assert_eq!(entity, cloned);
+                let debug = format!("{:?}", entity);
+                assert!(debug.contains("HyperEdge"));
+            }
+
+            // HH-003: from_entities with HyperEdge returns error
+            #[test]
+            fn test_from_entities_with_hyperedge_uses_raw_id() {
+                let edge = RelationshipRecord::from_entities(
+                    EdgeId(1),
+                    GraphEntity::HyperEdge(HyperEdgeId(99)),
+                    GraphEntity::Node(NodeId(20)),
+                    1,
+                    Direction::Outgoing,
+                    None,
+                    None,
+                    vec![],
+                );
+                // HyperEdge(99) maps to NodeId(99) with start_is_subgraph = false
+                assert_eq!(edge.start_node, NodeId(99));
+                assert!(!edge.start_is_subgraph);
+            }
+
+            // HH-003: from_entities with TemporalRef uses raw node id
+            #[test]
+            fn test_from_entities_with_temporal_ref_uses_raw_id() {
+                let edge = RelationshipRecord::from_entities(
+                    EdgeId(2),
+                    GraphEntity::Node(NodeId(10)),
+                    GraphEntity::TemporalRef(NodeId(30), 1_700_000_000_000),
+                    1,
+                    Direction::Outgoing,
+                    None,
+                    None,
+                    vec![],
+                );
+                // TemporalRef(NodeId(30), _) maps to NodeId(30) with end_is_subgraph = false
+                assert_eq!(edge.end_node, NodeId(30));
+                assert!(!edge.end_is_subgraph);
+            }
         }
 
         // II-002: is_subgraph_edge returns true when either endpoint is subgraph

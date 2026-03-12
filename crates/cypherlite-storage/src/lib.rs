@@ -18,6 +18,9 @@ pub mod version;
 /// Subgraph entity storage and membership index.
 #[cfg(feature = "subgraph")]
 pub mod subgraph;
+/// Hyperedge entity storage and reverse index.
+#[cfg(feature = "hypergraph")]
+pub mod hyperedge;
 
 use cypherlite_core::{
     DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId, PropertyValue,
@@ -43,6 +46,12 @@ use wal::writer::WalWriter;
 use subgraph::SubgraphStore;
 #[cfg(feature = "subgraph")]
 use subgraph::membership::MembershipIndex;
+#[cfg(feature = "hypergraph")]
+use cypherlite_core::{HyperEdgeId, HyperEdgeRecord};
+#[cfg(feature = "hypergraph")]
+use hyperedge::HyperEdgeStore;
+#[cfg(feature = "hypergraph")]
+use hyperedge::reverse_index::HyperEdgeReverseIndex;
 
 /// The main storage engine for CypherLite.
 ///
@@ -65,6 +74,10 @@ pub struct StorageEngine {
     subgraph_store: SubgraphStore,
     #[cfg(feature = "subgraph")]
     membership_index: MembershipIndex,
+    #[cfg(feature = "hypergraph")]
+    hyperedge_store: HyperEdgeStore,
+    #[cfg(feature = "hypergraph")]
+    hyperedge_reverse_index: HyperEdgeReverseIndex,
     config: DatabaseConfig,
 }
 
@@ -116,6 +129,16 @@ impl StorageEngine {
             SubgraphStore::new(1)
         };
 
+        // HH-005: Initialize hyperedge store from header
+        #[cfg(feature = "hypergraph")]
+        let next_hyperedge_id = page_manager.header().next_hyperedge_id;
+        #[cfg(feature = "hypergraph")]
+        let hyperedge_store = if next_hyperedge_id > 0 {
+            HyperEdgeStore::new(next_hyperedge_id)
+        } else {
+            HyperEdgeStore::new(1)
+        };
+
         Ok(Self {
             page_manager,
             buffer_pool,
@@ -132,6 +155,10 @@ impl StorageEngine {
             subgraph_store,
             #[cfg(feature = "subgraph")]
             membership_index: MembershipIndex::new(),
+            #[cfg(feature = "hypergraph")]
+            hyperedge_store,
+            #[cfg(feature = "hypergraph")]
+            hyperedge_reverse_index: HyperEdgeReverseIndex::new(),
             config,
         })
     }
@@ -653,6 +680,71 @@ impl StorageEngine {
     #[cfg(feature = "subgraph")]
     pub fn scan_subgraphs(&self) -> Vec<&SubgraphRecord> {
         self.subgraph_store.all().collect()
+    }
+
+    // -- Hyperedge operations (cfg-gated) --
+
+    /// Create a new hyperedge with the given type, sources, targets, and properties.
+    #[cfg(feature = "hypergraph")]
+    pub fn create_hyperedge(
+        &mut self,
+        rel_type_id: u32,
+        sources: Vec<cypherlite_core::GraphEntity>,
+        targets: Vec<cypherlite_core::GraphEntity>,
+        properties: Vec<(u32, PropertyValue)>,
+    ) -> HyperEdgeId {
+        let id = self.hyperedge_store.create(
+            rel_type_id,
+            sources.clone(),
+            targets.clone(),
+            properties,
+        );
+        // Sync next_hyperedge_id with header
+        self.page_manager.header_mut().next_hyperedge_id = self.hyperedge_store.next_id();
+        // Update reverse index for all source and target participants
+        for entity in sources.iter().chain(targets.iter()) {
+            let raw_id = match entity {
+                cypherlite_core::GraphEntity::Node(nid) => nid.0,
+                cypherlite_core::GraphEntity::Subgraph(sid) => sid.0,
+                #[cfg(feature = "hypergraph")]
+                cypherlite_core::GraphEntity::HyperEdge(hid) => hid.0,
+                #[cfg(feature = "hypergraph")]
+                cypherlite_core::GraphEntity::TemporalRef(nid, _) => nid.0,
+            };
+            self.hyperedge_reverse_index.add(id.0, raw_id);
+        }
+        id
+    }
+
+    /// Get a hyperedge record by ID.
+    #[cfg(feature = "hypergraph")]
+    pub fn get_hyperedge(&self, id: HyperEdgeId) -> Option<&HyperEdgeRecord> {
+        self.hyperedge_store.get(id)
+    }
+
+    /// Delete a hyperedge by ID. Also removes all reverse index entries.
+    #[cfg(feature = "hypergraph")]
+    pub fn delete_hyperedge(
+        &mut self,
+        id: HyperEdgeId,
+    ) -> cypherlite_core::Result<HyperEdgeRecord> {
+        // Remove all reverse index entries first
+        self.hyperedge_reverse_index.remove_all(id.0);
+        self.hyperedge_store
+            .delete(id)
+            .ok_or(cypherlite_core::CypherLiteError::HyperEdgeNotFound(id.0))
+    }
+
+    /// Scan all hyperedge records.
+    #[cfg(feature = "hypergraph")]
+    pub fn scan_hyperedges(&self) -> Vec<&HyperEdgeRecord> {
+        self.hyperedge_store.all().collect()
+    }
+
+    /// Find all hyperedge IDs that an entity participates in (by raw entity ID).
+    #[cfg(feature = "hypergraph")]
+    pub fn hyperedges_for_entity(&self, raw_entity_id: u64) -> Vec<u64> {
+        self.hyperedge_reverse_index.hyperedges_for(raw_entity_id)
     }
 }
 
@@ -1505,6 +1597,137 @@ mod tests {
             // Memberships should be gone
             assert!(engine.get_subgraph_memberships(n1).is_empty());
             assert!(engine.get_subgraph_memberships(n2).is_empty());
+        }
+    }
+
+    // ======================================================================
+    // HH-005: StorageEngine hyperedge integration tests
+    // ======================================================================
+
+    #[cfg(feature = "hypergraph")]
+    mod hypergraph_engine_tests {
+        use super::*;
+        use cypherlite_core::{GraphEntity, HyperEdgeId};
+
+        fn test_engine_hg(dir: &std::path::Path) -> StorageEngine {
+            let config = DatabaseConfig {
+                path: dir.join("test.cyl"),
+                wal_sync_mode: SyncMode::Normal,
+                ..Default::default()
+            };
+            StorageEngine::open(config).expect("open")
+        }
+
+        // HH-005: Create hyperedge via StorageEngine
+        #[test]
+        fn test_storage_engine_create_hyperedge() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_hg(dir.path());
+            let n1 = engine.create_node(vec![], vec![]);
+            let n2 = engine.create_node(vec![], vec![]);
+            let he = engine.create_hyperedge(
+                1,
+                vec![GraphEntity::Node(n1)],
+                vec![GraphEntity::Node(n2)],
+                vec![],
+            );
+            assert_eq!(he, HyperEdgeId(1));
+        }
+
+        // HH-005: Get hyperedge via StorageEngine
+        #[test]
+        fn test_storage_engine_get_hyperedge() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_hg(dir.path());
+            let n1 = engine.create_node(vec![], vec![]);
+            let n2 = engine.create_node(vec![], vec![]);
+            let he = engine.create_hyperedge(
+                5,
+                vec![GraphEntity::Node(n1)],
+                vec![GraphEntity::Node(n2)],
+                vec![(1, PropertyValue::Int64(42))],
+            );
+            let record = engine.get_hyperedge(he).expect("found");
+            assert_eq!(record.id, he);
+            assert_eq!(record.rel_type_id, 5);
+            assert_eq!(record.sources.len(), 1);
+            assert_eq!(record.targets.len(), 1);
+            assert_eq!(record.properties.len(), 1);
+        }
+
+        // HH-005: Get nonexistent hyperedge returns None
+        #[test]
+        fn test_storage_engine_get_nonexistent_hyperedge() {
+            let dir = tempdir().expect("tempdir");
+            let engine = test_engine_hg(dir.path());
+            assert!(engine.get_hyperedge(HyperEdgeId(999)).is_none());
+        }
+
+        // HH-005: Delete hyperedge via StorageEngine
+        #[test]
+        fn test_storage_engine_delete_hyperedge() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_hg(dir.path());
+            let he = engine.create_hyperedge(1, vec![], vec![], vec![]);
+            engine.delete_hyperedge(he).expect("delete");
+            assert!(engine.get_hyperedge(he).is_none());
+        }
+
+        // HH-005: Delete nonexistent hyperedge returns error
+        #[test]
+        fn test_storage_engine_delete_nonexistent_hyperedge() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_hg(dir.path());
+            let result = engine.delete_hyperedge(HyperEdgeId(999));
+            assert!(result.is_err());
+        }
+
+        // HH-005: Reverse index is updated on create/delete
+        #[test]
+        fn test_storage_engine_reverse_index_update() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_hg(dir.path());
+            let n1 = engine.create_node(vec![], vec![]);
+            let n2 = engine.create_node(vec![], vec![]);
+            let he = engine.create_hyperedge(
+                1,
+                vec![GraphEntity::Node(n1)],
+                vec![GraphEntity::Node(n2)],
+                vec![],
+            );
+            // n1 participates in he
+            let hes = engine.hyperedges_for_entity(n1.0);
+            assert_eq!(hes.len(), 1);
+            assert_eq!(hes[0], he.0);
+            // n2 participates in he
+            let hes = engine.hyperedges_for_entity(n2.0);
+            assert_eq!(hes.len(), 1);
+            // Delete hyperedge should clean reverse index
+            engine.delete_hyperedge(he).expect("delete");
+            assert!(engine.hyperedges_for_entity(n1.0).is_empty());
+            assert!(engine.hyperedges_for_entity(n2.0).is_empty());
+        }
+
+        // HH-005: Scan all hyperedges
+        #[test]
+        fn test_storage_engine_scan_hyperedges() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_hg(dir.path());
+            engine.create_hyperedge(1, vec![], vec![], vec![]);
+            engine.create_hyperedge(2, vec![], vec![], vec![]);
+            let all = engine.scan_hyperedges();
+            assert_eq!(all.len(), 2);
+        }
+
+        // HH-005: Header next_hyperedge_id is synced
+        #[test]
+        fn test_storage_engine_header_sync() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine_hg(dir.path());
+            engine.create_hyperedge(1, vec![], vec![], vec![]);
+            engine.create_hyperedge(2, vec![], vec![], vec![]);
+            // After creating 2 hyperedges, next_hyperedge_id should be 3
+            assert_eq!(engine.page_manager.header().next_hyperedge_id, 3);
         }
     }
 }
