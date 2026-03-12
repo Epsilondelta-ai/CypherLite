@@ -23,12 +23,17 @@
 
 ### Quality Metrics
 
-- Tests: 865 passing (0 failures)
+- Tests: 865 passing at completion (0 failures)
 - Clippy: 0 warnings
-- Proptest: 9 property-based tests
+- Proptest: 9 property-based tests (proptest_phase3: 5, proptest_var_length: 4)
 - Benchmarks: 3 criterion benchmarks
 - Lines added: ~9,700
-- Coverage: not measured at completion (sync phase skipped)
+- Integration test files (77 tests): index_ddl(11), merge_clause(7), optional_match(3), query_optimization(17), unwind_clause(4), var_length_paths(17), with_clause(9), proptest_phase3(5), proptest_var_length(4)
+
+### Retrospective Coverage (measured 2026-03-12 on v0.6.0 main)
+
+- Workspace (no-default-features): 1,043 tests, 30,368 lines, **93.43%** line coverage
+- Note: DB-003 features are always compiled (no feature gate), included in base measurement
 
 ### Known Issues
 

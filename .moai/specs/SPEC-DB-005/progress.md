@@ -22,7 +22,12 @@
 ### Quality Metrics
 
 - Total lines added: ~2,339
-- Proptest: temporal edge property-based tests included
+- Proptest: 3 temporal edge property-based tests
 - All prior tests continue to pass
-- Tests: not individually counted at completion (sync phase skipped)
-- Coverage: not measured at completion (sync phase skipped)
+- Integration test files (12 tests): proptest_temporal_edge(3), temporal_edge(9)
+
+### Retrospective Coverage (measured 2026-03-12 on v0.6.0 main)
+
+- Workspace (temporal-edge feature): 1,043 tests, 30,369 lines, **93.43%** line coverage
+- Delta from base: +1 line compiled (temporal-edge code is minimal in compiled output)
+- Note: DB-005 tests are not behind cfg(feature) and are included in base measurement

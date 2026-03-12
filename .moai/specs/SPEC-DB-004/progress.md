@@ -20,12 +20,17 @@
 
 ### Quality Metrics
 
-- Tests: 978 passing (0 failures)
+- Tests: 978 passing at completion (0 failures)
 - Clippy: 0 warnings
 - Proptest: 6 temporal property-based tests
 - Benchmarks: 6 criterion benchmarks (temporal)
 - New tests added: 42 (936 -> 978)
-- Coverage: not measured at completion (sync phase skipped)
+- Integration test files (42 tests): proptest_temporal(6), temporal_query(16), timestamp_tracking(13), version_storage(7)
+
+### Retrospective Coverage (measured 2026-03-12 on v0.6.0 main)
+
+- Workspace (temporal-core feature): 1,043 tests, 30,368 lines, **93.43%** line coverage
+- Note: temporal-core feature gates type compilation only; DB-004 tests are not behind cfg(feature) and are included in base measurement
 
 ### Deferred Items
 
