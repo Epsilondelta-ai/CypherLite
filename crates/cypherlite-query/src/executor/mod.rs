@@ -28,6 +28,10 @@ pub enum Value {
     /// A hyperedge entity reference.
     #[cfg(feature = "hypergraph")]
     Hyperedge(cypherlite_core::HyperEdgeId),
+    /// A node reference at a specific point in time (lazy VersionStore resolution).
+    /// NN-001: TemporalRef resolves to the versioned node state when properties are accessed.
+    #[cfg(feature = "hypergraph")]
+    TemporalNode(NodeId, i64),
 }
 
 /// Convert from storage PropertyValue to executor Value.
@@ -71,6 +75,10 @@ impl TryFrom<Value> for PropertyValue {
             }
             #[cfg(feature = "hypergraph")]
             Value::Hyperedge(_) => {
+                Err("cannot convert graph entity to property".into())
+            }
+            #[cfg(feature = "hypergraph")]
+            Value::TemporalNode(_, _) => {
                 Err("cannot convert graph entity to property".into())
             }
         }
@@ -449,16 +457,22 @@ pub fn execute(
         }
         #[cfg(feature = "hypergraph")]
         LogicalPlan::CreateHyperedgeOp {
+            source,
             variable,
             labels,
             sources,
             targets,
         } => {
+            let source_records = match source {
+                Some(s) => execute(s, engine, params)?,
+                None => vec![Record::new()],
+            };
             execute_create_hyperedge(
                 variable.as_deref(),
                 labels,
                 sources,
                 targets,
+                &source_records,
                 engine,
                 params,
             )
@@ -655,12 +669,15 @@ fn execute_create_hyperedge(
     labels: &[String],
     sources: &[Expression],
     targets: &[Expression],
+    source_records: &[Record],
     engine: &mut StorageEngine,
     params: &Params,
 ) -> Result<Vec<Record>, ExecutionError> {
     use cypherlite_core::{HyperEdgeId, LabelRegistry};
 
-    let empty_record = Record::new();
+    // Use the first source record for variable resolution (from preceding MATCH).
+    // If no source records, use an empty record.
+    let record = source_records.first().cloned().unwrap_or_default();
 
     // Resolve the rel_type_id from the first label.
     let rel_type_id = if let Some(label) = labels.first() {
@@ -670,9 +687,9 @@ fn execute_create_hyperedge(
     };
 
     // Resolve source participants.
-    let resolved_sources = resolve_hyperedge_participants(sources, &empty_record, engine, params)?;
+    let resolved_sources = resolve_hyperedge_participants(sources, &record, engine, params)?;
     // Resolve target participants.
-    let resolved_targets = resolve_hyperedge_participants(targets, &empty_record, engine, params)?;
+    let resolved_targets = resolve_hyperedge_participants(targets, &record, engine, params)?;
 
     // Create the hyperedge (properties come from subsequent SET clause).
     let he_id: HyperEdgeId = engine.create_hyperedge(
@@ -682,8 +699,8 @@ fn execute_create_hyperedge(
         vec![],
     );
 
-    // Return result record.
-    let mut result_record = Record::new();
+    // Return result record with all bindings from source plus the new hyperedge.
+    let mut result_record = record;
     if let Some(var) = variable {
         result_record.insert(var.to_string(), Value::Hyperedge(he_id));
     }

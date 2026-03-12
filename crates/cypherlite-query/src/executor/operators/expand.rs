@@ -49,8 +49,10 @@ pub fn execute_expand(
                                     Value::Hyperedge(*hid)
                                 }
                                 #[cfg(feature = "hypergraph")]
-                                cypherlite_core::GraphEntity::TemporalRef(nid, _) => {
-                                    Value::Node(*nid)
+                                cypherlite_core::GraphEntity::TemporalRef(nid, ts) => {
+                                    // NN-003: Lazy resolution -- store as TemporalNode,
+                                    // resolved when properties are accessed.
+                                    Value::TemporalNode(*nid, *ts)
                                 }
                             };
                             let mut new_record = record.clone();

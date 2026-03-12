@@ -318,10 +318,90 @@ fn eval_property_access(
                 None => Ok(Value::Null),
             }
         }
+        // NN-001, NN-002: Lazy TemporalRef resolution via VersionStore.
+        // When a TemporalNode's properties are accessed, resolve the node state
+        // at the referenced timestamp by walking the version chain.
+        #[cfg(feature = "hypergraph")]
+        Value::TemporalNode(nid, timestamp) => {
+            resolve_temporal_node_property(*nid, *timestamp, prop_name, engine)
+        }
         Value::Null => Ok(Value::Null),
         _ => Err(ExecutionError {
             message: format!("cannot access property '{}' on non-entity value", prop_name),
         }),
+    }
+}
+
+/// NN-001: Resolve a property on a node at a specific point in time.
+///
+/// Walk the VersionStore chain for the given node. Each version is a pre-update
+/// snapshot. Find the version whose `_updated_at` is closest to but not after
+/// `timestamp`. If no suitable version is found, fall back to the current node.
+#[cfg(feature = "hypergraph")]
+fn resolve_temporal_node_property(
+    nid: cypherlite_core::NodeId,
+    timestamp: i64,
+    prop_name: &str,
+    engine: &StorageEngine,
+) -> Result<Value, ExecutionError> {
+    use cypherlite_storage::version::VersionRecord;
+
+    let updated_at_key = engine.catalog().prop_key_id("_updated_at");
+
+    // Get version chain (oldest to newest).
+    let chain = engine.version_store().get_version_chain(nid.0);
+
+    // Find the best version: the latest version whose _updated_at <= timestamp.
+    let mut best_version: Option<&cypherlite_core::NodeRecord> = None;
+    for (_seq, record) in &chain {
+        if let VersionRecord::Node(node_rec) = record {
+            if let Some(ua_key) = updated_at_key {
+                for (k, v) in &node_rec.properties {
+                    if *k == ua_key {
+                        let ua_ms = match v {
+                            cypherlite_core::PropertyValue::DateTime(ms) => *ms,
+                            cypherlite_core::PropertyValue::Int64(ms) => *ms,
+                            _ => continue,
+                        };
+                        if ua_ms <= timestamp {
+                            best_version = Some(node_rec);
+                        }
+                        break;
+                    }
+                }
+            } else {
+                // No _updated_at key registered; use latest version as best guess.
+                best_version = Some(node_rec);
+            }
+        }
+    }
+
+    // Look up the property from the resolved version (or current node as fallback).
+    let prop_key_id = engine.catalog().prop_key_id(prop_name);
+    match prop_key_id {
+        Some(kid) => {
+            if let Some(node_rec) = best_version {
+                // Read property from versioned node record.
+                for (k, v) in &node_rec.properties {
+                    if *k == kid {
+                        return Ok(Value::from(v.clone()));
+                    }
+                }
+                Ok(Value::Null)
+            } else {
+                // Fallback: no matching version, use current node state.
+                let node = engine.get_node(nid).ok_or_else(|| ExecutionError {
+                    message: format!("node {} not found", nid.0),
+                })?;
+                for (k, v) in &node.properties {
+                    if *k == kid {
+                        return Ok(Value::from(v.clone()));
+                    }
+                }
+                Ok(Value::Null)
+            }
+        }
+        None => Ok(Value::Null),
     }
 }
 
@@ -1512,6 +1592,218 @@ mod tests {
             );
             let result = eval(&expr, &record, &engine, &Params::new());
             assert!(result.is_err());
+        }
+
+        // NN-001: TemporalNode property access falls back to current node
+        // when no versions exist.
+        #[test]
+        fn test_temporal_node_no_versions_falls_back_to_current() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let name_key = engine.get_or_create_prop_key("name");
+            let nid = engine.create_node(
+                vec![],
+                vec![(name_key, cypherlite_core::PropertyValue::String("Alice".into()))],
+            );
+
+            let mut record = Record::new();
+            record.insert("n".to_string(), Value::TemporalNode(nid, 999_999));
+            let params = Params::new();
+
+            let result = eval(
+                &Expression::Property(
+                    Box::new(Expression::Variable("n".to_string())),
+                    "name".to_string(),
+                ),
+                &record,
+                &engine,
+                &params,
+            );
+            assert_eq!(result, Ok(Value::String("Alice".into())));
+        }
+
+        // NN-001: TemporalNode property access resolves from VersionStore
+        // when versions exist.
+        #[test]
+        fn test_temporal_node_resolves_versioned_properties() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let name_key = engine.get_or_create_prop_key("name");
+            let updated_at_key = engine.get_or_create_prop_key("_updated_at");
+
+            // Create node with name='Alice' and _updated_at=100
+            let nid = engine.create_node(
+                vec![],
+                vec![
+                    (name_key, cypherlite_core::PropertyValue::String("Alice".into())),
+                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(100)),
+                ],
+            );
+
+            // Update node to name='Bob' and _updated_at=200
+            // This should snapshot the old state (Alice, _updated_at=100)
+            engine
+                .update_node(
+                    nid,
+                    vec![
+                        (name_key, cypherlite_core::PropertyValue::String("Bob".into())),
+                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                    ],
+                )
+                .expect("update");
+
+            // TemporalNode with timestamp=150 should resolve to the version
+            // where _updated_at=100 (Alice), because 100 <= 150.
+            let mut record = Record::new();
+            record.insert("n".to_string(), Value::TemporalNode(nid, 150));
+            let params = Params::new();
+
+            let result = eval(
+                &Expression::Property(
+                    Box::new(Expression::Variable("n".to_string())),
+                    "name".to_string(),
+                ),
+                &record,
+                &engine,
+                &params,
+            );
+            assert_eq!(result, Ok(Value::String("Alice".into())));
+        }
+
+        // NN-002: TemporalNode resolves to latest matching version
+        // when multiple versions exist.
+        #[test]
+        fn test_temporal_node_multiple_versions_picks_latest_match() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let name_key = engine.get_or_create_prop_key("name");
+            let updated_at_key = engine.get_or_create_prop_key("_updated_at");
+
+            // Create: name='v1', _updated_at=100
+            let nid = engine.create_node(
+                vec![],
+                vec![
+                    (name_key, cypherlite_core::PropertyValue::String("v1".into())),
+                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(100)),
+                ],
+            );
+
+            // Update to v2 at time 200 (snapshots v1)
+            engine
+                .update_node(
+                    nid,
+                    vec![
+                        (name_key, cypherlite_core::PropertyValue::String("v2".into())),
+                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                    ],
+                )
+                .expect("update 1");
+
+            // Update to v3 at time 300 (snapshots v2)
+            engine
+                .update_node(
+                    nid,
+                    vec![
+                        (name_key, cypherlite_core::PropertyValue::String("v3".into())),
+                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(300)),
+                    ],
+                )
+                .expect("update 2");
+
+            // At timestamp 250: should resolve to v2 (version with _updated_at=200)
+            let mut record = Record::new();
+            record.insert("n".to_string(), Value::TemporalNode(nid, 250));
+            let params = Params::new();
+
+            let result = eval(
+                &Expression::Property(
+                    Box::new(Expression::Variable("n".to_string())),
+                    "name".to_string(),
+                ),
+                &record,
+                &engine,
+                &params,
+            );
+            assert_eq!(result, Ok(Value::String("v2".into())));
+        }
+
+        // NN-002: TemporalNode with timestamp before all versions
+        // falls back to current node.
+        #[test]
+        fn test_temporal_node_timestamp_before_all_versions() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let name_key = engine.get_or_create_prop_key("name");
+            let updated_at_key = engine.get_or_create_prop_key("_updated_at");
+
+            // Create: name='Alice', _updated_at=200
+            let nid = engine.create_node(
+                vec![],
+                vec![
+                    (name_key, cypherlite_core::PropertyValue::String("Alice".into())),
+                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                ],
+            );
+
+            // Update to name='Bob', _updated_at=300 (snapshots Alice at 200)
+            engine
+                .update_node(
+                    nid,
+                    vec![
+                        (name_key, cypherlite_core::PropertyValue::String("Bob".into())),
+                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(300)),
+                    ],
+                )
+                .expect("update");
+
+            // Timestamp=50 is before the earliest version (_updated_at=200).
+            // No version has _updated_at <= 50, so falls back to current node (Bob).
+            let mut record = Record::new();
+            record.insert("n".to_string(), Value::TemporalNode(nid, 50));
+            let params = Params::new();
+
+            let result = eval(
+                &Expression::Property(
+                    Box::new(Expression::Variable("n".to_string())),
+                    "name".to_string(),
+                ),
+                &record,
+                &engine,
+                &params,
+            );
+            assert_eq!(result, Ok(Value::String("Bob".into())));
+        }
+
+        // NN-003: TemporalNode non-existent property returns Null.
+        #[test]
+        fn test_temporal_node_nonexistent_property() {
+            let dir = tempdir().expect("tempdir");
+            let mut engine = test_engine(dir.path());
+
+            let name_key = engine.get_or_create_prop_key("name");
+            let nid = engine.create_node(
+                vec![],
+                vec![(name_key, cypherlite_core::PropertyValue::String("Alice".into()))],
+            );
+
+            let mut record = Record::new();
+            record.insert("n".to_string(), Value::TemporalNode(nid, 999));
+            let params = Params::new();
+
+            let result = eval(
+                &Expression::Property(
+                    Box::new(Expression::Variable("n".to_string())),
+                    "nonexistent".to_string(),
+                ),
+                &record,
+                &engine,
+                &params,
+            );
+            assert_eq!(result, Ok(Value::Null));
         }
     }
 }

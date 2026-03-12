@@ -69,9 +69,25 @@ impl<'a> SemanticAnalyzer<'a> {
             #[cfg(feature = "subgraph")]
             Clause::CreateSnapshot(_) => Ok(()), // TODO: semantic analysis for snapshot
             #[cfg(feature = "hypergraph")]
-            Clause::CreateHyperedge(_) => Ok(()), // TODO: semantic analysis for hyperedge
+            Clause::CreateHyperedge(hc) => {
+                // Register the hyperedge variable if present
+                if let Some(ref var) = hc.variable {
+                    self.symbols
+                        .define(var.clone(), VariableKind::Expression)
+                        .map_err(|msg| SemanticError { message: msg })?;
+                }
+                Ok(())
+            }
             #[cfg(feature = "hypergraph")]
-            Clause::MatchHyperedge(_) => Ok(()), // TODO: semantic analysis for match hyperedge
+            Clause::MatchHyperedge(mhc) => {
+                // Register the hyperedge variable in scope
+                if let Some(ref var) = mhc.variable {
+                    self.symbols
+                        .define(var.clone(), VariableKind::Expression)
+                        .map_err(|msg| SemanticError { message: msg })?;
+                }
+                Ok(())
+            }
         }
     }
 

@@ -170,6 +170,7 @@ pub enum LogicalPlan {
     /// Create a hyperedge connecting multiple sources to multiple targets.
     #[cfg(feature = "hypergraph")]
     CreateHyperedgeOp {
+        source: Option<Box<LogicalPlan>>,
         variable: Option<String>,
         labels: Vec<String>,
         sources: Vec<Expression>,
@@ -342,7 +343,7 @@ impl<'a> LogicalPlanner<'a> {
             #[cfg(feature = "subgraph")]
             Clause::CreateSnapshot(sc) => self.plan_create_snapshot(sc),
             #[cfg(feature = "hypergraph")]
-            Clause::CreateHyperedge(hc) => Ok(self.plan_create_hyperedge(hc)),
+            Clause::CreateHyperedge(hc) => Ok(self.plan_create_hyperedge(hc, current)),
             #[cfg(feature = "hypergraph")]
             Clause::MatchHyperedge(mhc) => Ok(self.plan_match_hyperedge(mhc)),
         }
@@ -932,8 +933,10 @@ impl<'a> LogicalPlanner<'a> {
     fn plan_create_hyperedge(
         &mut self,
         hc: &crate::parser::ast::CreateHyperedgeClause,
+        current: Option<LogicalPlan>,
     ) -> LogicalPlan {
         LogicalPlan::CreateHyperedgeOp {
+            source: current.map(Box::new),
             variable: hc.variable.clone(),
             labels: hc.labels.clone(),
             sources: hc.sources.clone(),
@@ -1888,11 +1891,13 @@ mod tests {
             );
             match plan {
                 LogicalPlan::CreateHyperedgeOp {
+                    source,
                     variable,
                     labels,
                     sources,
                     targets,
                 } => {
+                    assert!(source.is_none(), "standalone CREATE HYPEREDGE has no source");
                     assert_eq!(variable, Some("h".to_string()));
                     assert_eq!(labels, vec!["GroupMigration".to_string()]);
                     assert_eq!(sources.len(), 2);
