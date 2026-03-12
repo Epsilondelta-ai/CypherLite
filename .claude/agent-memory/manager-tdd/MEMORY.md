@@ -89,8 +89,8 @@
 ## CREATE SNAPSHOT Parser (Phase 6d) Patterns
 - Lexer tokens: `Snapshot` and `From` with `priority = 10` and `(?i)` case-insensitive regex
 - `CreateSnapshotClause` AST: variable, labels, properties, temporal_anchor, from_match, from_return
-- Clause dispatch in parser/mod.rs: check `next1 == Some(&Token::Snapshot)` after CREATE
-- Uses `cfg!(feature = "subgraph")` runtime check + `#[cfg(feature = "subgraph")]` compile-time block
+- Clause dispatch in parser/mod.rs: labeled block `'create_dispatch:` with `#[cfg]` early breaks
+- `plan_create_snapshot()` is `#[cfg(feature = "subgraph")]` gated
 - Syntax: `CREATE SNAPSHOT (var:Label {props}) AT TIME expr FROM MATCH pattern WHERE filter RETURN items`
 
 ## Subgraph Planner/Executor (Phase 6e) Patterns
@@ -112,6 +112,22 @@
 - Criterion benchmarks in `crates/cypherlite-query/benches/subgraph.rs` (5 benchmarks, required-features = ["subgraph"])
 - Aggregate tests use `WITH count(*) AS total RETURN total` pattern (default_agg_name generates `"count(..)"` not `"count(n)"`)
 
+## Hypergraph Query (Phase 7c+7d) Patterns
+- Feature flag chain: `temporal-core -> temporal-edge -> subgraph -> hypergraph`
+- Lexer: `Token::Hyperedge` with `#[cfg(feature = "hypergraph")]`, `priority = 10`, `(?i)` regex
+- AST: `Expression::TemporalRef { node, timestamp }` for `expr AT TIME expr` in participant lists
+- AST: `CreateHyperedgeClause { variable, labels, sources, targets }`, `MatchHyperedgeClause { variable, labels }`
+- Parser: `parse_create_hyperedge_clause()`, `parse_match_hyperedge_clause()`, `parse_hyperedge_participant_list()`, `parse_hyperedge_participant()`
+- Parser CREATE dispatch: labeled block `'create_dispatch:` with `#[cfg]` early `break` (not `cfg!()` runtime check)
+- "TO" is parsed as identifier via `expect_to_keyword()` helper (not a reserved keyword)
+- `LogicalPlan::HyperEdgeScan { variable }` and `LogicalPlan::CreateHyperedgeOp { variable, labels, sources, targets }`
+- `Value::Hyperedge(HyperEdgeId)` - TryFrom returns error "cannot convert graph entity to property"
+- `execute_create_hyperedge()` resolves participants via `resolve_hyperedge_participants()` helper
+- `resolve_hyperedge_participants()` handles TemporalRef -> GraphEntity::TemporalRef, Value::Node/Subgraph/Hyperedge -> GraphEntity variants
+- Virtual `:INVOLVES` expansion in expand.rs: checks `Value::Hyperedge` before `:CONTAINS`, iterates sources+targets
+- Property access on `Value::Hyperedge` in eval.rs follows same pattern as Subgraph (get_hyperedge + prop_key_id lookup)
+- Properties on hyperedge come from SET clause, not inline in CREATE HYPEREDGE syntax
+
 ## Test Counts
 - Baseline before Group R: 729 tests
 - After Group R: 791 tests (+62 new)
@@ -129,3 +145,7 @@
 - After Phase 6f (default): 1043 tests (unchanged)
 - After Phase 6f (subgraph): 1144 tests (+8 new: 4 proptest, 4 integration edge cases)
 - Version bumped to 0.6.0 across all three crates
+- After Phase 7a+7b (default): 1043 tests (unchanged, storage layer only)
+- After Phase 7a+7b (hypergraph): ~1196 tests (storage + core hyperedge tests)
+- After Phase 7c+7d (default): 1043 tests (unchanged, all query code cfg-gated)
+- After Phase 7c+7d (all-features): 1226 tests (+30 new query-layer tests: 5 lexer, 8 parser, 2 planner, 5 value, 3 scan, 4 involves, 3 eval)
