@@ -1,9 +1,9 @@
 ---
 id: SPEC-DB-005
 version: "0.5.0"
-status: draft
+status: completed
 created: "2026-03-11"
-updated: "2026-03-11"
+updated: "2026-03-12"
 author: epsilondelta
 priority: P0
 tags: [temporal-edge, feature-flags, edge-validity, at-time-edge, temporal-filter]

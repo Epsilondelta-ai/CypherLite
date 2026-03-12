@@ -1,9 +1,9 @@
 ---
 id: SPEC-DB-006
 version: "0.6.0"
-status: draft
+status: completed
 created: "2026-03-11"
-updated: "2026-03-11"
+updated: "2026-03-12"
 author: epsilondelta
 priority: P1
 tags: [subgraph, snapshot, temporal-subgraph, named-graph, metagraph]
