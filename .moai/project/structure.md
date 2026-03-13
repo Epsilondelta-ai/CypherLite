@@ -64,6 +64,7 @@ CypherLite/
 
 **주요 포함 내용**:
 - `NodeId`, `EdgeId`, `PropertyValue` 등 핵심 도메인 타입
+- `HyperEdgeId`, `HyperEdgeRecord`, `GraphEntity` 확장 타입 (hypergraph 피처)
 - `CypherLiteError` 에러 타입 계층 (thiserror 기반)
 - `Config` 구조체: 페이지 크기, 캐시 크기, WAL 설정 등
 - `Transaction` 트레이트: 트랜잭션 경계 추상화
@@ -119,9 +120,17 @@ crates/cypherlite-storage/
     │   ├── node_store.rs      # 노드 B-트리
     │   ├── edge_store.rs      # 엣지 B-트리
     │   └── property_store.rs  # 프로퍼티 저장
-    └── transaction/
-        ├── mod.rs
-        └── mvcc.rs            # MVCC 구현
+    ├── transaction/
+    │   ├── mod.rs
+    │   └── mvcc.rs            # MVCC 구현
+    ├── version/
+    │   └── mod.rs             # 버전 스토어 (노드/엣지 이력)
+    ├── subgraph/
+    │   ├── mod.rs             # 서브그래프 스토어
+    │   └── membership.rs     # 멤버십 인덱스
+    └── hyperedge/
+        ├── mod.rs             # 하이퍼엣지 스토어 (BTreeMap)
+        └── reverse_index.rs  # 역방향 인덱스 (엔티티→하이퍼엣지)
 ```
 
 ---
@@ -160,7 +169,11 @@ crates/cypherlite-query/
     │   └── cost_model.rs      # 비용 모델
     └── executor/
         ├── mod.rs
-        └── operators.rs       # 물리 연산자 구현
+        ├── eval.rs             # 표현식 평가, 시간 참조 해결
+        └── operators/
+            ├── mod.rs
+            ├── expand.rs       # 관계 확장 (:INVOLVES 가상 관계 포함)
+            └── hyperedge_scan.rs # 하이퍼엣지 스캔 연산자
 ```
 
 ---

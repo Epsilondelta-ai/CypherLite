@@ -1,6 +1,6 @@
 [package]
 name = "cypherlite-query"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.84"
 
@@ -34,3 +34,8 @@ harness = false
 name = "subgraph"
 harness = false
 required-features = ["subgraph"]
+
+[[bench]]
+name = "hypergraph"
+harness = false
+required-features = ["hypergraph"]

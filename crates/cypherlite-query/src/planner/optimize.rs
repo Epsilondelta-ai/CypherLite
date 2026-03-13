@@ -193,6 +193,22 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
         | plan @ LogicalPlan::DropIndex { .. } => plan,
         #[cfg(feature = "subgraph")]
         plan @ LogicalPlan::SubgraphScan { .. } => plan,
+        #[cfg(feature = "hypergraph")]
+        plan @ LogicalPlan::HyperEdgeScan { .. } => plan,
+        #[cfg(feature = "hypergraph")]
+        LogicalPlan::CreateHyperedgeOp {
+            source,
+            variable,
+            labels,
+            sources,
+            targets,
+        } => LogicalPlan::CreateHyperedgeOp {
+            source: source.map(|s| Box::new(apply_rules(*s))),
+            variable,
+            labels,
+            sources,
+            targets,
+        },
         #[cfg(feature = "subgraph")]
         LogicalPlan::CreateSnapshotOp {
             variable,

@@ -10,7 +10,10 @@ pub const PAGE_SIZE: usize = 4096;
 pub const MAGIC: u32 = 0x4359_4C54;
 
 /// Current database format version.
-#[cfg(feature = "subgraph")]
+#[cfg(feature = "hypergraph")]
+pub const FORMAT_VERSION: u32 = 5;
+/// Current database format version.
+#[cfg(all(feature = "subgraph", not(feature = "hypergraph")))]
 pub const FORMAT_VERSION: u32 = 4;
 /// Current database format version.
 #[cfg(not(feature = "subgraph"))]
@@ -143,6 +146,14 @@ pub struct DatabaseHeader {
     /// Added in format version 4, stored at bytes 56-63.
     #[cfg(feature = "subgraph")]
     pub next_subgraph_id: u64,
+    /// Root page of the hyperedge store (0 = no hyperedge store allocated).
+    /// Added in format version 5, stored at bytes 64-71.
+    #[cfg(feature = "hypergraph")]
+    pub hyperedge_root_page: u64,
+    /// Next available hyperedge ID.
+    /// Added in format version 5, stored at bytes 72-79.
+    #[cfg(feature = "hypergraph")]
+    pub next_hyperedge_id: u64,
 }
 
 impl DatabaseHeader {
@@ -153,6 +164,9 @@ impl DatabaseHeader {
     /// Feature flag bit: subgraph is enabled.
     #[cfg(feature = "subgraph")]
     pub const FLAG_SUBGRAPH: u32 = 1 << 2;
+    /// Feature flag bit: hypergraph is enabled.
+    #[cfg(feature = "hypergraph")]
+    pub const FLAG_HYPERGRAPH: u32 = 1 << 3;
 
     /// Creates a new database header with default values.
     /// Feature flags are set based on compiled Cargo features.
@@ -171,6 +185,10 @@ impl DatabaseHeader {
             subgraph_root_page: 0,
             #[cfg(feature = "subgraph")]
             next_subgraph_id: 1,
+            #[cfg(feature = "hypergraph")]
+            hyperedge_root_page: 0,
+            #[cfg(feature = "hypergraph")]
+            next_hyperedge_id: 1,
         }
     }
 
@@ -186,6 +204,10 @@ impl DatabaseHeader {
         #[cfg(feature = "subgraph")]
         {
             flags |= Self::FLAG_SUBGRAPH;
+        }
+        #[cfg(feature = "hypergraph")]
+        {
+            flags |= Self::FLAG_HYPERGRAPH;
         }
         flags
     }
@@ -209,6 +231,12 @@ impl DatabaseHeader {
         {
             page[48..56].copy_from_slice(&self.subgraph_root_page.to_le_bytes());
             page[56..64].copy_from_slice(&self.next_subgraph_id.to_le_bytes());
+        }
+        // HH-005: hyperedge_root_page at bytes 64-71, next_hyperedge_id at bytes 72-79
+        #[cfg(feature = "hypergraph")]
+        {
+            page[64..72].copy_from_slice(&self.hyperedge_root_page.to_le_bytes());
+            page[72..80].copy_from_slice(&self.next_hyperedge_id.to_le_bytes());
         }
         page
     }
@@ -254,6 +282,25 @@ impl DatabaseHeader {
             0 // Auto-migrate: pre-v4 databases have no subgraph IDs
         };
 
+        // HH-005: hyperedge fields at bytes 64-71, 72-79 (v5+)
+        #[cfg(feature = "hypergraph")]
+        let hyperedge_root_page = if version >= 5 {
+            u64::from_le_bytes([
+                page[64], page[65], page[66], page[67], page[68], page[69], page[70], page[71],
+            ])
+        } else {
+            0 // Auto-migrate: pre-v5 databases have no hyperedge store
+        };
+
+        #[cfg(feature = "hypergraph")]
+        let next_hyperedge_id = if version >= 5 {
+            u64::from_le_bytes([
+                page[72], page[73], page[74], page[75], page[76], page[77], page[78], page[79],
+            ])
+        } else {
+            0 // Auto-migrate: pre-v5 databases have no hyperedge IDs
+        };
+
         Self {
             magic: u32::from_le_bytes([page[0], page[1], page[2], page[3]]),
             version,
@@ -272,6 +319,10 @@ impl DatabaseHeader {
             subgraph_root_page,
             #[cfg(feature = "subgraph")]
             next_subgraph_id,
+            #[cfg(feature = "hypergraph")]
+            hyperedge_root_page,
+            #[cfg(feature = "hypergraph")]
+            next_hyperedge_id,
         }
     }
 }
@@ -483,6 +534,7 @@ mod tests {
         use super::*;
 
         // GG-003: FORMAT_VERSION bumped to 4 when subgraph feature is compiled
+        #[cfg(not(feature = "hypergraph"))]
         #[test]
         fn test_format_version_is_4() {
             assert_eq!(FORMAT_VERSION, 4);
@@ -530,6 +582,7 @@ mod tests {
 
         // GG-003: Full header roundtrip with all fields
         #[test]
+        #[allow(clippy::needless_update)]
         fn test_database_header_v4_full_roundtrip() {
             let hdr = DatabaseHeader {
                 magic: MAGIC,
@@ -545,6 +598,7 @@ mod tests {
                     | DatabaseHeader::FLAG_SUBGRAPH,
                 subgraph_root_page: 15,
                 next_subgraph_id: 200,
+                ..DatabaseHeader::new()
             };
             let page = hdr.to_page();
             let decoded = DatabaseHeader::from_page(&page);
@@ -591,6 +645,139 @@ mod tests {
         fn test_compiled_feature_flags_includes_subgraph() {
             let flags = DatabaseHeader::compiled_feature_flags();
             assert!(flags & DatabaseHeader::FLAG_SUBGRAPH != 0);
+        }
+    }
+
+    // ======================================================================
+    // HH-005: DatabaseHeader v5 with hyperedge fields
+    // ======================================================================
+
+    #[cfg(feature = "hypergraph")]
+    mod hypergraph_header_tests {
+        use super::*;
+
+        // HH-005: FORMAT_VERSION bumped to 5 when hypergraph feature is compiled
+        #[test]
+        fn test_format_version_is_5_with_hypergraph() {
+            assert_eq!(FORMAT_VERSION, 5);
+        }
+
+        // HH-005: FLAG_HYPERGRAPH is bit 3 (0x08)
+        #[test]
+        fn test_flag_hypergraph_constant() {
+            assert_eq!(DatabaseHeader::FLAG_HYPERGRAPH, 0x08);
+        }
+
+        // HH-005: New header fields have correct defaults
+        #[test]
+        fn test_database_header_new_hypergraph_fields() {
+            let hdr = DatabaseHeader::new();
+            assert_eq!(hdr.hyperedge_root_page, 0);
+            assert_eq!(hdr.next_hyperedge_id, 1);
+            // Should include FLAG_HYPERGRAPH in compiled flags
+            assert!(hdr.feature_flags & DatabaseHeader::FLAG_HYPERGRAPH != 0);
+        }
+
+        // HH-005: hyperedge_root_page roundtrip
+        #[test]
+        fn test_hyperedge_root_page_roundtrip() {
+            let hdr = DatabaseHeader {
+                hyperedge_root_page: 77,
+                ..DatabaseHeader::new()
+            };
+            let page = hdr.to_page();
+            let decoded = DatabaseHeader::from_page(&page);
+            assert_eq!(decoded.hyperedge_root_page, 77);
+        }
+
+        // HH-005: next_hyperedge_id roundtrip
+        #[test]
+        fn test_next_hyperedge_id_roundtrip() {
+            let hdr = DatabaseHeader {
+                next_hyperedge_id: 500,
+                ..DatabaseHeader::new()
+            };
+            let page = hdr.to_page();
+            let decoded = DatabaseHeader::from_page(&page);
+            assert_eq!(decoded.next_hyperedge_id, 500);
+        }
+
+        // HH-005: Full header roundtrip with all v5 fields
+        #[test]
+        fn test_database_header_v5_full_roundtrip() {
+            let hdr = DatabaseHeader {
+                magic: MAGIC,
+                version: FORMAT_VERSION,
+                page_count: 100,
+                root_node_page: 5,
+                root_edge_page: 10,
+                next_node_id: 42,
+                next_edge_id: 99,
+                version_store_root_page: 7,
+                feature_flags: DatabaseHeader::FLAG_TEMPORAL_CORE
+                    | DatabaseHeader::FLAG_TEMPORAL_EDGE
+                    | DatabaseHeader::FLAG_SUBGRAPH
+                    | DatabaseHeader::FLAG_HYPERGRAPH,
+                subgraph_root_page: 15,
+                next_subgraph_id: 200,
+                hyperedge_root_page: 25,
+                next_hyperedge_id: 300,
+            };
+            let page = hdr.to_page();
+            let decoded = DatabaseHeader::from_page(&page);
+            assert_eq!(decoded.magic, MAGIC);
+            assert_eq!(decoded.version, FORMAT_VERSION);
+            assert_eq!(decoded.page_count, 100);
+            assert_eq!(decoded.root_node_page, 5);
+            assert_eq!(decoded.root_edge_page, 10);
+            assert_eq!(decoded.next_node_id, 42);
+            assert_eq!(decoded.next_edge_id, 99);
+            assert_eq!(decoded.version_store_root_page, 7);
+            assert_eq!(decoded.subgraph_root_page, 15);
+            assert_eq!(decoded.next_subgraph_id, 200);
+            assert_eq!(decoded.hyperedge_root_page, 25);
+            assert_eq!(decoded.next_hyperedge_id, 300);
+            assert_eq!(
+                decoded.feature_flags,
+                DatabaseHeader::FLAG_TEMPORAL_CORE
+                    | DatabaseHeader::FLAG_TEMPORAL_EDGE
+                    | DatabaseHeader::FLAG_SUBGRAPH
+                    | DatabaseHeader::FLAG_HYPERGRAPH
+            );
+        }
+
+        // HH-005: v4->v5 auto-migration (hyperedge fields default to 0)
+        #[test]
+        fn test_database_header_v4_to_v5_migration() {
+            let mut page = [0u8; PAGE_SIZE];
+            page[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+            page[4..8].copy_from_slice(&4u32.to_le_bytes()); // version 4
+            page[8..12].copy_from_slice(&FIRST_DATA_PAGE.to_le_bytes());
+            page[20..28].copy_from_slice(&1u64.to_le_bytes());
+            page[28..36].copy_from_slice(&1u64.to_le_bytes());
+            // v4 feature_flags at bytes 44-47
+            let flags = DatabaseHeader::FLAG_TEMPORAL_CORE
+                | DatabaseHeader::FLAG_TEMPORAL_EDGE
+                | DatabaseHeader::FLAG_SUBGRAPH;
+            page[44..48].copy_from_slice(&flags.to_le_bytes());
+            // v4 subgraph fields
+            page[48..56].copy_from_slice(&10u64.to_le_bytes()); // subgraph_root_page
+            page[56..64].copy_from_slice(&5u64.to_le_bytes()); // next_subgraph_id
+            // bytes 64-79 are zeros (no hyperedge fields in v4)
+
+            let decoded = DatabaseHeader::from_page(&page);
+            assert_eq!(decoded.version, 4);
+            assert_eq!(decoded.subgraph_root_page, 10);
+            assert_eq!(decoded.next_subgraph_id, 5);
+            assert_eq!(decoded.hyperedge_root_page, 0); // auto-migrated
+            assert_eq!(decoded.next_hyperedge_id, 0); // auto-migrated
+        }
+
+        // HH-005: compiled_feature_flags includes FLAG_HYPERGRAPH
+        #[test]
+        fn test_compiled_feature_flags_includes_hypergraph() {
+            let flags = DatabaseHeader::compiled_feature_flags();
+            assert!(flags & DatabaseHeader::FLAG_HYPERGRAPH != 0);
         }
     }
 }

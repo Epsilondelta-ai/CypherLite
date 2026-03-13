@@ -335,6 +335,137 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a CREATE HYPEREDGE clause (MM-001).
+    ///
+    /// Grammar: CREATE HYPEREDGE (var:Label) FROM (expr [AT TIME expr], ...) TO (expr [AT TIME expr], ...)
+    /// The parser has already consumed CREATE and is positioned at HYPEREDGE.
+    #[cfg(feature = "hypergraph")]
+    pub fn parse_create_hyperedge_clause(&mut self) -> Result<CreateHyperedgeClause, ParseError> {
+        self.expect(&Token::Hyperedge)?;
+
+        // Parse (var:Label) pattern
+        self.expect(&Token::LParen)?;
+
+        // Optional variable
+        let variable = if self.check(&Token::Colon) {
+            None
+        } else {
+            match self.peek() {
+                Some(Token::Ident(_) | Token::BacktickIdent(_)) => Some(self.expect_ident()?),
+                _ => None,
+            }
+        };
+
+        // Labels
+        let mut labels = Vec::new();
+        while self.eat(&Token::Colon) {
+            labels.push(self.expect_ident()?);
+        }
+
+        self.expect(&Token::RParen)?;
+
+        // FROM (participant_list)
+        self.expect(&Token::From)?;
+        let sources = self.parse_hyperedge_participant_list()?;
+
+        // TO (participant_list) -- TO is parsed as an Ident since it's not a keyword
+        self.expect_to_keyword()?;
+        let targets = self.parse_hyperedge_participant_list()?;
+
+        Ok(CreateHyperedgeClause {
+            variable,
+            labels,
+            sources,
+            targets,
+        })
+    }
+
+    /// Parse a MATCH HYPEREDGE clause (MM-003).
+    ///
+    /// Grammar: MATCH HYPEREDGE (var:Label)
+    /// The parser has already consumed MATCH and is positioned at HYPEREDGE.
+    #[cfg(feature = "hypergraph")]
+    pub fn parse_match_hyperedge_clause(&mut self) -> Result<MatchHyperedgeClause, ParseError> {
+        self.expect(&Token::Hyperedge)?;
+
+        self.expect(&Token::LParen)?;
+
+        // Optional variable
+        let variable = if self.check(&Token::Colon) {
+            None
+        } else {
+            match self.peek() {
+                Some(Token::Ident(_) | Token::BacktickIdent(_)) => {
+                    // Check if next token is : or ) to determine if this is a variable
+                    Some(self.expect_ident()?)
+                }
+                _ => None,
+            }
+        };
+
+        // Labels
+        let mut labels = Vec::new();
+        while self.eat(&Token::Colon) {
+            labels.push(self.expect_ident()?);
+        }
+
+        self.expect(&Token::RParen)?;
+
+        Ok(MatchHyperedgeClause { variable, labels })
+    }
+
+    /// Parse a parenthesized comma-separated list of hyperedge participants.
+    /// Each participant is an expression, optionally followed by AT TIME expr.
+    #[cfg(feature = "hypergraph")]
+    fn parse_hyperedge_participant_list(&mut self) -> Result<Vec<Expression>, ParseError> {
+        self.expect(&Token::LParen)?;
+        let mut participants = Vec::new();
+
+        if !self.check(&Token::RParen) {
+            participants.push(self.parse_hyperedge_participant()?);
+            while self.eat(&Token::Comma) {
+                participants.push(self.parse_hyperedge_participant()?);
+            }
+        }
+
+        self.expect(&Token::RParen)?;
+        Ok(participants)
+    }
+
+    /// Parse a single hyperedge participant: expression [AT TIME expression].
+    #[cfg(feature = "hypergraph")]
+    fn parse_hyperedge_participant(&mut self) -> Result<Expression, ParseError> {
+        // Parse the base expression (usually a variable reference).
+        // We use expect_ident() for simplicity since participants are variable refs.
+        let name = self.expect_ident()?;
+        let base_expr = Expression::Variable(name);
+
+        // Check for optional AT TIME temporal modifier.
+        if self.check(&Token::At) {
+            self.advance(); // consume AT
+            self.expect(&Token::Time)?;
+            let timestamp = self.parse_expression()?;
+            Ok(Expression::TemporalRef {
+                node: Box::new(base_expr),
+                timestamp: Box::new(timestamp),
+            })
+        } else {
+            Ok(base_expr)
+        }
+    }
+
+    /// Expect a "TO" keyword, which is parsed as an identifier since it's not a reserved token.
+    #[cfg(feature = "hypergraph")]
+    fn expect_to_keyword(&mut self) -> Result<(), ParseError> {
+        match self.tokens.get(self.pos) {
+            Some((Token::Ident(name), _)) if name.eq_ignore_ascii_case("TO") => {
+                self.pos += 1;
+                Ok(())
+            }
+            _ => Err(self.error("expected TO keyword")),
+        }
+    }
+
     /// Parse an optional temporal predicate after MATCH pattern.
     ///
     /// Grammar:
@@ -1043,6 +1174,139 @@ mod tests {
 
         assert_eq!(uc.expr, Expression::ListLiteral(vec![]));
         assert_eq!(uc.variable, "x");
+    }
+
+    // ======================================================================
+    // MM-001: parse_create_hyperedge_clause (cfg-gated)
+    // ======================================================================
+
+    #[cfg(feature = "hypergraph")]
+    mod hyperedge_tests {
+        use super::*;
+        use crate::parser::parse_query;
+
+        // MM-001: basic CREATE HYPEREDGE with FROM ... TO ...
+        #[test]
+        fn hyperedge_basic() {
+            let (tokens, input) = make_parser(
+                "CREATE HYPEREDGE (h:GroupMigration) FROM (a, b) TO (c)",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let hc = p.parse_create_hyperedge_clause().expect("should parse");
+
+            assert_eq!(hc.variable, Some("h".to_string()));
+            assert_eq!(hc.labels, vec!["GroupMigration".to_string()]);
+            assert_eq!(hc.sources.len(), 2);
+            assert_eq!(hc.sources[0], Expression::Variable("a".to_string()));
+            assert_eq!(hc.sources[1], Expression::Variable("b".to_string()));
+            assert_eq!(hc.targets.len(), 1);
+            assert_eq!(hc.targets[0], Expression::Variable("c".to_string()));
+        }
+
+        // MM-002: CREATE HYPEREDGE with AT TIME temporal reference
+        #[test]
+        fn hyperedge_with_temporal_ref() {
+            let (tokens, input) = make_parser(
+                "CREATE HYPEREDGE (h:TemporalShift) FROM (person AT TIME 1000) TO (city2)",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let hc = p.parse_create_hyperedge_clause().expect("should parse");
+
+            assert_eq!(hc.variable, Some("h".to_string()));
+            assert_eq!(hc.labels, vec!["TemporalShift".to_string()]);
+            assert_eq!(hc.sources.len(), 1);
+            // The source should be a TemporalRef expression
+            assert!(matches!(
+                &hc.sources[0],
+                Expression::TemporalRef { .. }
+            ));
+            if let Expression::TemporalRef { node, timestamp } = &hc.sources[0] {
+                assert_eq!(**node, Expression::Variable("person".to_string()));
+                assert_eq!(**timestamp, Expression::Literal(Literal::Integer(1000)));
+            }
+            assert_eq!(hc.targets.len(), 1);
+        }
+
+        // MM-001: CREATE HYPEREDGE with no variable (anonymous)
+        #[test]
+        fn hyperedge_no_variable() {
+            let (tokens, input) = make_parser(
+                "CREATE HYPEREDGE (:Migration) FROM (a) TO (b)",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let hc = p.parse_create_hyperedge_clause().expect("should parse");
+
+            assert!(hc.variable.is_none());
+            assert_eq!(hc.labels, vec!["Migration".to_string()]);
+        }
+
+        // MM-001: CREATE HYPEREDGE with multiple labels
+        #[test]
+        fn hyperedge_multiple_sources_and_targets() {
+            let (tokens, input) = make_parser(
+                "CREATE HYPEREDGE (h:Foo) FROM (a, b, c) TO (d, e)",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume CREATE
+            let hc = p.parse_create_hyperedge_clause().expect("should parse");
+
+            assert_eq!(hc.sources.len(), 3);
+            assert_eq!(hc.targets.len(), 2);
+        }
+
+        // MM-003: MATCH HYPEREDGE basic
+        #[test]
+        fn match_hyperedge_basic() {
+            let (tokens, input) = make_parser(
+                "MATCH HYPEREDGE (h:GroupMigration)",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume MATCH
+            let mhc = p.parse_match_hyperedge_clause().expect("should parse");
+
+            assert_eq!(mhc.variable, Some("h".to_string()));
+            assert_eq!(mhc.labels, vec!["GroupMigration".to_string()]);
+        }
+
+        // MM-003: MATCH HYPEREDGE no label
+        #[test]
+        fn match_hyperedge_no_label() {
+            let (tokens, input) = make_parser(
+                "MATCH HYPEREDGE (h)",
+            );
+            let mut p = Parser::new(&tokens, &input);
+            p.advance(); // consume MATCH
+            let mhc = p.parse_match_hyperedge_clause().expect("should parse");
+
+            assert_eq!(mhc.variable, Some("h".to_string()));
+            assert!(mhc.labels.is_empty());
+        }
+
+        // MM-001: Integration test - full CREATE HYPEREDGE query
+        #[test]
+        fn query_create_hyperedge_full() {
+            let q = parse_query(
+                "CREATE HYPEREDGE (h:GroupMigration) FROM (a, b) TO (c)",
+            )
+            .expect("should parse");
+            assert_eq!(q.clauses.len(), 1);
+            assert!(matches!(&q.clauses[0], Clause::CreateHyperedge(_)));
+        }
+
+        // MM-003: Integration test - full MATCH HYPEREDGE query
+        #[test]
+        fn query_match_hyperedge_full() {
+            let q = parse_query(
+                "MATCH HYPEREDGE (h:GroupMigration) RETURN h",
+            )
+            .expect("should parse");
+            assert_eq!(q.clauses.len(), 2);
+            assert!(matches!(&q.clauses[0], Clause::MatchHyperedge(_)));
+            assert!(matches!(&q.clauses[1], Clause::Return(_)));
+        }
     }
 
     // ======================================================================

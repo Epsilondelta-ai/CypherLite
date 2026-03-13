@@ -111,6 +111,11 @@ pub enum CypherLiteError {
     #[cfg(feature = "subgraph")]
     #[error("Feature requires subgraph support (compile with --features subgraph)")]
     FeatureRequiresSubgraph,
+
+    /// The requested hyperedge does not exist.
+    #[cfg(feature = "hypergraph")]
+    #[error("Hyperedge not found: {0}")]
+    HyperEdgeNotFound(u64),
 }
 
 /// Convenience type alias for CypherLite operations.
