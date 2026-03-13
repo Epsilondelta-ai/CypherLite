@@ -10,8 +10,8 @@
 
 | 항목 | 버전 | 선택 이유 |
 |------|------|-----------|
-| **Rust** | 1.70+ | 메모리 안전성 + 제로 코스트 추상화 + FFI 지원 |
-| **Rust Edition** | 2021 | 최신 언어 기능 (GAT, const generics) 활용 |
+| **Rust** | 1.92+ | 메모리 안전성 + 제로 코스트 추상화 + FFI 지원 |
+| **Rust Edition** | 2024 | 최신 언어 기능 (GAT, const generics) 활용 |
 
 ### 스토리지 및 동시성 크레이트
 
@@ -366,36 +366,43 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 
 ---
 
-### Phase 5 - v0.5: FFI 바인딩 (Weeks 19-22)
+### Phase 5 - v0.5: 시간 차원 (Temporal Core)
 
-**목표**: 다언어 바인딩 제공
+**목표**: 시간 인식 쿼리 기본 지원
 
 **구현 항목**:
-- C FFI 인터페이스 + cbindgen으로 헤더 생성
-- PyO3 Python 바인딩
-- neon Node.js 바인딩
+- `AT TIME` 쿼리 파싱 및 실행
+- 버전 스토어 (노드/엣지 이력 관리)
+- 시간 범위 쿼리 지원
 
 ---
 
-### Phase 6 - v1.0: 프로덕션 강화 (Weeks 23-28)
+### Phase 6 - v0.6: 서브그래프 엔티티
 
-**목표**: 안정적인 첫 정식 릴리즈
+**목표**: 서브그래프 스토어 및 중첩 그래프 구조 지원
 
 **구현 항목**:
-- libFuzzer/AFL 기반 퍼징 테스트
-- criterion 벤치마크 스위트 완성
-- 공개 문서 사이트 (Nextra 기반)
-- crates.io 패키징 및 배포
+- SubgraphStore, MembershipIndex
+- CREATE/MATCH SNAPSHOT 구문
+- SubgraphScan 연산자, 가상 :CONTAINS 관계
+- DatabaseHeader v4
 
-**성능 최종 검증**:
-```
-단순 매치 (p99) < 10ms       ✓
-2홉 패턴 (p99) < 50ms        ✓
-바이너리 크기 < 50MB          ✓
-메모리 (100만 노드) < 500MB   ✓
-순차 쓰기 > 1,000 노드/초     ✓
-동시 읽기 (4스레드) > 50K/초  ✓
-```
+---
+
+### Phase 7 - v0.7: 네이티브 하이퍼엣지 (현재)
+
+**목표**: N:M 관계의 네이티브 하이퍼엣지 지원
+
+**구현 항목**:
+- HyperEdgeStore (BTreeMap 기반, 자동 증분 ID)
+- HyperEdgeReverseIndex (양방향 매핑)
+- DatabaseHeader v5 (hyperedge_root_page, next_hyperedge_id)
+- CREATE/MATCH HYPEREDGE 구문 (Lexer → Parser → Planner → Executor)
+- 가상 :INVOLVES 관계 확장
+- TemporalRef 지연 해결 (VersionStore 체인 워크)
+- GraphEntity 확장 (HyperEdge, TemporalRef 변형)
+
+**테스트 결과**: 1,241 테스트 통과, 93.56% 커버리지
 
 ---
 

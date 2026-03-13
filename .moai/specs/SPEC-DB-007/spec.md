@@ -1,9 +1,10 @@
 ---
 id: SPEC-DB-007
 version: "0.7.0"
-status: approved
+status: completed
 created: "2026-03-11"
 updated: "2026-03-12"
+completed: "2026-03-12"
 author: epsilondelta
 priority: P2
 tags: [hypergraph, hyperedge, temporal-reference, multi-node-edge, graph-entity]
@@ -420,3 +421,47 @@ Files with `_ =>` catch-all arms that will silently handle new Value variants:
 | Compilation (subgraph feature) | SAFE — hypergraph code excluded |
 | Test compatibility (PP-001) | SAFE — existing 306 tests unaffected |
 | DatabaseHeader migration | SAFE — v4 → v5 auto-migration follows v3 → v4 pattern |
+
+---
+
+## 10. 구현 노트 (Implementation Notes)
+
+### 10.1 구현 요약
+
+SPEC-DB-007에 정의된 네이티브 하이퍼엣지 기능이 원래 명세의 범위에서 벗어남 없이 완전히 구현되었습니다.
+
+### 10.2 구현 단계
+
+**Phase 7a+7b — 코어 스토리지**
+- `HyperEdgeStore`: BTreeMap 기반, 자동 증분 ID (u64) 방식으로 구현
+- `HyperEdgeReverseIndex`: 엔티티 → 하이퍼엣지 양방향 매핑
+- `DatabaseHeader v5`: `hyperedge_root_page`, `next_hyperedge_id` 필드 추가
+- `GraphEntity` 열거형 확장: `HyperEdge(HyperEdgeId)`, `TemporalRef { node_id, timestamp }` 변형 추가
+- `HyperEdgeId`, `HyperEdgeRecord` 핵심 타입 정의 (`cypherlite-core`)
+
+**Phase 7c+7d — 쿼리 지원**
+- Lexer: `HYPEREDGE`, `INVOLVES`, `AT TIME` 키워드 토큰 추가
+- Parser: `CREATE HYPEREDGE`, `MATCH HYPEREDGE ... INVOLVES` 구문 파싱
+- Planner: `CreateHyperedge`, `HyperEdgeScan` 논리 계획 노드 생성
+- Executor: `HyperEdgeScanOperator` 구현, 가상 `:INVOLVES` 관계 확장
+- `TemporalRef` 지연 해결: `VersionStore` 체인 워크를 통한 과거 시점 노드 참조
+
+**Phase 7e — 시간 차원 및 품질**
+- `TemporalRef` 완전 통합: `Node AT TIME timestamp` 구문으로 하이퍼엣지 내 시간 참조 지원
+- proptest 기반 속성 기반 테스트 추가
+- criterion 벤치마크 스위트 업데이트
+- 통합 테스트 보강
+
+### 10.3 테스트 결과
+
+| 항목 | 결과 |
+|------|------|
+| 전체 테스트 수 | 1,241개 |
+| 통과율 | 100% |
+| 코드 커버리지 | 93.56% |
+| 목표 커버리지 | 85% |
+
+### 10.4 버전 및 범위
+
+- **릴리즈 버전**: v0.7.0
+- **범위 이탈**: 없음 — 원래 SPEC 명세와 완전히 일치하는 구현 완료

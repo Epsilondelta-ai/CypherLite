@@ -35,7 +35,7 @@ pub fn execute_expand(
                 if let Some(he_rec) = engine.get_hyperedge(*he_id) {
                     // Filter by rel_type if specified
                     let type_matches = rel_type_id
-                        .map_or(true, |tid| he_rec.rel_type_id == tid);
+                        .is_none_or(|tid| he_rec.rel_type_id == tid);
                     if type_matches {
                         // Emit all source and target participant nodes
                         for entity in he_rec.sources.iter().chain(he_rec.targets.iter()) {
