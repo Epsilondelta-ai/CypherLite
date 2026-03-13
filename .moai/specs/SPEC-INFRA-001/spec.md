@@ -2,7 +2,7 @@
 id: SPEC-INFRA-001
 title: "CI/CD Pipeline - GitHub Actions"
 version: "0.9.0"
-status: approved
+status: completed
 created: "2026-03-13"
 updated: "2026-03-13"
 author: epsilondelta

@@ -406,7 +406,7 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 
 ---
 
-### Phase 8 - v0.8: 인라인 프로퍼티 필터 (현재)
+### Phase 8 - v0.8: 인라인 프로퍼티 필터
 
 **목표**: MATCH 패턴의 인라인 프로퍼티 필터 `{key: value}` 버그 수정
 
@@ -420,6 +420,20 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 - 버전 범프 0.7.0 → 0.8.0
 
 **테스트 결과**: 1,256 테스트 통과 (+15 신규)
+
+---
+
+### Phase 9 - v0.9: CI/CD Pipeline (현재)
+
+**목표**: GitHub Actions 기반 자동 품질 게이트 구축
+
+**구현 항목**:
+- 6개 병렬 CI Job: check (clippy + fmt), msrv (Rust 1.84), test, coverage (85% gate), security (cargo-audit), bench-check
+- Swatinem/rust-cache@v2 캐싱, dtolnay/rust-toolchain 툴체인 관리
+- taiki-e/install-action으로 cargo-llvm-cov, cargo-audit 사전 빌드 바이너리 설치
+- Dependabot: Cargo + GitHub Actions 의존성 주 1회 자동 확인
+
+**생성 파일**: .github/workflows/ci.yml, .github/dependabot.yml
 
 ---
 
