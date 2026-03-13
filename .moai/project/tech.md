@@ -389,7 +389,7 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 
 ---
 
-### Phase 7 - v0.7: 네이티브 하이퍼엣지 (현재)
+### Phase 7 - v0.7: 네이티브 하이퍼엣지
 
 **목표**: N:M 관계의 네이티브 하이퍼엣지 지원
 
@@ -403,6 +403,23 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 - GraphEntity 확장 (HyperEdge, TemporalRef 변형)
 
 **테스트 결과**: 1,241 테스트 통과, 93.56% 커버리지
+
+---
+
+### Phase 8 - v0.8: 인라인 프로퍼티 필터 (현재)
+
+**목표**: MATCH 패턴의 인라인 프로퍼티 필터 `{key: value}` 버그 수정
+
+**구현 항목**:
+- `build_inline_property_predicate()` 유틸리티 함수 추출 (Subgraph 경로에서 공통화)
+- NodeScan 경로: `first_node.properties` 필터 삽입 (Phase 8a)
+- Expand 경로: `rel.properties` 및 `target_node.properties` 필터 삽입 (Phase 8b)
+- VarLengthExpand 및 Subgraph Expand 경로 동일 적용 (Phase 8b)
+- 익명 관계 처리: `_anon_rel` 내부 변수 자동 할당
+- Proptest 속성 기반 테스트 4개 + Criterion 벤치마크 3개 (Phase 8c)
+- 버전 범프 0.7.0 → 0.8.0
+
+**테스트 결과**: 1,256 테스트 통과 (+15 신규)
 
 ---
 

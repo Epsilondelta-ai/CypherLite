@@ -499,6 +499,31 @@ impl<'a> LogicalPlanner<'a> {
         Ok(plan)
     }
 
+    /// Build a combined equality predicate from inline property filters.
+    ///
+    /// Given `{name: 'Alice', age: 30}`, produces:
+    /// `variable.name = 'Alice' AND variable.age = 30`
+    ///
+    /// Returns `None` for an empty property list (or `None` input).
+    fn build_inline_property_predicate(
+        variable: &str,
+        properties: &[(String, Expression)],
+    ) -> Option<Expression> {
+        properties
+            .iter()
+            .map(|(key, val_expr)| {
+                Expression::BinaryOp(
+                    BinaryOp::Eq,
+                    Box::new(Expression::Property(
+                        Box::new(Expression::Variable(variable.to_string())),
+                        key.clone(),
+                    )),
+                    Box::new(val_expr.clone()),
+                )
+            })
+            .reduce(|acc, p| Expression::BinaryOp(BinaryOp::And, Box::new(acc), Box::new(p)))
+    }
+
     fn plan_pattern_chain(&mut self, chain: &PatternChain) -> Result<LogicalPlan, PlanError> {
         let mut elements = chain.elements.iter();
 
@@ -530,23 +555,7 @@ impl<'a> LogicalPlanner<'a> {
 
             // Apply inline property filters as a Filter node.
             if let Some(ref props) = first_node.properties {
-                let predicates: Vec<Expression> = props
-                    .iter()
-                    .map(|(key, val_expr)| {
-                        Expression::BinaryOp(
-                            BinaryOp::Eq,
-                            Box::new(Expression::Property(
-                                Box::new(Expression::Variable(variable.clone())),
-                                key.clone(),
-                            )),
-                            Box::new(val_expr.clone()),
-                        )
-                    })
-                    .collect();
-                let predicate = predicates.into_iter().reduce(|acc, p| {
-                    Expression::BinaryOp(BinaryOp::And, Box::new(acc), Box::new(p))
-                });
-                if let Some(pred) = predicate {
+                if let Some(pred) = Self::build_inline_property_predicate(&variable, props) {
                     plan = LogicalPlan::Filter {
                         source: Box::new(plan),
                         predicate: pred,
@@ -575,7 +584,6 @@ impl<'a> LogicalPlanner<'a> {
                 };
 
                 let src_var = Self::extract_src_var(&plan);
-                let rel_var = rel.variable.clone();
                 let target_var = target_node.variable.clone().unwrap_or_default();
 
                 let rel_type_id = rel
@@ -583,15 +591,49 @@ impl<'a> LogicalPlanner<'a> {
                     .first()
                     .map(|name| self.registry.get_or_create_rel_type(name));
 
+                // Assign internal variable for anonymous relationships with properties.
+                let has_rel_props = rel.properties.as_ref().is_some_and(|p| !p.is_empty());
+                let rel_var = if rel.variable.is_some() {
+                    rel.variable.clone()
+                } else if has_rel_props {
+                    Some("_anon_rel".to_string())
+                } else {
+                    None
+                };
+
                 plan = LogicalPlan::Expand {
                     source: Box::new(plan),
                     src_var,
-                    rel_var,
-                    target_var,
+                    rel_var: rel_var.clone(),
+                    target_var: target_var.clone(),
                     rel_type_id,
                     direction: rel.direction,
                     temporal_filter: None,
                 };
+
+                // Apply inline property filter on the relationship.
+                if let Some(ref props) = rel.properties {
+                    if let Some(ref rv) = rel_var {
+                        if let Some(pred) = Self::build_inline_property_predicate(rv, props) {
+                            plan = LogicalPlan::Filter {
+                                source: Box::new(plan),
+                                predicate: pred,
+                            };
+                        }
+                    }
+                }
+
+                // Apply inline property filter on the target node.
+                if let Some(ref props) = target_node.properties {
+                    if let Some(pred) =
+                        Self::build_inline_property_predicate(&target_var, props)
+                    {
+                        plan = LogicalPlan::Filter {
+                            source: Box::new(plan),
+                            predicate: pred,
+                        };
+                    }
+                }
             }
 
             return Ok(plan);
@@ -602,7 +644,17 @@ impl<'a> LogicalPlanner<'a> {
             .first()
             .map(|name| self.registry.get_or_create_label(name));
 
-        let mut plan = LogicalPlan::NodeScan { variable, label_id, limit: None };
+        let mut plan = LogicalPlan::NodeScan { variable: variable.clone(), label_id, limit: None };
+
+        // Apply inline property filters as a Filter node (e.g., {name: 'Alice'}).
+        if let Some(ref props) = first_node.properties {
+            if let Some(pred) = Self::build_inline_property_predicate(&variable, props) {
+                plan = LogicalPlan::Filter {
+                    source: Box::new(plan),
+                    predicate: pred,
+                };
+            }
+        }
 
         // Process remaining relationship + node pairs.
         while let Some(rel_elem) = elements.next() {
@@ -625,13 +677,23 @@ impl<'a> LogicalPlanner<'a> {
             };
 
             let src_var = Self::extract_src_var(&plan);
-            let rel_var = rel.variable.clone();
             let target_var = target_node.variable.clone().unwrap_or_default();
 
             let rel_type_id = rel
                 .rel_types
                 .first()
                 .map(|name| self.registry.get_or_create_rel_type(name));
+
+            // If the relationship has inline properties but no explicit variable,
+            // assign an internal variable so the edge is bound for predicate filtering.
+            let has_rel_props = rel.properties.as_ref().is_some_and(|p| !p.is_empty());
+            let rel_var = if rel.variable.is_some() {
+                rel.variable.clone()
+            } else if has_rel_props {
+                Some("_anon_rel".to_string())
+            } else {
+                None
+            };
 
             if rel.min_hops.is_some() {
                 // Variable-length path: use VarLengthExpand
@@ -640,8 +702,8 @@ impl<'a> LogicalPlanner<'a> {
                 plan = LogicalPlan::VarLengthExpand {
                     source: Box::new(plan),
                     src_var,
-                    rel_var,
-                    target_var,
+                    rel_var: rel_var.clone(),
+                    target_var: target_var.clone(),
                     rel_type_id,
                     direction: rel.direction,
                     min_hops: min,
@@ -652,12 +714,34 @@ impl<'a> LogicalPlanner<'a> {
                 plan = LogicalPlan::Expand {
                     source: Box::new(plan),
                     src_var,
-                    rel_var,
-                    target_var,
+                    rel_var: rel_var.clone(),
+                    target_var: target_var.clone(),
                     rel_type_id,
                     direction: rel.direction,
                     temporal_filter: None,
                 };
+            }
+
+            // Apply inline property filter on the relationship (e.g., {since: 2020}).
+            if let Some(ref props) = rel.properties {
+                if let Some(ref rv) = rel_var {
+                    if let Some(pred) = Self::build_inline_property_predicate(rv, props) {
+                        plan = LogicalPlan::Filter {
+                            source: Box::new(plan),
+                            predicate: pred,
+                        };
+                    }
+                }
+            }
+
+            // Apply inline property filter on the target node (e.g., (b:Person {name: 'Bob'})).
+            if let Some(ref props) = target_node.properties {
+                if let Some(pred) = Self::build_inline_property_predicate(&target_var, props) {
+                    plan = LogicalPlan::Filter {
+                        source: Box::new(plan),
+                        predicate: pred,
+                    };
+                }
             }
         }
 

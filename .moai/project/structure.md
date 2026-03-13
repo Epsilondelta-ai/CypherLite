@@ -174,6 +174,11 @@ crates/cypherlite-query/
             ├── mod.rs
             ├── expand.rs       # 관계 확장 (:INVOLVES 가상 관계 포함)
             └── hyperedge_scan.rs # 하이퍼엣지 스캔 연산자
+tests/
+    ├── inline_property_filter.rs  # 인라인 프로퍼티 필터 통합 테스트 (Phase 8a+8b)
+    └── proptest_inline_filter.rs  # 인라인 프로퍼티 필터 속성 기반 테스트 (Phase 8c)
+benches/
+    └── inline_filter.rs           # 인라인 프로퍼티 필터 성능 벤치마크 (Phase 8c)
 ```
 
 ---
