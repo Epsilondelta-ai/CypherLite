@@ -499,6 +499,31 @@ impl<'a> LogicalPlanner<'a> {
         Ok(plan)
     }
 
+    /// Build a combined equality predicate from inline property filters.
+    ///
+    /// Given `{name: 'Alice', age: 30}`, produces:
+    /// `variable.name = 'Alice' AND variable.age = 30`
+    ///
+    /// Returns `None` for an empty property list (or `None` input).
+    fn build_inline_property_predicate(
+        variable: &str,
+        properties: &[(String, Expression)],
+    ) -> Option<Expression> {
+        properties
+            .iter()
+            .map(|(key, val_expr)| {
+                Expression::BinaryOp(
+                    BinaryOp::Eq,
+                    Box::new(Expression::Property(
+                        Box::new(Expression::Variable(variable.to_string())),
+                        key.clone(),
+                    )),
+                    Box::new(val_expr.clone()),
+                )
+            })
+            .reduce(|acc, p| Expression::BinaryOp(BinaryOp::And, Box::new(acc), Box::new(p)))
+    }
+
     fn plan_pattern_chain(&mut self, chain: &PatternChain) -> Result<LogicalPlan, PlanError> {
         let mut elements = chain.elements.iter();
 
@@ -530,23 +555,7 @@ impl<'a> LogicalPlanner<'a> {
 
             // Apply inline property filters as a Filter node.
             if let Some(ref props) = first_node.properties {
-                let predicates: Vec<Expression> = props
-                    .iter()
-                    .map(|(key, val_expr)| {
-                        Expression::BinaryOp(
-                            BinaryOp::Eq,
-                            Box::new(Expression::Property(
-                                Box::new(Expression::Variable(variable.clone())),
-                                key.clone(),
-                            )),
-                            Box::new(val_expr.clone()),
-                        )
-                    })
-                    .collect();
-                let predicate = predicates.into_iter().reduce(|acc, p| {
-                    Expression::BinaryOp(BinaryOp::And, Box::new(acc), Box::new(p))
-                });
-                if let Some(pred) = predicate {
+                if let Some(pred) = Self::build_inline_property_predicate(&variable, props) {
                     plan = LogicalPlan::Filter {
                         source: Box::new(plan),
                         predicate: pred,
@@ -602,7 +611,17 @@ impl<'a> LogicalPlanner<'a> {
             .first()
             .map(|name| self.registry.get_or_create_label(name));
 
-        let mut plan = LogicalPlan::NodeScan { variable, label_id, limit: None };
+        let mut plan = LogicalPlan::NodeScan { variable: variable.clone(), label_id, limit: None };
+
+        // Apply inline property filters as a Filter node (e.g., {name: 'Alice'}).
+        if let Some(ref props) = first_node.properties {
+            if let Some(pred) = Self::build_inline_property_predicate(&variable, props) {
+                plan = LogicalPlan::Filter {
+                    source: Box::new(plan),
+                    predicate: pred,
+                };
+            }
+        }
 
         // Process remaining relationship + node pairs.
         while let Some(rel_elem) = elements.next() {
