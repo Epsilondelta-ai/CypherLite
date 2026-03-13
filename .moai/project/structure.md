@@ -13,6 +13,11 @@ CypherLite/
 ├── README.md                     # 프로젝트 소개 및 빠른 시작 가이드
 ├── LICENSE                       # 오픈소스 라이센스
 │
+├── .github/
+│   ├── workflows/
+│   │   └── ci.yml                # CI/CD 파이프라인 (6 병렬 Job)
+│   └── dependabot.yml            # 의존성 자동 업데이트
+│
 ├── crates/                       # 멀티 크레이트 워크스페이스
 │   ├── cypherlite-core/          # 공통 타입, 에러 처리, 설정
 │   ├── cypherlite-storage/       # 파일 형식, 페이지 관리, WAL, B-트리
