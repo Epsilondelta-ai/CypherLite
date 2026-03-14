@@ -1590,7 +1590,7 @@ mod tests {
                 Box::new(Expression::Variable("he".to_string())),
                 "weight".to_string(),
             );
-            let result = eval(&expr, &record, &engine, &Params::new());
+            let result = eval(&expr, &record, &engine, &Params::new(), &());
             assert_eq!(result, Ok(Value::Int64(42)));
         }
 
@@ -1610,7 +1610,7 @@ mod tests {
                 Box::new(Expression::Variable("he".to_string())),
                 "nonexistent".to_string(),
             );
-            let result = eval(&expr, &record, &engine, &Params::new());
+            let result = eval(&expr, &record, &engine, &Params::new(), &());
             assert_eq!(result, Ok(Value::Null));
         }
 
@@ -1627,7 +1627,7 @@ mod tests {
                 Box::new(Expression::Variable("he".to_string())),
                 "weight".to_string(),
             );
-            let result = eval(&expr, &record, &engine, &Params::new());
+            let result = eval(&expr, &record, &engine, &Params::new(), &());
             assert!(result.is_err());
         }
 
