@@ -1,7 +1,7 @@
 // ProjectOp: evaluates RETURN expressions, applies column aliases
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup};
 use crate::parser::ast::{Expression, ReturnItem};
 use cypherlite_storage::StorageEngine;
 
@@ -12,6 +12,7 @@ pub fn execute_project(
     items: &[ReturnItem],
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let mut results = Vec::new();
 
@@ -19,7 +20,7 @@ pub fn execute_project(
         let mut projected = Record::new();
 
         for item in items {
-            let value = eval(&item.expr, record, engine, params)?;
+            let value = eval(&item.expr, record, engine, params, scalar_fns)?;
             let column_name = match &item.alias {
                 Some(alias) => alias.clone(),
                 None => expr_display_name(&item.expr),
@@ -92,7 +93,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_project(vec![record], &items, &engine, &params);
+        let result = execute_project(vec![record], &items, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -115,7 +116,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_project(vec![record], &items, &engine, &params);
+        let result = execute_project(vec![record], &items, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert!(records[0].contains_key("n"));
@@ -142,7 +143,7 @@ mod tests {
         ];
 
         let params = Params::new();
-        let result = execute_project(vec![record], &items, &engine, &params);
+        let result = execute_project(vec![record], &items, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].get("x"), Some(&Value::Int64(1)));

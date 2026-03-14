@@ -116,6 +116,31 @@ pub enum CypherLiteError {
     #[cfg(feature = "hypergraph")]
     #[error("Hyperedge not found: {0}")]
     HyperEdgeNotFound(u64),
+
+    /// A generic plugin error occurred.
+    #[cfg(feature = "plugin")]
+    #[error("Plugin error: {0}")]
+    PluginError(String),
+
+    /// A requested custom function was not found.
+    #[cfg(feature = "plugin")]
+    #[error("Function not found: {0}")]
+    FunctionNotFound(String),
+
+    /// An unsupported index type was requested.
+    #[cfg(feature = "plugin")]
+    #[error("Unsupported index type: {0}")]
+    UnsupportedIndexType(String),
+
+    /// An unsupported serialization format was requested.
+    #[cfg(feature = "plugin")]
+    #[error("Unsupported format: {0}")]
+    UnsupportedFormat(String),
+
+    /// An error occurred during trigger execution.
+    #[cfg(feature = "plugin")]
+    #[error("Trigger error: {0}")]
+    TriggerError(String),
 }
 
 /// Convenience type alias for CypherLite operations.
@@ -271,10 +296,7 @@ mod tests {
     #[test]
     fn test_invalid_datetime_format_error() {
         let err = CypherLiteError::InvalidDateTimeFormat("bad input".to_string());
-        assert_eq!(
-            format!("{err}"),
-            "Invalid datetime format: bad input"
-        );
+        assert_eq!(format!("{err}"), "Invalid datetime format: bad input");
     }
 
     // AA-T4: FeatureIncompatible error

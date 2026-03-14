@@ -641,9 +641,7 @@ mod tests {
                     Expression::Literal(Literal::Integer(1)),
                     Expression::Literal(Literal::Integer(2)),
                 ]),
-                Expression::ListLiteral(vec![
-                    Expression::Literal(Literal::Integer(3)),
-                ]),
+                Expression::ListLiteral(vec![Expression::Literal(Literal::Integer(3)),]),
             ])
         );
     }

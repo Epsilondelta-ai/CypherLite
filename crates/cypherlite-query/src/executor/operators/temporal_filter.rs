@@ -48,9 +48,10 @@ pub fn is_edge_temporally_valid(
 
     // Get _valid_from timestamp (accepts both DateTime and Int64 for flexibility)
     let valid_from = valid_from_key.and_then(|key| {
-        edge.properties.iter().find(|(k, _)| *k == key).and_then(|(_, v)| {
-            extract_millis(v)
-        })
+        edge.properties
+            .iter()
+            .find(|(k, _)| *k == key)
+            .and_then(|(_, v)| extract_millis(v))
     });
 
     // Edges without _valid_from are always valid (backward compat)
@@ -61,9 +62,10 @@ pub fn is_edge_temporally_valid(
 
     // Get _valid_to timestamp (optional, accepts both DateTime and Int64)
     let valid_to = valid_to_key.and_then(|key| {
-        edge.properties.iter().find(|(k, _)| *k == key).and_then(|(_, v)| {
-            extract_millis(v)
-        })
+        edge.properties
+            .iter()
+            .find(|(k, _)| *k == key)
+            .and_then(|(_, v)| extract_millis(v))
     });
 
     match filter {

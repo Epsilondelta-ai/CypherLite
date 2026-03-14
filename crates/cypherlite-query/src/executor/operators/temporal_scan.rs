@@ -5,7 +5,7 @@
 
 use crate::executor::eval::eval;
 use crate::executor::operators::create::{SYSTEM_PROP_CREATED_AT, SYSTEM_PROP_UPDATED_AT};
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::Expression;
 use cypherlite_core::{LabelRegistry, NodeId, PropertyValue};
 use cypherlite_storage::version::VersionRecord;
@@ -27,10 +27,11 @@ pub fn execute_as_of_scan(
     timestamp_expr: &Expression,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     // Evaluate the timestamp expression using an empty record for context
     let empty_record = Record::new();
-    let target_val = eval(timestamp_expr, &empty_record, engine, params)?;
+    let target_val = eval(timestamp_expr, &empty_record, engine, params, scalar_fns)?;
     let target_ms = match target_val {
         Value::DateTime(ms) => ms,
         Value::Int64(ms) => ms,
@@ -54,13 +55,7 @@ pub fn execute_as_of_scan(
 
         for (var_name, value) in record {
             if let Value::Node(node_id) = value {
-                match find_node_state_at(
-                    *node_id,
-                    target_ms,
-                    updated_key,
-                    created_key,
-                    engine,
-                ) {
+                match find_node_state_at(*node_id, target_ms, updated_key, created_key, engine) {
                     Some(TemporalNodeState::Current) => {
                         // Current state is valid at target time; keep the record as-is
                     }
@@ -111,10 +106,11 @@ pub fn execute_temporal_range_scan(
     end_expr: &Expression,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let empty_record = Record::new();
-    let start_val = eval(start_expr, &empty_record, engine, params)?;
-    let end_val = eval(end_expr, &empty_record, engine, params)?;
+    let start_val = eval(start_expr, &empty_record, engine, params, scalar_fns)?;
+    let end_val = eval(end_expr, &empty_record, engine, params, scalar_fns)?;
 
     let start_ms = match start_val {
         Value::DateTime(ms) => ms,
@@ -210,8 +206,8 @@ fn find_node_state_at(
     }
 
     // Get current node's _updated_at
-    let current_updated = get_timestamp_prop(&current.properties, updated_key)
-        .unwrap_or(current_created);
+    let current_updated =
+        get_timestamp_prop(&current.properties, updated_key).unwrap_or(current_created);
 
     // If current state's _updated_at <= target_ms, current state is valid
     if current_updated <= target_ms {

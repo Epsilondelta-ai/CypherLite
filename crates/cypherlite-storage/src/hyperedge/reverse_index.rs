@@ -95,10 +95,7 @@ impl HyperEdgeReverseIndex {
 
     /// List all participant raw IDs for a hyperedge.
     pub fn participants_for(&self, hyperedge_id: u64) -> Vec<u64> {
-        self.forward
-            .get(&hyperedge_id)
-            .cloned()
-            .unwrap_or_default()
+        self.forward.get(&hyperedge_id).cloned().unwrap_or_default()
     }
 }
 

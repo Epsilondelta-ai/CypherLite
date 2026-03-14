@@ -1,7 +1,7 @@
 // IndexScanOp: looks up nodes via property index, falls back to label scan + filter
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::Expression;
 use cypherlite_core::{LabelRegistry, PropertyValue};
 use cypherlite_storage::StorageEngine;
@@ -17,10 +17,11 @@ pub fn execute_index_scan(
     lookup_value: &Expression,
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     // Evaluate the lookup value expression
     let empty_record = Record::new();
-    let val = eval(lookup_value, &empty_record, engine, params)?;
+    let val = eval(lookup_value, &empty_record, engine, params, scalar_fns)?;
 
     // Convert Value to PropertyValue for index lookup
     let pv = PropertyValue::try_from(val).map_err(|e| ExecutionError {
@@ -103,7 +104,10 @@ mod tests {
         for (nid, props) in &nodes {
             for (pk, v) in props {
                 if *pk == name_key {
-                    if let Some(idx) = engine.index_manager_mut().find_index_mut(person_label, name_key) {
+                    if let Some(idx) = engine
+                        .index_manager_mut()
+                        .find_index_mut(person_label, name_key)
+                    {
                         idx.insert(v, *nid);
                     }
                 }
@@ -112,7 +116,7 @@ mod tests {
 
         let params = Params::new();
         let lookup = Expression::Literal(Literal::String("Alice".into()));
-        let records = execute_index_scan("n", person_label, "name", &lookup, &engine, &params)
+        let records = execute_index_scan("n", person_label, "name", &lookup, &engine, &params, &())
             .expect("should succeed");
 
         assert_eq!(records.len(), 1);
@@ -140,7 +144,7 @@ mod tests {
         // No index created - should still work via fallback
         let params = Params::new();
         let lookup = Expression::Literal(Literal::String("Alice".into()));
-        let records = execute_index_scan("n", person_label, "name", &lookup, &engine, &params)
+        let records = execute_index_scan("n", person_label, "name", &lookup, &engine, &params, &())
             .expect("should succeed");
 
         assert_eq!(records.len(), 1);
@@ -156,8 +160,16 @@ mod tests {
 
         let params = Params::new();
         let lookup = Expression::Literal(Literal::String("Alice".into()));
-        let records = execute_index_scan("n", person_label, "nonexistent", &lookup, &engine, &params)
-            .expect("should succeed");
+        let records = execute_index_scan(
+            "n",
+            person_label,
+            "nonexistent",
+            &lookup,
+            &engine,
+            &params,
+            &(),
+        )
+        .expect("should succeed");
 
         assert!(records.is_empty());
     }

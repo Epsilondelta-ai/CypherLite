@@ -36,9 +36,7 @@ fn bench_match_no_inline_filter(c: &mut Criterion) {
 
     c.bench_function("match_no_inline_filter_200", |b| {
         b.iter(|| {
-            let result = db
-                .execute("MATCH (n:Target) RETURN n.name")
-                .expect("match");
+            let result = db.execute("MATCH (n:Target) RETURN n.name").expect("match");
             assert_eq!(result.rows.len(), 200);
         });
     });

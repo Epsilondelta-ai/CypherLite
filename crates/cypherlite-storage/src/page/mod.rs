@@ -763,7 +763,7 @@ mod tests {
             // v4 subgraph fields
             page[48..56].copy_from_slice(&10u64.to_le_bytes()); // subgraph_root_page
             page[56..64].copy_from_slice(&5u64.to_le_bytes()); // next_subgraph_id
-            // bytes 64-79 are zeros (no hyperedge fields in v4)
+                                                               // bytes 64-79 are zeros (no hyperedge fields in v4)
 
             let decoded = DatabaseHeader::from_page(&page);
             assert_eq!(decoded.version, 4);

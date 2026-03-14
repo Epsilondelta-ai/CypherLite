@@ -1,7 +1,7 @@
 // AggregateOp: count, sum, avg, min, max, collect
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::Expression;
 use crate::planner::AggregateFunc;
 use cypherlite_storage::StorageEngine;
@@ -14,6 +14,7 @@ pub fn execute_aggregate(
     aggregates: &[(String, AggregateFunc)],
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     if source_records.is_empty() {
         // For empty input with aggregates, return one row with zero counts
@@ -38,7 +39,7 @@ pub fn execute_aggregate(
     for record in &source_records {
         let key_values: Vec<Value> = group_keys
             .iter()
-            .map(|expr| eval(expr, record, engine, params))
+            .map(|expr| eval(expr, record, engine, params, scalar_fns))
             .collect::<Result<_, _>>()?;
 
         // Find existing group
@@ -135,7 +136,7 @@ mod tests {
         let aggregates = vec![("count(*)".to_string(), AggregateFunc::CountStar)];
 
         let params = Params::new();
-        let result = execute_aggregate(vec![r1, r2, r3], &[], &aggregates, &engine, &params);
+        let result = execute_aggregate(vec![r1, r2, r3], &[], &aggregates, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].get("count(*)"), Some(&Value::Int64(3)));
@@ -148,7 +149,7 @@ mod tests {
 
         let aggregates = vec![("count(*)".to_string(), AggregateFunc::CountStar)];
         let params = Params::new();
-        let result = execute_aggregate(vec![], &[], &aggregates, &engine, &params);
+        let result = execute_aggregate(vec![], &[], &aggregates, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].get("count(*)"), Some(&Value::Int64(0)));
@@ -170,8 +171,14 @@ mod tests {
         let aggregates = vec![("cnt".to_string(), AggregateFunc::CountStar)];
 
         let params = Params::new();
-        let result =
-            execute_aggregate(vec![r1, r2, r3], &group_keys, &aggregates, &engine, &params);
+        let result = execute_aggregate(
+            vec![r1, r2, r3],
+            &group_keys,
+            &aggregates,
+            &engine,
+            &params,
+            &(),
+        );
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 2);
 

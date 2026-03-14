@@ -59,11 +59,7 @@ fn inline_filter_multiple_properties() {
     let result = db
         .execute("MATCH (n:Person {name: 'Alice', age: 30}) RETURN n.name, n.age")
         .expect("query");
-    assert_eq!(
-        result.rows.len(),
-        1,
-        "should return only Alice with age 30"
-    );
+    assert_eq!(result.rows.len(), 1, "should return only Alice with age 30");
     assert_eq!(
         result.rows[0].get_as::<String>("n.name"),
         Some("Alice".to_string())
@@ -81,7 +77,8 @@ fn inline_filter_null_property() {
 
     db.execute("CREATE (:Person {name: 'Alice', email: 'alice@example.com'})")
         .expect("create alice");
-    db.execute("CREATE (:Person {name: 'Bob'})").expect("create bob");
+    db.execute("CREATE (:Person {name: 'Bob'})")
+        .expect("create bob");
 
     let result = db
         .execute("MATCH (n:Person {email: null}) RETURN n.name")
@@ -126,13 +123,19 @@ fn inline_filter_empty_map() {
     let dir = tempdir().expect("tempdir");
     let mut db = test_db(dir.path());
 
-    db.execute("CREATE (:Person {name: 'Alice'})").expect("create");
-    db.execute("CREATE (:Person {name: 'Bob'})").expect("create");
+    db.execute("CREATE (:Person {name: 'Alice'})")
+        .expect("create");
+    db.execute("CREATE (:Person {name: 'Bob'})")
+        .expect("create");
 
     let result = db
         .execute("MATCH (n:Person {}) RETURN n.name")
         .expect("query");
-    assert_eq!(result.rows.len(), 2, "empty map should return all Person nodes");
+    assert_eq!(
+        result.rows.len(),
+        2,
+        "empty map should return all Person nodes"
+    );
 }
 
 /// No match: MATCH (n:Person {name: 'NonExistent'}) should return empty result.
@@ -141,8 +144,10 @@ fn inline_filter_no_match() {
     let dir = tempdir().expect("tempdir");
     let mut db = test_db(dir.path());
 
-    db.execute("CREATE (:Person {name: 'Alice'})").expect("create");
-    db.execute("CREATE (:Person {name: 'Bob'})").expect("create");
+    db.execute("CREATE (:Person {name: 'Alice'})")
+        .expect("create");
+    db.execute("CREATE (:Person {name: 'Bob'})")
+        .expect("create");
 
     let result = db
         .execute("MATCH (n:Person {name: 'NonExistent'}) RETURN n.name")
@@ -169,10 +174,8 @@ fn inline_filter_rel_single_property() {
     let mut db = test_db(dir.path());
 
     // Two edges with different 'since' values (variables required in CREATE chains).
-    db.execute(
-        "CREATE (a:Src1 {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:Dst1 {name: 'Bob'})",
-    )
-    .expect("create chain1");
+    db.execute("CREATE (a:Src1 {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:Dst1 {name: 'Bob'})")
+        .expect("create chain1");
     db.execute(
         "CREATE (a:Src2 {name: 'Alice'})-[:KNOWS {since: 2015}]->(b:Dst2 {name: 'Charlie'})",
     )
@@ -188,7 +191,11 @@ fn inline_filter_rel_single_property() {
     let result = db
         .execute("MATCH (a)-[r:KNOWS {since: 2020}]->(b) RETURN r.since, b.name")
         .expect("query");
-    assert_eq!(result.rows.len(), 1, "should return only the edge with since=2020");
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "should return only the edge with since=2020"
+    );
     assert_eq!(result.rows[0].get_as::<i64>("r.since"), Some(2020));
     assert_eq!(
         result.rows[0].get_as::<String>("b.name"),
@@ -262,21 +269,15 @@ fn inline_filter_source_and_rel_combined() {
     let mut db = test_db(dir.path());
 
     // Alice -> Bob with since=2020
-    db.execute(
-        "CREATE (a:S1 {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:T1 {name: 'Bob'})",
-    )
-    .expect("create chain1");
+    db.execute("CREATE (a:S1 {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:T1 {name: 'Bob'})")
+        .expect("create chain1");
     // Dave -> Bob with since=2020
-    db.execute(
-        "CREATE (a:S1 {name: 'Dave'})-[:KNOWS {since: 2020}]->(b:T2 {name: 'Bob'})",
-    )
-    .expect("create chain2");
+    db.execute("CREATE (a:S1 {name: 'Dave'})-[:KNOWS {since: 2020}]->(b:T2 {name: 'Bob'})")
+        .expect("create chain2");
 
     // Filter source by name=Alice AND rel by since=2020 -- only Alice path
     let result = db
-        .execute(
-            "MATCH (a:S1 {name: 'Alice'})-[r:KNOWS {since: 2020}]->(b) RETURN r.since, b.name",
-        )
+        .execute("MATCH (a:S1 {name: 'Alice'})-[r:KNOWS {since: 2020}]->(b) RETURN r.since, b.name")
         .expect("query");
     assert_eq!(
         result.rows.len(),
@@ -298,14 +299,10 @@ fn inline_filter_anonymous_rel_with_property() {
     let dir = tempdir().expect("tempdir");
     let mut db = test_db(dir.path());
 
-    db.execute(
-        "CREATE (a:A1 {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:B1 {name: 'Bob'})",
-    )
-    .expect("create chain1");
-    db.execute(
-        "CREATE (a:A2 {name: 'Alice'})-[:KNOWS {since: 2015}]->(b:B2 {name: 'Charlie'})",
-    )
-    .expect("create chain2");
+    db.execute("CREATE (a:A1 {name: 'Alice'})-[:KNOWS {since: 2020}]->(b:B1 {name: 'Bob'})")
+        .expect("create chain1");
+    db.execute("CREATE (a:A2 {name: 'Alice'})-[:KNOWS {since: 2015}]->(b:B2 {name: 'Charlie'})")
+        .expect("create chain2");
 
     // No relationship variable -- but inline props should still filter
     let result = db

@@ -175,9 +175,7 @@ fn opt_constant_fold_arithmetic_in_return() {
     db.execute("CREATE (:Num {val: 10})").expect("create");
 
     // 1 + 2 should be folded to 3 at optimization time
-    let result = db
-        .execute("MATCH (n:Num) RETURN 1 + 2")
-        .expect("query");
+    let result = db.execute("MATCH (n:Num) RETURN 1 + 2").expect("query");
     assert_eq!(result.rows.len(), 1);
 }
 
@@ -294,8 +292,7 @@ fn opt_merge_with_index_creates_when_missing() {
         .expect("create index");
 
     // MERGE Bob -> should create
-    db.execute("MERGE (:Person {name: 'Bob'})")
-        .expect("merge");
+    db.execute("MERGE (:Person {name: 'Bob'})").expect("merge");
     assert_eq!(db.engine().node_count(), 2);
 }
 

@@ -1188,9 +1188,8 @@ mod tests {
         // MM-001: basic CREATE HYPEREDGE with FROM ... TO ...
         #[test]
         fn hyperedge_basic() {
-            let (tokens, input) = make_parser(
-                "CREATE HYPEREDGE (h:GroupMigration) FROM (a, b) TO (c)",
-            );
+            let (tokens, input) =
+                make_parser("CREATE HYPEREDGE (h:GroupMigration) FROM (a, b) TO (c)");
             let mut p = Parser::new(&tokens, &input);
             p.advance(); // consume CREATE
             let hc = p.parse_create_hyperedge_clause().expect("should parse");
@@ -1218,10 +1217,7 @@ mod tests {
             assert_eq!(hc.labels, vec!["TemporalShift".to_string()]);
             assert_eq!(hc.sources.len(), 1);
             // The source should be a TemporalRef expression
-            assert!(matches!(
-                &hc.sources[0],
-                Expression::TemporalRef { .. }
-            ));
+            assert!(matches!(&hc.sources[0], Expression::TemporalRef { .. }));
             if let Expression::TemporalRef { node, timestamp } = &hc.sources[0] {
                 assert_eq!(**node, Expression::Variable("person".to_string()));
                 assert_eq!(**timestamp, Expression::Literal(Literal::Integer(1000)));
@@ -1232,9 +1228,7 @@ mod tests {
         // MM-001: CREATE HYPEREDGE with no variable (anonymous)
         #[test]
         fn hyperedge_no_variable() {
-            let (tokens, input) = make_parser(
-                "CREATE HYPEREDGE (:Migration) FROM (a) TO (b)",
-            );
+            let (tokens, input) = make_parser("CREATE HYPEREDGE (:Migration) FROM (a) TO (b)");
             let mut p = Parser::new(&tokens, &input);
             p.advance(); // consume CREATE
             let hc = p.parse_create_hyperedge_clause().expect("should parse");
@@ -1246,9 +1240,7 @@ mod tests {
         // MM-001: CREATE HYPEREDGE with multiple labels
         #[test]
         fn hyperedge_multiple_sources_and_targets() {
-            let (tokens, input) = make_parser(
-                "CREATE HYPEREDGE (h:Foo) FROM (a, b, c) TO (d, e)",
-            );
+            let (tokens, input) = make_parser("CREATE HYPEREDGE (h:Foo) FROM (a, b, c) TO (d, e)");
             let mut p = Parser::new(&tokens, &input);
             p.advance(); // consume CREATE
             let hc = p.parse_create_hyperedge_clause().expect("should parse");
@@ -1260,9 +1252,7 @@ mod tests {
         // MM-003: MATCH HYPEREDGE basic
         #[test]
         fn match_hyperedge_basic() {
-            let (tokens, input) = make_parser(
-                "MATCH HYPEREDGE (h:GroupMigration)",
-            );
+            let (tokens, input) = make_parser("MATCH HYPEREDGE (h:GroupMigration)");
             let mut p = Parser::new(&tokens, &input);
             p.advance(); // consume MATCH
             let mhc = p.parse_match_hyperedge_clause().expect("should parse");
@@ -1274,9 +1264,7 @@ mod tests {
         // MM-003: MATCH HYPEREDGE no label
         #[test]
         fn match_hyperedge_no_label() {
-            let (tokens, input) = make_parser(
-                "MATCH HYPEREDGE (h)",
-            );
+            let (tokens, input) = make_parser("MATCH HYPEREDGE (h)");
             let mut p = Parser::new(&tokens, &input);
             p.advance(); // consume MATCH
             let mhc = p.parse_match_hyperedge_clause().expect("should parse");
@@ -1288,10 +1276,8 @@ mod tests {
         // MM-001: Integration test - full CREATE HYPEREDGE query
         #[test]
         fn query_create_hyperedge_full() {
-            let q = parse_query(
-                "CREATE HYPEREDGE (h:GroupMigration) FROM (a, b) TO (c)",
-            )
-            .expect("should parse");
+            let q = parse_query("CREATE HYPEREDGE (h:GroupMigration) FROM (a, b) TO (c)")
+                .expect("should parse");
             assert_eq!(q.clauses.len(), 1);
             assert!(matches!(&q.clauses[0], Clause::CreateHyperedge(_)));
         }
@@ -1299,10 +1285,8 @@ mod tests {
         // MM-003: Integration test - full MATCH HYPEREDGE query
         #[test]
         fn query_match_hyperedge_full() {
-            let q = parse_query(
-                "MATCH HYPEREDGE (h:GroupMigration) RETURN h",
-            )
-            .expect("should parse");
+            let q =
+                parse_query("MATCH HYPEREDGE (h:GroupMigration) RETURN h").expect("should parse");
             assert_eq!(q.clauses.len(), 2);
             assert!(matches!(&q.clauses[0], Clause::MatchHyperedge(_)));
             assert!(matches!(&q.clauses[1], Clause::Return(_)));
@@ -1320,9 +1304,8 @@ mod tests {
         // HH-001: basic CREATE SNAPSHOT with FROM MATCH ... RETURN
         #[test]
         fn snapshot_basic() {
-            let (tokens, input) = make_parser(
-                "CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) RETURN n",
-            );
+            let (tokens, input) =
+                make_parser("CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) RETURN n");
             let mut p = Parser::new(&tokens, &input);
             p.advance(); // consume CREATE
             let sc = p.parse_create_snapshot_clause().expect("should parse");
@@ -1362,9 +1345,8 @@ mod tests {
         // HH-001: CREATE SNAPSHOT with AT TIME
         #[test]
         fn snapshot_with_at_time() {
-            let (tokens, input) = make_parser(
-                "CREATE SNAPSHOT (s:Snap) AT TIME 1000 FROM MATCH (n:Person) RETURN n",
-            );
+            let (tokens, input) =
+                make_parser("CREATE SNAPSHOT (s:Snap) AT TIME 1000 FROM MATCH (n:Person) RETURN n");
             let mut p = Parser::new(&tokens, &input);
             p.advance(); // consume CREATE
             let sc = p.parse_create_snapshot_clause().expect("should parse");
@@ -1405,9 +1387,8 @@ mod tests {
         // HH-001: CREATE SNAPSHOT with no variable (anonymous snapshot)
         #[test]
         fn snapshot_no_variable() {
-            let (tokens, input) = make_parser(
-                "CREATE SNAPSHOT (:Snap) FROM MATCH (n:Person) RETURN n",
-            );
+            let (tokens, input) =
+                make_parser("CREATE SNAPSHOT (:Snap) FROM MATCH (n:Person) RETURN n");
             let mut p = Parser::new(&tokens, &input);
             p.advance(); // consume CREATE
             let sc = p.parse_create_snapshot_clause().expect("should parse");

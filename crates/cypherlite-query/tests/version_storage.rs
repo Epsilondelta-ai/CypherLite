@@ -125,9 +125,7 @@ fn w003_current_state_is_live_not_versioned() {
     db.execute("MATCH (n:Person) SET n.age = 30").expect("set");
 
     // Current state should be age=30 (live in primary store)
-    let result = db
-        .execute("MATCH (n:Person) RETURN n.age")
-        .expect("match");
+    let result = db.execute("MATCH (n:Person) RETURN n.age").expect("match");
     assert_eq!(result.rows[0].get_as::<i64>("n.age"), Some(30));
 
     // Version store should have the old state (age=25)

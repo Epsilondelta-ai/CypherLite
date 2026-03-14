@@ -146,11 +146,7 @@ impl PropertyIndex {
     }
 
     /// Range query: return all node IDs whose indexed value is in [min, max] (inclusive).
-    pub fn range(
-        &self,
-        min: &PropertyValue,
-        max: &PropertyValue,
-    ) -> Vec<NodeId> {
+    pub fn range(&self, min: &PropertyValue, max: &PropertyValue) -> Vec<NodeId> {
         let min_key = PropertyValueKey(min.clone());
         let max_key = PropertyValueKey(max.clone());
         let mut result = Vec::new();
@@ -248,7 +244,9 @@ impl IndexManager {
 
     /// Iterate mutably over all indexes.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&IndexDefinition, &mut PropertyIndex)> {
-        self.indexes.values_mut().map(|(def, idx)| (def as &IndexDefinition, idx))
+        self.indexes
+            .values_mut()
+            .map(|(def, idx)| (def as &IndexDefinition, idx))
     }
 }
 
@@ -489,9 +487,8 @@ mod tests {
         let b = PropertyValueKey(PropertyValue::DateTime(2_000));
         assert!(a < b);
         assert_eq!(
-            PropertyValueKey(PropertyValue::DateTime(1_000)).cmp(
-                &PropertyValueKey(PropertyValue::DateTime(1_000))
-            ),
+            PropertyValueKey(PropertyValue::DateTime(1_000))
+                .cmp(&PropertyValueKey(PropertyValue::DateTime(1_000))),
             std::cmp::Ordering::Equal
         );
     }
@@ -509,10 +506,7 @@ mod tests {
         let mut idx = PropertyIndex::new();
         // Insert DateTime values
         for i in 1..=5 {
-            idx.insert(
-                &PropertyValue::DateTime(i * 1_000_000),
-                NodeId(i as u64),
-            );
+            idx.insert(&PropertyValue::DateTime(i * 1_000_000), NodeId(i as u64));
         }
 
         // Range [2M, 4M] should return nodes 2, 3, 4

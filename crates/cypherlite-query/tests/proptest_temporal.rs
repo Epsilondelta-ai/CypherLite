@@ -49,11 +49,8 @@ fn test_db(dir: &std::path::Path) -> CypherLite {
 fn create_node_at(db: &mut CypherLite, label: &str, props: &str, ts: i64) {
     let mut params = Params::new();
     params.insert("__query_start_ms__".to_string(), Value::Int64(ts));
-    db.execute_with_params(
-        &format!("CREATE (n:{label} {{{props}}})"),
-        params,
-    )
-    .expect("create_node_at");
+    db.execute_with_params(&format!("CREATE (n:{label} {{{props}}})"), params)
+        .expect("create_node_at");
 }
 
 /// Update nodes at a specific timestamp via params.

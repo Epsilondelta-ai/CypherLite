@@ -3,9 +3,9 @@
 use crate::executor::operators::temporal_filter::{is_edge_temporally_valid, TemporalFilter};
 use crate::executor::{Record, Value};
 use crate::parser::ast::RelDirection;
-use cypherlite_core::NodeId;
 #[cfg(feature = "subgraph")]
 use cypherlite_core::LabelRegistry;
+use cypherlite_core::NodeId;
 use cypherlite_storage::StorageEngine;
 
 /// Expand from source records along edges.
@@ -34,8 +34,7 @@ pub fn execute_expand(
             if let Some(Value::Hyperedge(he_id)) = record.get(src_var) {
                 if let Some(he_rec) = engine.get_hyperedge(*he_id) {
                     // Filter by rel_type if specified
-                    let type_matches = rel_type_id
-                        .is_none_or(|tid| he_rec.rel_type_id == tid);
+                    let type_matches = rel_type_id.is_none_or(|tid| he_rec.rel_type_id == tid);
                     if type_matches {
                         // Emit all source and target participant nodes
                         for entity in he_rec.sources.iter().chain(he_rec.targets.iter()) {
@@ -74,9 +73,8 @@ pub fn execute_expand(
         {
             if let Some(Value::Subgraph(sg_id)) = record.get(src_var) {
                 // Check if the relationship type is "CONTAINS"
-                let is_contains = rel_type_id.is_some_and(|tid| {
-                    engine.catalog().rel_type_name(tid) == Some("CONTAINS")
-                });
+                let is_contains = rel_type_id
+                    .is_some_and(|tid| engine.catalog().rel_type_name(tid) == Some("CONTAINS"));
                 if is_contains {
                     // Virtual :CONTAINS expansion via MembershipIndex
                     let members = engine.list_members(*sg_id);
@@ -86,8 +84,7 @@ pub fn execute_expand(
                             // No physical edge for virtual :CONTAINS, bind Null
                             new_record.insert(rv.to_string(), Value::Null);
                         }
-                        new_record
-                            .insert(target_var.to_string(), Value::Node(node_id));
+                        new_record.insert(target_var.to_string(), Value::Node(node_id));
                         results.push(new_record);
                     }
                     continue;
@@ -369,12 +366,7 @@ mod tests {
             let n1 = engine.create_node(vec![], vec![]);
 
             use cypherlite_core::GraphEntity;
-            engine.create_hyperedge(
-                involves_type,
-                vec![GraphEntity::Node(n1)],
-                vec![],
-                vec![],
-            );
+            engine.create_hyperedge(involves_type, vec![GraphEntity::Node(n1)], vec![], vec![]);
 
             let he_id = cypherlite_core::HyperEdgeId(1);
             let mut source = Record::new();
@@ -402,12 +394,7 @@ mod tests {
 
             let involves_type = engine.get_or_create_rel_type("INVOLVES");
 
-            engine.create_hyperedge(
-                involves_type,
-                vec![],
-                vec![],
-                vec![],
-            );
+            engine.create_hyperedge(involves_type, vec![], vec![], vec![]);
 
             let he_id = cypherlite_core::HyperEdgeId(1);
             let mut source = Record::new();
@@ -436,12 +423,7 @@ mod tests {
             let n1 = engine.create_node(vec![], vec![]);
 
             use cypherlite_core::GraphEntity;
-            engine.create_hyperedge(
-                involves_type,
-                vec![GraphEntity::Node(n1)],
-                vec![],
-                vec![],
-            );
+            engine.create_hyperedge(involves_type, vec![GraphEntity::Node(n1)], vec![], vec![]);
 
             let he_id = cypherlite_core::HyperEdgeId(1);
             let mut source = Record::new();

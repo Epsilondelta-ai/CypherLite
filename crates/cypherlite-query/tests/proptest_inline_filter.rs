@@ -29,8 +29,7 @@ fn test_db(dir: &std::path::Path) -> CypherLite {
 /// Strategy producing a safe string value for property values (no single quotes
 /// or backslashes that would break Cypher string literals).
 fn safe_prop_value() -> impl Strategy<Value = String> {
-    prop::string::string_regex("[a-zA-Z][a-zA-Z0-9 _]{0,15}")
-        .expect("regex should compile")
+    prop::string::string_regex("[a-zA-Z][a-zA-Z0-9 _]{0,15}").expect("regex should compile")
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 // Expression evaluator: eval(), eval_cmp() with typed comparison
 
-use super::{ExecutionError, Params, Record, Value};
+use super::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::*;
 use cypherlite_core::LabelRegistry;
 use cypherlite_storage::StorageEngine;
@@ -13,6 +13,7 @@ pub fn eval(
     record: &Record,
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Value, ExecutionError> {
     match expr {
         Expression::Literal(lit) => Ok(eval_literal(lit)),
@@ -25,21 +26,21 @@ pub fn eval(
                     return eval_temporal_property_access(props_list, prop_name, engine);
                 }
             }
-            let inner = eval(inner_expr, record, engine, params)?;
+            let inner = eval(inner_expr, record, engine, params, scalar_fns)?;
             eval_property_access(&inner, prop_name, engine)
         }
         Expression::Parameter(name) => Ok(params.get(name).cloned().unwrap_or(Value::Null)),
         Expression::BinaryOp(op, lhs, rhs) => {
-            let left = eval(lhs, record, engine, params)?;
-            let right = eval(rhs, record, engine, params)?;
+            let left = eval(lhs, record, engine, params, scalar_fns)?;
+            let right = eval(rhs, record, engine, params, scalar_fns)?;
             eval_binary_op(*op, &left, &right)
         }
         Expression::UnaryOp(op, inner) => {
-            let val = eval(inner, record, engine, params)?;
+            let val = eval(inner, record, engine, params, scalar_fns)?;
             eval_unary_op(*op, &val)
         }
         Expression::IsNull(inner, negated) => {
-            let val = eval(inner, record, engine, params)?;
+            let val = eval(inner, record, engine, params, scalar_fns)?;
             let is_null = val == Value::Null;
             if *negated {
                 Ok(Value::Bool(!is_null))
@@ -50,7 +51,7 @@ pub fn eval(
         Expression::ListLiteral(elements) => {
             let mut values = Vec::with_capacity(elements.len());
             for elem in elements {
-                values.push(eval(elem, record, engine, params)?);
+                values.push(eval(elem, record, engine, params, scalar_fns)?);
             }
             Ok(Value::List(values))
         }
@@ -71,7 +72,7 @@ pub fn eval(
                             message: "id() requires exactly one argument".to_string(),
                         });
                     }
-                    let val = eval(&args[0], record, engine, params)?;
+                    let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::Node(nid) => Ok(Value::Int64(nid.0 as i64)),
                         Value::Edge(eid) => Ok(Value::Int64(eid.0 as i64)),
@@ -86,7 +87,7 @@ pub fn eval(
                             message: "type() requires exactly one argument".to_string(),
                         });
                     }
-                    let val = eval(&args[0], record, engine, params)?;
+                    let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::Edge(eid) => {
                             if let Some(edge) = engine.get_edge(eid) {
@@ -111,7 +112,7 @@ pub fn eval(
                             message: "labels() requires exactly one argument".to_string(),
                         });
                     }
-                    let val = eval(&args[0], record, engine, params)?;
+                    let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::Node(nid) => {
                             if let Some(node) = engine.get_node(nid) {
@@ -141,12 +142,11 @@ pub fn eval(
                             message: "datetime() requires exactly one string argument".to_string(),
                         });
                     }
-                    let val = eval(&args[0], record, engine, params)?;
+                    let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::String(s) => {
-                            let millis = parse_iso8601_to_millis(&s).map_err(|e| ExecutionError {
-                                message: e,
-                            })?;
+                            let millis = parse_iso8601_to_millis(&s)
+                                .map_err(|e| ExecutionError { message: e })?;
                             Ok(Value::DateTime(millis))
                         }
                         _ => Err(ExecutionError {
@@ -173,20 +173,31 @@ pub fn eval(
                         }
                     }
                 }
-                _ => Err(ExecutionError {
-                    message: format!("unknown function: {}", name),
-                }),
+                _ => {
+                    // Evaluate arguments, then try plugin scalar function lookup.
+                    let evaluated_args: Result<Vec<_>, _> = args
+                        .iter()
+                        .map(|a| eval(a, record, engine, params, scalar_fns))
+                        .collect();
+                    let evaluated_args = evaluated_args?;
+                    match scalar_fns.call_scalar(&func_name, &evaluated_args) {
+                        Some(result) => result,
+                        None => Err(ExecutionError {
+                            message: format!("unknown function: {}", name),
+                        }),
+                    }
+                }
             }
         }
         #[cfg(feature = "hypergraph")]
         Expression::TemporalRef { node, timestamp } => {
             // Evaluate both sub-expressions and return a placeholder.
             // The actual interpretation is done in the executor during hyperedge creation.
-            let _node_val = eval(node, record, engine, params)?;
-            let _ts_val = eval(timestamp, record, engine, params)?;
+            let _node_val = eval(node, record, engine, params, scalar_fns)?;
+            let _ts_val = eval(timestamp, record, engine, params, scalar_fns)?;
             // For expression evaluation context, return the node value
             // (temporal resolution happens at the hyperedge executor level).
-            eval(node, record, engine, params)
+            eval(node, record, engine, params, scalar_fns)
         }
     }
 }
@@ -705,11 +716,7 @@ fn parse_iso8601_to_millis(s: &str) -> Result<i64, String> {
             } else if tz_part.len() == 6
                 && (tz_part.as_bytes()[0] == b'+' || tz_part.as_bytes()[0] == b'-')
             {
-                let sign: i64 = if tz_part.as_bytes()[0] == b'+' {
-                    1
-                } else {
-                    -1
-                };
+                let sign: i64 = if tz_part.as_bytes()[0] == b'+' { 1 } else { -1 };
                 let tz_hour: i64 = tz_part[1..3]
                     .parse()
                     .map_err(|_| format!("invalid timezone hour in '{}'", s))?;
@@ -725,8 +732,7 @@ fn parse_iso8601_to_millis(s: &str) -> Result<i64, String> {
 
     // Convert to days since epoch using Howard Hinnant's algorithm
     let days = days_from_civil(year, month, day);
-    let total_seconds =
-        days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64
+    let total_seconds = days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64
         - tz_offset_minutes * 60;
 
     Ok(total_seconds * 1000)
@@ -888,6 +894,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Int64(42)));
 
@@ -896,6 +903,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Float64(3.15)));
 
@@ -904,6 +912,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::String("hello".into())));
 
@@ -912,6 +921,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Bool(true)));
 
@@ -920,6 +930,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Null));
     }
@@ -937,6 +948,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Int64(99)));
 
@@ -946,6 +958,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Null));
     }
@@ -963,6 +976,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::String("Alice".into())));
 
@@ -972,6 +986,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Null));
     }
@@ -1003,6 +1018,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::String("Alice".into())));
 
@@ -1015,6 +1031,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Null));
     }
@@ -1112,6 +1129,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Bool(true)));
 
@@ -1121,6 +1139,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Bool(true)));
     }
@@ -1140,6 +1159,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Bool(false)));
     }
@@ -1159,6 +1179,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Int64(-42)));
     }
@@ -1207,6 +1228,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000)));
     }
@@ -1230,8 +1252,14 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
+        assert_eq!(
+            result,
+            Ok(Value::DateTime(
+                1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000
+            ))
+        );
     }
 
     #[test]
@@ -1252,8 +1280,14 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
+        assert_eq!(
+            result,
+            Ok(Value::DateTime(
+                1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000
+            ))
+        );
     }
 
     #[test]
@@ -1275,8 +1309,12 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 3_600_000 + 30 * 60_000)));
+        assert_eq!(
+            result,
+            Ok(Value::DateTime(1_705_276_800_000 + 3_600_000 + 30 * 60_000))
+        );
     }
 
     #[test]
@@ -1297,6 +1335,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert!(result.is_err());
     }
@@ -1317,6 +1356,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert!(result.is_err());
     }
@@ -1337,6 +1377,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert!(result.is_err());
     }
@@ -1365,6 +1406,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(1_700_000_000_000)));
     }
@@ -1390,6 +1432,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert!(result.is_err());
     }
@@ -1468,11 +1511,7 @@ mod tests {
 
     #[test]
     fn test_eval_cmp_datetime_vs_non_datetime_error() {
-        let result = eval_cmp(
-            &Value::DateTime(1_000),
-            &Value::Int64(1_000),
-            BinaryOp::Eq,
-        );
+        let result = eval_cmp(&Value::DateTime(1_000), &Value::Int64(1_000), BinaryOp::Eq);
         assert!(result.is_err());
     }
 
@@ -1520,6 +1559,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(0)));
     }
@@ -1553,7 +1593,7 @@ mod tests {
                 Box::new(Expression::Variable("he".to_string())),
                 "weight".to_string(),
             );
-            let result = eval(&expr, &record, &engine, &Params::new());
+            let result = eval(&expr, &record, &engine, &Params::new(), &());
             assert_eq!(result, Ok(Value::Int64(42)));
         }
 
@@ -1573,7 +1613,7 @@ mod tests {
                 Box::new(Expression::Variable("he".to_string())),
                 "nonexistent".to_string(),
             );
-            let result = eval(&expr, &record, &engine, &Params::new());
+            let result = eval(&expr, &record, &engine, &Params::new(), &());
             assert_eq!(result, Ok(Value::Null));
         }
 
@@ -1590,7 +1630,7 @@ mod tests {
                 Box::new(Expression::Variable("he".to_string())),
                 "weight".to_string(),
             );
-            let result = eval(&expr, &record, &engine, &Params::new());
+            let result = eval(&expr, &record, &engine, &Params::new(), &());
             assert!(result.is_err());
         }
 
@@ -1604,7 +1644,10 @@ mod tests {
             let name_key = engine.get_or_create_prop_key("name");
             let nid = engine.create_node(
                 vec![],
-                vec![(name_key, cypherlite_core::PropertyValue::String("Alice".into()))],
+                vec![(
+                    name_key,
+                    cypherlite_core::PropertyValue::String("Alice".into()),
+                )],
             );
 
             let mut record = Record::new();
@@ -1619,6 +1662,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+                &(),
             );
             assert_eq!(result, Ok(Value::String("Alice".into())));
         }
@@ -1637,8 +1681,14 @@ mod tests {
             let nid = engine.create_node(
                 vec![],
                 vec![
-                    (name_key, cypherlite_core::PropertyValue::String("Alice".into())),
-                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(100)),
+                    (
+                        name_key,
+                        cypherlite_core::PropertyValue::String("Alice".into()),
+                    ),
+                    (
+                        updated_at_key,
+                        cypherlite_core::PropertyValue::DateTime(100),
+                    ),
                 ],
             );
 
@@ -1648,8 +1698,14 @@ mod tests {
                 .update_node(
                     nid,
                     vec![
-                        (name_key, cypherlite_core::PropertyValue::String("Bob".into())),
-                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                        (
+                            name_key,
+                            cypherlite_core::PropertyValue::String("Bob".into()),
+                        ),
+                        (
+                            updated_at_key,
+                            cypherlite_core::PropertyValue::DateTime(200),
+                        ),
                     ],
                 )
                 .expect("update");
@@ -1668,6 +1724,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+                &(),
             );
             assert_eq!(result, Ok(Value::String("Alice".into())));
         }
@@ -1686,8 +1743,14 @@ mod tests {
             let nid = engine.create_node(
                 vec![],
                 vec![
-                    (name_key, cypherlite_core::PropertyValue::String("v1".into())),
-                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(100)),
+                    (
+                        name_key,
+                        cypherlite_core::PropertyValue::String("v1".into()),
+                    ),
+                    (
+                        updated_at_key,
+                        cypherlite_core::PropertyValue::DateTime(100),
+                    ),
                 ],
             );
 
@@ -1696,8 +1759,14 @@ mod tests {
                 .update_node(
                     nid,
                     vec![
-                        (name_key, cypherlite_core::PropertyValue::String("v2".into())),
-                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                        (
+                            name_key,
+                            cypherlite_core::PropertyValue::String("v2".into()),
+                        ),
+                        (
+                            updated_at_key,
+                            cypherlite_core::PropertyValue::DateTime(200),
+                        ),
                     ],
                 )
                 .expect("update 1");
@@ -1707,8 +1776,14 @@ mod tests {
                 .update_node(
                     nid,
                     vec![
-                        (name_key, cypherlite_core::PropertyValue::String("v3".into())),
-                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(300)),
+                        (
+                            name_key,
+                            cypherlite_core::PropertyValue::String("v3".into()),
+                        ),
+                        (
+                            updated_at_key,
+                            cypherlite_core::PropertyValue::DateTime(300),
+                        ),
                     ],
                 )
                 .expect("update 2");
@@ -1726,6 +1801,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+                &(),
             );
             assert_eq!(result, Ok(Value::String("v2".into())));
         }
@@ -1744,8 +1820,14 @@ mod tests {
             let nid = engine.create_node(
                 vec![],
                 vec![
-                    (name_key, cypherlite_core::PropertyValue::String("Alice".into())),
-                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                    (
+                        name_key,
+                        cypherlite_core::PropertyValue::String("Alice".into()),
+                    ),
+                    (
+                        updated_at_key,
+                        cypherlite_core::PropertyValue::DateTime(200),
+                    ),
                 ],
             );
 
@@ -1754,8 +1836,14 @@ mod tests {
                 .update_node(
                     nid,
                     vec![
-                        (name_key, cypherlite_core::PropertyValue::String("Bob".into())),
-                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(300)),
+                        (
+                            name_key,
+                            cypherlite_core::PropertyValue::String("Bob".into()),
+                        ),
+                        (
+                            updated_at_key,
+                            cypherlite_core::PropertyValue::DateTime(300),
+                        ),
                     ],
                 )
                 .expect("update");
@@ -1774,6 +1862,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+                &(),
             );
             assert_eq!(result, Ok(Value::String("Bob".into())));
         }
@@ -1787,7 +1876,10 @@ mod tests {
             let name_key = engine.get_or_create_prop_key("name");
             let nid = engine.create_node(
                 vec![],
-                vec![(name_key, cypherlite_core::PropertyValue::String("Alice".into()))],
+                vec![(
+                    name_key,
+                    cypherlite_core::PropertyValue::String("Alice".into()),
+                )],
             );
 
             let mut record = Record::new();
@@ -1802,6 +1894,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+                &(),
             );
             assert_eq!(result, Ok(Value::Null));
         }

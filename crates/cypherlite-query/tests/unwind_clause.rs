@@ -44,9 +44,7 @@ fn test_unwind_empty_list() {
     let dir = tempdir().expect("tempdir");
     let mut db = open_db(dir.path());
 
-    let result = db
-        .execute("UNWIND [] AS x RETURN x")
-        .expect("unwind empty");
+    let result = db.execute("UNWIND [] AS x RETURN x").expect("unwind empty");
     assert_eq!(result.rows.len(), 0);
 }
 

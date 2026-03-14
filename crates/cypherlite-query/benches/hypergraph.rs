@@ -32,10 +32,8 @@ fn bench_create_hyperedge_single_source(c: &mut Criterion) {
                 (dir, db)
             },
             |(_dir, mut db)| {
-                db.execute(
-                    "MATCH (a:HeBenchSrc) CREATE HYPEREDGE (h:BenchHE) FROM (a) TO ()",
-                )
-                .expect("create hyperedge");
+                db.execute("MATCH (a:HeBenchSrc) CREATE HYPEREDGE (h:BenchHE) FROM (a) TO ()")
+                    .expect("create hyperedge");
             },
         );
     });
@@ -84,9 +82,7 @@ fn bench_hyperedge_scan(c: &mut Criterion) {
 
     c.bench_function("hyperedge_scan_50", |b| {
         b.iter(|| {
-            let _ = db
-                .execute("MATCH HYPEREDGE (h) RETURN h")
-                .expect("scan");
+            let _ = db.execute("MATCH HYPEREDGE (h) RETURN h").expect("scan");
         });
     });
 

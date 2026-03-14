@@ -10,6 +10,13 @@ pub mod traits;
 /// Core graph data types (nodes, edges, properties, identifiers).
 pub mod types;
 
+/// Trigger-related data types (always available, not feature-gated).
+pub mod trigger_types;
+
+/// Plugin system: base trait, extension traits, and registry.
+#[cfg(feature = "plugin")]
+pub mod plugin;
+
 pub use config::{DatabaseConfig, SyncMode};
 pub use error::{CypherLiteError, Result};
 pub use traits::{LabelRegistry, TransactionView};
@@ -20,3 +27,5 @@ pub use types::{GraphEntity, SubgraphId, SubgraphRecord};
 
 #[cfg(feature = "hypergraph")]
 pub use types::{HyperEdgeId, HyperEdgeRecord};
+
+pub use trigger_types::{EntityType, TriggerContext, TriggerOperation};

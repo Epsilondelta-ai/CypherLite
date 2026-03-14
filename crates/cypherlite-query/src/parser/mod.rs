@@ -114,9 +114,7 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
             Some(Token::With) => Clause::With(parser.parse_with_clause()?),
             Some(Token::Merge) => Clause::Merge(parser.parse_merge_clause()?),
             Some(Token::Unwind) => Clause::Unwind(parser.parse_unwind_clause()?),
-            Some(Token::Drop) => {
-                Clause::DropIndex(parser.parse_drop_index_clause()?)
-            }
+            Some(Token::Drop) => Clause::DropIndex(parser.parse_drop_index_clause()?),
             Some(Token::Where) => {
                 return Err(parser.error("WHERE clause must follow a MATCH clause"));
             }
@@ -778,8 +776,8 @@ mod tests {
 
     #[test]
     fn query_match_unwind_return() {
-        let q = parse_query("MATCH (n:Person) UNWIND n.hobbies AS h RETURN h")
-            .expect("should parse");
+        let q =
+            parse_query("MATCH (n:Person) UNWIND n.hobbies AS h RETURN h").expect("should parse");
         assert_eq!(q.clauses.len(), 3);
         assert!(matches!(&q.clauses[0], Clause::Match(_)));
         assert!(matches!(&q.clauses[1], Clause::Unwind(_)));
@@ -797,10 +795,8 @@ mod tests {
         // HH-001: Full CREATE SNAPSHOT query
         #[test]
         fn query_create_snapshot_basic() {
-            let q = parse_query(
-                "CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) RETURN n",
-            )
-            .expect("should parse");
+            let q = parse_query("CREATE SNAPSHOT (s:Snap) FROM MATCH (n:Person) RETURN n")
+                .expect("should parse");
             assert_eq!(q.clauses.len(), 1);
             assert!(matches!(&q.clauses[0], Clause::CreateSnapshot(_)));
 
@@ -817,10 +813,9 @@ mod tests {
         // HH-001: CREATE SNAPSHOT with AT TIME
         #[test]
         fn query_create_snapshot_with_at_time() {
-            let q = parse_query(
-                "CREATE SNAPSHOT (s:Snap) AT TIME 1000 FROM MATCH (n:Person) RETURN n",
-            )
-            .expect("should parse");
+            let q =
+                parse_query("CREATE SNAPSHOT (s:Snap) AT TIME 1000 FROM MATCH (n:Person) RETURN n")
+                    .expect("should parse");
             assert_eq!(q.clauses.len(), 1);
 
             if let Clause::CreateSnapshot(sc) = &q.clauses[0] {

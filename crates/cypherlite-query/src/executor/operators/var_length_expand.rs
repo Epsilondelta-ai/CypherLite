@@ -190,12 +190,10 @@ mod tests {
     }
 
     // Helper: create a linear chain: n0 -> n1 -> n2 -> ... -> n(count-1)
-    fn create_linear_chain(
-        engine: &mut StorageEngine,
-        rel_type: u32,
-        count: usize,
-    ) -> Vec<NodeId> {
-        let nodes: Vec<NodeId> = (0..count).map(|_| engine.create_node(vec![], vec![])).collect();
+    fn create_linear_chain(engine: &mut StorageEngine, rel_type: u32, count: usize) -> Vec<NodeId> {
+        let nodes: Vec<NodeId> = (0..count)
+            .map(|_| engine.create_node(vec![], vec![]))
+            .collect();
         for i in 0..count - 1 {
             engine
                 .create_edge(nodes[i], nodes[i + 1], rel_type, vec![])

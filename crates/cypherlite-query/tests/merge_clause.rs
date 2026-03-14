@@ -28,9 +28,7 @@ fn test_merge_creates_node_on_empty_db() {
     db.execute("MERGE (n:Person {name: 'Alice'})")
         .expect("merge");
 
-    let result = db
-        .execute("MATCH (n:Person) RETURN n.name")
-        .expect("match");
+    let result = db.execute("MATCH (n:Person) RETURN n.name").expect("match");
     assert_eq!(result.rows.len(), 1);
     assert_eq!(
         result.rows[0].get_as::<String>("n.name"),
@@ -49,9 +47,7 @@ fn test_merge_idempotent() {
     db.execute("MERGE (n:Person {name: 'Alice'})")
         .expect("second merge");
 
-    let result = db
-        .execute("MATCH (n:Person) RETURN n.name")
-        .expect("match");
+    let result = db.execute("MATCH (n:Person) RETURN n.name").expect("match");
     assert_eq!(result.rows.len(), 1, "should still be 1 node, not 2");
 }
 

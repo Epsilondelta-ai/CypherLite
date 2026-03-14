@@ -19,13 +19,9 @@ CypherLite/
 │   └── dependabot.yml            # 의존성 자동 업데이트
 │
 ├── crates/                       # 멀티 크레이트 워크스페이스
-│   ├── cypherlite-core/          # 공통 타입, 에러 처리, 설정
+│   ├── cypherlite-core/          # 공통 타입, 에러 처리, 설정, 플러그인 시스템
 │   ├── cypherlite-storage/       # 파일 형식, 페이지 관리, WAL, B-트리
-│   ├── cypherlite-query/         # 렉서, 파서, AST, 플래너, 실행기
-│   ├── cypherlite-plugin/        # 플러그인 트레이트, 레지스트리, 라이프사이클
-│   ├── cypherlite-ffi/           # C FFI 바인딩 (cbindgen)
-│   ├── cypherlite-python/        # PyO3 Python 바인딩
-│   └── cypherlite-node/          # neon Node.js 바인딩
+│   └── cypherlite-query/         # 렉서, 파서, AST, 플래너, 실행기
 │
 ├── docs/                         # 설계 문서 및 연구 자료
 │   ├── INDEX.md                  # 문서 목차 및 탐색 가이드
@@ -83,10 +79,13 @@ crates/cypherlite-core/
 ├── Cargo.toml
 └── src/
     ├── lib.rs
-    ├── types.rs        # NodeId, EdgeId, Property 등
-    ├── error.rs        # CypherLiteError 정의
-    ├── config.rs       # DatabaseConfig 구조체
-    └── traits.rs       # Transaction, Cursor 트레이트
+    ├── types.rs           # NodeId, EdgeId, Property 등
+    ├── error.rs           # CypherLiteError 정의
+    ├── config.rs          # DatabaseConfig 구조체
+    ├── traits.rs          # Transaction, Cursor 트레이트
+    ├── trigger_types.rs   # EntityType, TriggerContext, TriggerOperation
+    └── plugin/
+        └── mod.rs         # Plugin, ScalarFunction, IndexPlugin, Serializer, Trigger 트레이트 + PluginRegistry<T>
 ```
 
 ---
@@ -181,47 +180,24 @@ crates/cypherlite-query/
             └── hyperedge_scan.rs # 하이퍼엣지 스캔 연산자
 tests/
     ├── inline_property_filter.rs  # 인라인 프로퍼티 필터 통합 테스트 (Phase 8a+8b)
-    └── proptest_inline_filter.rs  # 인라인 프로퍼티 필터 속성 기반 테스트 (Phase 8c)
+    ├── proptest_inline_filter.rs  # 인라인 프로퍼티 필터 속성 기반 테스트 (Phase 8c)
+    ├── plugin_function_test.rs    # ScalarFunction 플러그인 통합 테스트 (Phase 10)
+    ├── plugin_index_test.rs       # IndexPlugin 통합 테스트 (Phase 10)
+    ├── plugin_serializer_test.rs  # Serializer 플러그인 통합 테스트 (Phase 10)
+    └── plugin_trigger_test.rs     # Trigger 플러그인 통합 테스트 (Phase 10)
 benches/
     └── inline_filter.rs           # 인라인 프로퍼티 필터 성능 벤치마크 (Phase 8c)
 ```
 
----
-
-### cypherlite-plugin (플러그인 시스템)
-
-**역할**: 플러그인 트레이트 정의, 레지스트리 관리, 라이프사이클 제어
-
-**6가지 플러그인 타입**:
-
-| 타입 | 설명 | 예시 |
-|------|------|------|
-| `StoragePlugin` | 대체 백엔드, 암호화, 압축 | AES 암호화 스토리지 |
-| `IndexPlugin` | 벡터(HNSW), 전문 검색, 공간 인덱스 | HNSW 벡터 인덱스 |
-| `QueryPlugin` | 커스텀 함수, 프로시저, 그래프 알고리즘 | PageRank 알고리즘 |
-| `SerializerPlugin` | RDF/OWL, JSON-LD, GraphML, CSV | RDF 임포트/익스포트 |
-| `EventPlugin` | 변경 전/후 훅 | 감사 로그 생성 |
-| `BusinessLogicPlugin` | 시맨틱 레이어, 키네틱 레이어 | 워크플로우 트리거 |
-
-**핵심 파일**:
-```
-crates/cypherlite-plugin/
-├── Cargo.toml
-└── src/
-    ├── lib.rs
-    ├── traits/
-    │   ├── storage.rs         # StoragePlugin 트레이트
-    │   ├── index.rs           # IndexPlugin 트레이트
-    │   ├── query.rs           # QueryPlugin 트레이트
-    │   ├── serializer.rs      # SerializerPlugin 트레이트
-    │   └── event.rs           # EventPlugin 트레이트
-    ├── registry.rs            # 플러그인 레지스트리
-    └── lifecycle.rs           # 초기화/종료 관리
-```
+**플러그인 통합 포인트** (executor/mod.rs, api/mod.rs):
+- `ScalarFnLookup`: Cypher 함수 호출 시 ScalarFunction 플러그인 디스패치
+- `TriggerLookup`: CREATE/SET/DELETE 실행 전후 Trigger 플러그인 호출
+- `register_scalar_fn()` / `register_index_plugin()` / `register_serializer()` / `register_trigger()` API
+- `list_scalar_fns()` / `list_index_plugins()` / `list_serializers()` / `list_triggers()` API
 
 ---
 
-### cypherlite-ffi (C FFI 바인딩)
+### cypherlite-ffi (C FFI 바인딩, 계획됨)
 
 **역할**: C 헤더 파일 자동 생성, 안전한 Rust-C 인터페이스 노출
 
@@ -232,35 +208,23 @@ crates/cypherlite-plugin/
 
 **생성 파일**: `include/cypherlite.h`
 
----
-
-### cypherlite-python (Python 바인딩)
-
-**역할**: PyO3를 통한 Python 네이티브 모듈 제공 (계획됨)
-
-**예상 Python API**:
-```python
-import cypherlite
-
-db = cypherlite.open("app.cyl")
-with db.transaction() as tx:
-    tx.run("CREATE (n:Person {name: 'Alice'})")
-    result = tx.run("MATCH (n:Person) RETURN n.name")
-```
+> 현재 미구현. Phase 12 (FFI Bindings) 로드맵에서 구현 예정.
 
 ---
 
-### cypherlite-node (Node.js 바인딩)
+### cypherlite-python (Python 바인딩, 계획됨)
 
-**역할**: neon을 통한 Node.js 네이티브 모듈 제공 (계획됨)
+**역할**: PyO3를 통한 Python 네이티브 모듈 제공
 
-**예상 Node.js API**:
-```javascript
-const { CypherLite } = require('cypherlite');
+> 현재 미구현. cypherlite-ffi 완성 이후 Phase 12에서 구현 예정.
 
-const db = new CypherLite('app.cyl');
-const result = await db.run('MATCH (n) RETURN count(n)');
-```
+---
+
+### cypherlite-node (Node.js 바인딩, 계획됨)
+
+**역할**: neon을 통한 Node.js 네이티브 모듈 제공
+
+> 현재 미구현. cypherlite-ffi 완성 이후 Phase 12에서 구현 예정.
 
 ---
 
@@ -320,19 +284,58 @@ CypherLite/
 
 ## 크레이트 의존성 그래프
 
+현재 구현된 크레이트:
+
+```
+cypherlite-query ──→ cypherlite-storage ──→ cypherlite-core
+       ↑                      ↑                  (plugin/ 모듈 포함)
+       └──────────────────────┘
+  (query도 storage를 직접 참조)
+```
+
+계획된 크레이트 (Phase 12):
+
 ```
 cypherlite-node ──────────────────────────────────┐
 cypherlite-python ────────────────────────────────┤
 cypherlite-ffi ───────────────────────────────────┤
                                                    ↓
-cypherlite-plugin ──→ cypherlite-query ──→ cypherlite-storage ──→ cypherlite-core
-                              ↑                        ↑
-                              └────────────────────────┘
-                         (query도 storage를 직접 참조)
+                        cypherlite-query ──→ cypherlite-storage ──→ cypherlite-core
 ```
 
 **규칙**:
 - `cypherlite-core`는 외부 의존성을 최소화 (thiserror, serde 정도)
+- `cypherlite-core/src/plugin/` 모듈에 플러그인 트레이트 및 레지스트리 포함
 - `cypherlite-storage`는 core에만 의존
 - `cypherlite-query`는 core + storage에 의존
-- FFI/바인딩 크레이트는 모든 크레이트를 집약
+- FFI/바인딩 크레이트는 Phase 12에서 추가 예정 (모든 크레이트를 집약)
+
+---
+
+## Phase 10 - 플러그인 시스템 (v1.0.0, 완료)
+
+Phase 10에서 구현된 플러그인 시스템 파일들:
+
+```
+crates/cypherlite-core/src/
+├── trigger_types.rs                              # EntityType, TriggerContext, TriggerOperation
+└── plugin/
+    └── mod.rs                                    # Plugin 베이스 트레이트 + 4개 확장 트레이트 + PluginRegistry<T>
+
+crates/cypherlite-query/tests/
+├── plugin_function_test.rs                       # ScalarFunction 플러그인 통합 테스트
+├── plugin_index_test.rs                          # IndexPlugin 통합 테스트
+├── plugin_serializer_test.rs                     # Serializer 플러그인 통합 테스트
+└── plugin_trigger_test.rs                        # Trigger 플러그인 통합 테스트
+```
+
+**4가지 플러그인 타입**:
+
+| 트레이트 | 역할 | 주요 메서드 |
+|---------|------|------------|
+| `ScalarFunction` | Cypher에서 호출 가능한 사용자 정의 함수 | `call(&[PropertyValue])` |
+| `IndexPlugin` | 플러그형 커스텀 인덱스 구현 | `insert`, `remove`, `lookup` |
+| `Serializer` | 커스텀 직렬화 포맷 (임포트/익스포트) | `export`, `import` |
+| `Trigger` | CREATE/UPDATE/DELETE 전후 이벤트 훅 | `on_before_create`, `on_after_create`, ... |
+
+**테스트 결과**: 1,309 테스트 통과 (버전 v1.0.0)

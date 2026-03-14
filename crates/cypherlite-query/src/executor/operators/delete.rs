@@ -1,8 +1,9 @@
 // DeleteOp: node/edge deletion, ConstraintError if non-detach with edges
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, TriggerLookup, Value};
 use crate::parser::ast::Expression;
+use cypherlite_core::LabelRegistry;
 use cypherlite_storage::StorageEngine;
 
 /// Delete nodes or edges identified by expressions.
@@ -14,6 +15,8 @@ pub fn execute_delete(
     detach: bool,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     // Collect all entity IDs to delete first, then delete.
     // This avoids issues with deleting while iterating.
@@ -22,7 +25,7 @@ pub fn execute_delete(
 
     for record in &source_records {
         for expr in exprs {
-            let val = eval(expr, record, &*engine, params)?;
+            let val = eval(expr, record, &*engine, params, scalar_fns)?;
             match val {
                 Value::Node(nid) => {
                     if !node_ids_to_delete.contains(&nid) {
@@ -47,17 +50,49 @@ pub fn execute_delete(
     }
 
     // Delete edges first
-    for eid in edge_ids_to_delete {
-        engine.delete_edge(eid).map_err(|e| ExecutionError {
+    for eid in &edge_ids_to_delete {
+        // Build trigger context for edge deletion
+        let edge_props = engine
+            .get_edge(*eid)
+            .map(|e| e.properties.clone())
+            .unwrap_or_default();
+        let rel_type_name = engine.get_edge(*eid).and_then(|e| {
+            engine
+                .catalog()
+                .rel_type_name(e.rel_type_id)
+                .map(|s| s.to_string())
+        });
+        let ctx = cypherlite_core::TriggerContext {
+            entity_type: cypherlite_core::EntityType::Edge,
+            entity_id: eid.0,
+            label_or_type: rel_type_name,
+            properties: edge_props
+                .iter()
+                .map(|(k, v)| {
+                    let name = engine
+                        .catalog()
+                        .prop_key_name(*k)
+                        .unwrap_or("?")
+                        .to_string();
+                    (name, v.clone())
+                })
+                .collect(),
+            operation: cypherlite_core::TriggerOperation::Delete,
+        };
+        trigger_fns.fire_before_delete(&ctx)?;
+
+        engine.delete_edge(*eid).map_err(|e| ExecutionError {
             message: format!("failed to delete edge: {}", e),
         })?;
+
+        trigger_fns.fire_after_delete(&ctx)?;
     }
 
     // Delete nodes
-    for nid in node_ids_to_delete {
+    for nid in &node_ids_to_delete {
         if !detach {
             // Check if node has edges
-            let edges = engine.get_edges_for_node(nid);
+            let edges = engine.get_edges_for_node(*nid);
             if !edges.is_empty() {
                 return Err(ExecutionError {
                     message: format!(
@@ -68,9 +103,40 @@ pub fn execute_delete(
                 });
             }
         }
-        engine.delete_node(nid).map_err(|e| ExecutionError {
+
+        // Build trigger context for node deletion
+        let node_props = engine
+            .get_node(*nid)
+            .map(|n| n.properties.clone())
+            .unwrap_or_default();
+        let label_name = engine
+            .get_node(*nid)
+            .and_then(|n| n.labels.first().copied())
+            .and_then(|lid| engine.catalog().label_name(lid).map(|s| s.to_string()));
+        let ctx = cypherlite_core::TriggerContext {
+            entity_type: cypherlite_core::EntityType::Node,
+            entity_id: nid.0,
+            label_or_type: label_name,
+            properties: node_props
+                .iter()
+                .map(|(k, v)| {
+                    let name = engine
+                        .catalog()
+                        .prop_key_name(*k)
+                        .unwrap_or("?")
+                        .to_string();
+                    (name, v.clone())
+                })
+                .collect(),
+            operation: cypherlite_core::TriggerOperation::Delete,
+        };
+        trigger_fns.fire_before_delete(&ctx)?;
+
+        engine.delete_node(*nid).map_err(|e| ExecutionError {
             message: format!("failed to delete node: {}", e),
         })?;
+
+        trigger_fns.fire_after_delete(&ctx)?;
     }
 
     // DELETE returns the source records (for chaining)
@@ -112,7 +178,7 @@ mod tests {
         let exprs = vec![Expression::Variable("n".to_string())];
         let params = Params::new();
 
-        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params);
+        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params, &(), &());
         assert!(result.is_err());
         let err = result.expect_err("should error");
         assert!(err.message.contains("cannot delete node"));
@@ -137,7 +203,7 @@ mod tests {
         let exprs = vec![Expression::Variable("n".to_string())];
         let params = Params::new();
 
-        let result = execute_delete(vec![record], &exprs, true, &mut engine, &params);
+        let result = execute_delete(vec![record], &exprs, true, &mut engine, &params, &(), &());
         assert!(result.is_ok());
         assert!(engine.get_node(n1).is_none());
         assert_eq!(engine.edge_count(), 0);
@@ -156,7 +222,7 @@ mod tests {
         let exprs = vec![Expression::Variable("n".to_string())];
         let params = Params::new();
 
-        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params);
+        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params, &(), &());
         assert!(result.is_ok());
         assert!(engine.get_node(n1).is_none());
     }
@@ -172,7 +238,7 @@ mod tests {
         let exprs = vec![Expression::Variable("n".to_string())];
         let params = Params::new();
 
-        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params);
+        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params, &(), &());
         assert!(result.is_ok());
     }
 }

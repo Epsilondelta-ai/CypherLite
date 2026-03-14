@@ -136,9 +136,11 @@ fn index_t004_auto_update_on_create() {
     use cypherlite_core::{LabelRegistry, PropertyValue};
     let label_id = db.engine().label_id("Person").expect("label");
     let prop_id = db.engine().prop_key_id("name").expect("prop");
-    let result = db
-        .engine()
-        .scan_nodes_by_property(label_id, prop_id, &PropertyValue::String("Alice".into()));
+    let result = db.engine().scan_nodes_by_property(
+        label_id,
+        prop_id,
+        &PropertyValue::String("Alice".into()),
+    );
     assert_eq!(result.len(), 1);
 }
 
@@ -160,15 +162,19 @@ fn index_t004_auto_update_on_set() {
     let prop_id = db.engine().prop_key_id("name").expect("prop");
 
     // Old value should not be in index
-    let old = db
-        .engine()
-        .scan_nodes_by_property(label_id, prop_id, &PropertyValue::String("Alice".into()));
+    let old = db.engine().scan_nodes_by_property(
+        label_id,
+        prop_id,
+        &PropertyValue::String("Alice".into()),
+    );
     assert!(old.is_empty(), "old value should be removed from index");
 
     // New value should be in index
-    let new = db
-        .engine()
-        .scan_nodes_by_property(label_id, prop_id, &PropertyValue::String("Alicia".into()));
+    let new = db.engine().scan_nodes_by_property(
+        label_id,
+        prop_id,
+        &PropertyValue::String("Alicia".into()),
+    );
     assert_eq!(new.len(), 1, "new value should be in index");
 }
 
@@ -188,10 +194,15 @@ fn index_t004_auto_update_on_delete() {
     use cypherlite_core::{LabelRegistry, PropertyValue};
     let label_id = db.engine().label_id("Person").expect("label");
     let prop_id = db.engine().prop_key_id("name").expect("prop");
-    let result = db
-        .engine()
-        .scan_nodes_by_property(label_id, prop_id, &PropertyValue::String("Alice".into()));
-    assert!(result.is_empty(), "deleted node should be removed from index");
+    let result = db.engine().scan_nodes_by_property(
+        label_id,
+        prop_id,
+        &PropertyValue::String("Alice".into()),
+    );
+    assert!(
+        result.is_empty(),
+        "deleted node should be removed from index"
+    );
 }
 
 // ======================================================================
@@ -218,19 +229,23 @@ fn index_t005_backfill_existing_data() {
     let label_id = db.engine().label_id("Person").expect("label");
     let prop_id = db.engine().prop_key_id("name").expect("prop");
 
-    let alice = db
-        .engine()
-        .scan_nodes_by_property(label_id, prop_id, &PropertyValue::String("Alice".into()));
+    let alice = db.engine().scan_nodes_by_property(
+        label_id,
+        prop_id,
+        &PropertyValue::String("Alice".into()),
+    );
     assert_eq!(alice.len(), 1, "Alice should be in the backfilled index");
 
-    let bob = db
-        .engine()
-        .scan_nodes_by_property(label_id, prop_id, &PropertyValue::String("Bob".into()));
+    let bob =
+        db.engine()
+            .scan_nodes_by_property(label_id, prop_id, &PropertyValue::String("Bob".into()));
     assert_eq!(bob.len(), 1, "Bob should be in the backfilled index");
 
-    let charlie = db
-        .engine()
-        .scan_nodes_by_property(label_id, prop_id, &PropertyValue::String("Charlie".into()));
+    let charlie = db.engine().scan_nodes_by_property(
+        label_id,
+        prop_id,
+        &PropertyValue::String("Charlie".into()),
+    );
     assert_eq!(
         charlie.len(),
         1,
