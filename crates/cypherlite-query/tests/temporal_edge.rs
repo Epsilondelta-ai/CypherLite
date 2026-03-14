@@ -20,7 +20,6 @@ fn test_db(dir: &std::path::Path) -> CypherLite {
     CypherLite::open(config).expect("open")
 }
 
-
 // ======================================================================
 // DD-T5: AT TIME filters edges during simple MATCH
 // ======================================================================
@@ -76,24 +75,29 @@ fn dd_t5_edge_without_valid_from_always_valid() {
     // if the auto-injected _valid_from makes it visible at the right time.
     let mut params = Params::new();
     params.insert("__query_start_ms__".to_string(), Value::Int64(100));
-    db.execute_with_params(
-        "CREATE (a:X {name: 'A'})-[:REL]->(b:Y {name: 'B'})",
-        params,
-    )
-    .expect("create");
+    db.execute_with_params("CREATE (a:X {name: 'A'})-[:REL]->(b:Y {name: 'B'})", params)
+        .expect("create");
 
     // Edge was created at t=100, _valid_from should be 100 (auto-injected).
     // At t=200 (after creation), it should be visible.
     let result = db
         .execute("MATCH (a:X)-[r:REL]->(b:Y) AT TIME 200 RETURN a.name")
         .expect("query at 200");
-    assert_eq!(result.rows.len(), 1, "edge with auto _valid_from should be visible after creation");
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "edge with auto _valid_from should be visible after creation"
+    );
 
     // At t=50 (before creation), edge should NOT be visible.
     let result = db
         .execute("MATCH (a:X)-[r:REL]->(b:Y) AT TIME 50 RETURN a.name")
         .expect("query at 50");
-    assert_eq!(result.rows.len(), 0, "edge should not be visible before _valid_from");
+    assert_eq!(
+        result.rows.len(),
+        0,
+        "edge should not be visible before _valid_from"
+    );
 }
 
 // ======================================================================
@@ -123,13 +127,21 @@ fn dd_t6_between_time_filters_edges() {
     let result = db
         .execute("MATCH (a:Start2)-[r:CONN]->(b:End2) BETWEEN TIME 1000 AND 2000 RETURN a.name")
         .expect("between overlapping");
-    assert!(!result.rows.is_empty(), "edge overlaps with query range (got {} rows)", result.rows.len());
+    assert!(
+        !result.rows.is_empty(),
+        "edge overlaps with query range (got {} rows)",
+        result.rows.len()
+    );
 
     // BETWEEN TIME 2000 AND 3000 -- no overlap with [500, 1500)
     let result = db
         .execute("MATCH (a:Start2)-[r:CONN]->(b:End2) BETWEEN TIME 2000 AND 3000 RETURN a.name")
         .expect("between no overlap");
-    assert_eq!(result.rows.len(), 0, "edge does not overlap with query range");
+    assert_eq!(
+        result.rows.len(),
+        0,
+        "edge does not overlap with query range"
+    );
 }
 
 // ======================================================================
@@ -163,8 +175,10 @@ fn ee_t1_var_length_at_time_temporal_continuity() {
         .expect("set A->B validity");
 
     // Set B2->C valid [1500, 3000)
-    db.execute("MATCH (b:Chain2)-[r:STEP]->(c:Chain2) SET r._valid_from = 1500, r._valid_to = 3000")
-        .expect("set B->C validity");
+    db.execute(
+        "MATCH (b:Chain2)-[r:STEP]->(c:Chain2) SET r._valid_from = 1500, r._valid_to = 3000",
+    )
+    .expect("set B->C validity");
 
     // AT TIME 1000: A->B is valid but this is an isolated chain test
     // With A->B valid at t=1000, variable-length should reach B
@@ -204,7 +218,11 @@ fn ee_t1_all_edges_must_be_valid_in_path() {
     let result = db
         .execute("MATCH (a:P1 {name: 'A'})-[*1..2]->(x) AT TIME 1000 RETURN x.name")
         .expect("at 1000");
-    assert_eq!(result.rows.len(), 2, "both hops valid at t=1000: A->B and A->B->C");
+    assert_eq!(
+        result.rows.len(),
+        2,
+        "both hops valid at t=1000: A->B and A->B->C"
+    );
 
     // AT TIME 1800: A->B valid, but B->C expired -> only A->B
     let result = db
@@ -246,9 +264,15 @@ fn ee_t2_between_time_simple_node_edge() {
 
     // BETWEEN TIME 50 AND 200: node was created at t=100, _created_at=100 is in [50,200]
     let result = db
-        .execute("MATCH (a:BT {name: 'A'})-[r:BT_LINK]->(b:BT) BETWEEN TIME 50 AND 200 RETURN a.name")
+        .execute(
+            "MATCH (a:BT {name: 'A'})-[r:BT_LINK]->(b:BT) BETWEEN TIME 50 AND 200 RETURN a.name",
+        )
         .expect("between 50 200");
-    assert!(!result.rows.is_empty(), "node and edge created at t=100 should be in [50,200] (got {} rows)", result.rows.len());
+    assert!(
+        !result.rows.is_empty(),
+        "node and edge created at t=100 should be in [50,200] (got {} rows)",
+        result.rows.len()
+    );
 }
 
 #[test]
@@ -277,14 +301,22 @@ fn ee_t2_var_length_between_time_overlap() {
     let result = db
         .execute("MATCH (a:Q1 {name: 'A'})-[*1..2]->(x) BETWEEN TIME 800 AND 1200 RETURN x.name")
         .expect("between 800 1200");
-    assert!(result.rows.len() >= 2, "both edges should overlap [800,1200] (got {} rows)", result.rows.len());
+    assert!(
+        result.rows.len() >= 2,
+        "both edges should overlap [800,1200] (got {} rows)",
+        result.rows.len()
+    );
 
     // BETWEEN TIME 1100 AND 1500: Q1->Q2 does NOT overlap (ends at 1000)
     // But even if Q2->Q3 overlaps, the first hop Q1->Q2 fails
     let result = db
         .execute("MATCH (a:Q1 {name: 'A'})-[*1..2]->(x) BETWEEN TIME 1100 AND 1500 RETURN x.name")
         .expect("between 1100 1500");
-    assert_eq!(result.rows.len(), 0, "Q1->Q2 not valid in [1100,1500], breaks path");
+    assert_eq!(
+        result.rows.len(),
+        0,
+        "Q1->Q2 not valid in [1100,1500], breaks path"
+    );
 }
 
 // ======================================================================
@@ -374,7 +406,11 @@ fn ee_t3_open_ended_edge_validity() {
     let result = db
         .execute("MATCH (a:Open {name: 'A'})-[r:OPEN]->(b:Open) AT TIME 1000 RETURN a.name")
         .expect("at 1000");
-    assert_eq!(result.rows.len(), 1, "open-ended edge valid after _valid_from");
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "open-ended edge valid after _valid_from"
+    );
 
     // AT TIME 999999: still valid
     let result = db

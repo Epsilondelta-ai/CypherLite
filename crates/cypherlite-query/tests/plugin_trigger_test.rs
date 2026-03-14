@@ -39,38 +39,38 @@ impl Trigger for AuditTrigger {
         Ok(())
     }
     fn on_after_create(&self, ctx: &TriggerContext) -> Result<(), CypherLiteError> {
-        self.log
-            .lock()
-            .unwrap()
-            .push(format!("after_create:{:?}:{}", ctx.entity_type, ctx.entity_id));
+        self.log.lock().unwrap().push(format!(
+            "after_create:{:?}:{}",
+            ctx.entity_type, ctx.entity_id
+        ));
         Ok(())
     }
     fn on_before_update(&self, ctx: &TriggerContext) -> Result<(), CypherLiteError> {
-        self.log
-            .lock()
-            .unwrap()
-            .push(format!("before_update:{:?}:{}", ctx.entity_type, ctx.entity_id));
+        self.log.lock().unwrap().push(format!(
+            "before_update:{:?}:{}",
+            ctx.entity_type, ctx.entity_id
+        ));
         Ok(())
     }
     fn on_after_update(&self, ctx: &TriggerContext) -> Result<(), CypherLiteError> {
-        self.log
-            .lock()
-            .unwrap()
-            .push(format!("after_update:{:?}:{}", ctx.entity_type, ctx.entity_id));
+        self.log.lock().unwrap().push(format!(
+            "after_update:{:?}:{}",
+            ctx.entity_type, ctx.entity_id
+        ));
         Ok(())
     }
     fn on_before_delete(&self, ctx: &TriggerContext) -> Result<(), CypherLiteError> {
-        self.log
-            .lock()
-            .unwrap()
-            .push(format!("before_delete:{:?}:{}", ctx.entity_type, ctx.entity_id));
+        self.log.lock().unwrap().push(format!(
+            "before_delete:{:?}:{}",
+            ctx.entity_type, ctx.entity_id
+        ));
         Ok(())
     }
     fn on_after_delete(&self, ctx: &TriggerContext) -> Result<(), CypherLiteError> {
-        self.log
-            .lock()
-            .unwrap()
-            .push(format!("after_delete:{:?}:{}", ctx.entity_type, ctx.entity_id));
+        self.log.lock().unwrap().push(format!(
+            "after_delete:{:?}:{}",
+            ctx.entity_type, ctx.entity_id
+        ));
         Ok(())
     }
 }
@@ -271,7 +271,8 @@ fn test_trigger_fires_on_set_property() {
     db.register_trigger(Box::new(AuditTrigger { log: log.clone() }))
         .expect("register");
 
-    db.execute("CREATE (n:Person {name: 'Alice'})").expect("create");
+    db.execute("CREATE (n:Person {name: 'Alice'})")
+        .expect("create");
 
     // Clear the creation log entries
     log.lock().unwrap().clear();
@@ -304,7 +305,8 @@ fn test_trigger_fires_on_delete() {
     db.register_trigger(Box::new(AuditTrigger { log: log.clone() }))
         .expect("register");
 
-    db.execute("CREATE (n:Person {name: 'Alice'})").expect("create");
+    db.execute("CREATE (n:Person {name: 'Alice'})")
+        .expect("create");
 
     // Clear creation logs
     log.lock().unwrap().clear();
@@ -360,7 +362,8 @@ fn test_trigger_blocks_update() {
     let mut db = CypherLite::open(test_config(dir.path())).expect("open");
 
     // Create node first (no trigger yet)
-    db.execute("CREATE (n:Person {name: 'Alice'})").expect("create");
+    db.execute("CREATE (n:Person {name: 'Alice'})")
+        .expect("create");
 
     // Register blocking trigger
     db.register_trigger(Box::new(BlockUpdateTrigger))
@@ -370,9 +373,7 @@ fn test_trigger_blocks_update() {
     assert!(result.is_err(), "SET should fail when trigger blocks it");
 
     // Verify property unchanged
-    let check = db
-        .execute("MATCH (n:Person) RETURN n.name")
-        .expect("check");
+    let check = db.execute("MATCH (n:Person) RETURN n.name").expect("check");
     assert_eq!(check.rows.len(), 1);
     assert_eq!(
         check.rows[0].get("n.name"),
@@ -390,7 +391,8 @@ fn test_trigger_blocks_delete() {
     let mut db = CypherLite::open(test_config(dir.path())).expect("open");
 
     // Create node first (no trigger yet)
-    db.execute("CREATE (n:Person {name: 'Alice'})").expect("create");
+    db.execute("CREATE (n:Person {name: 'Alice'})")
+        .expect("create");
 
     // Register blocking trigger
     db.register_trigger(Box::new(BlockDeleteTrigger))
@@ -400,9 +402,7 @@ fn test_trigger_blocks_delete() {
     assert!(result.is_err(), "DELETE should fail when trigger blocks it");
 
     // Verify node still exists
-    let check = db
-        .execute("MATCH (n:Person) RETURN n.name")
-        .expect("check");
+    let check = db.execute("MATCH (n:Person) RETURN n.name").expect("check");
     assert_eq!(check.rows.len(), 1);
 }
 

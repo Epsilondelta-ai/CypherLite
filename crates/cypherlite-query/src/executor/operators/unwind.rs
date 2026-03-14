@@ -34,10 +34,7 @@ pub fn execute_unwind(
             }
             _ => {
                 return Err(ExecutionError {
-                    message: format!(
-                        "UNWIND expected a list or null, got {:?}",
-                        value
-                    ),
+                    message: format!("UNWIND expected a list or null, got {:?}", value),
                 });
             }
         }
@@ -204,9 +201,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let engine = test_engine(dir.path());
 
-        let expr = Expression::ListLiteral(vec![
-            Expression::Literal(Literal::Integer(1)),
-        ]);
+        let expr = Expression::ListLiteral(vec![Expression::Literal(Literal::Integer(1))]);
 
         let params = Params::new();
         let result = execute_unwind(vec![], &expr, "x", &engine, &params, &());
@@ -224,10 +219,7 @@ mod tests {
         let mut record = Record::new();
         record.insert(
             "items".to_string(),
-            Value::List(vec![
-                Value::String("a".into()),
-                Value::String("b".into()),
-            ]),
+            Value::List(vec![Value::String("a".into()), Value::String("b".into())]),
         );
 
         let expr = Expression::Variable("items".to_string());

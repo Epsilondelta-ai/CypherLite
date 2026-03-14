@@ -27,7 +27,8 @@ fn test_create_hyperedge_single_source() {
     let dir = tempdir().expect("tempdir");
     let mut db = CypherLite::open(test_config(dir.path())).expect("open");
 
-    db.execute("CREATE (a:HESrc {name: 'Alice'})").expect("create");
+    db.execute("CREATE (a:HESrc {name: 'Alice'})")
+        .expect("create");
 
     // MATCH single node, create hyperedge with it as source
     db.execute("MATCH (a:HESrc) CREATE HYPEREDGE (h:Solo) FROM (a) TO ()")
@@ -99,10 +100,8 @@ fn test_hyperedge_two_participants_via_chain() {
         .expect("chain");
 
     // MATCH a->b, create hyperedge FROM (a) TO (b)
-    db.execute(
-        "MATCH (a:TwoA)-[:NEXT]->(b:TwoB) CREATE HYPEREDGE (h:Step) FROM (a) TO (b)",
-    )
-    .expect("step hyperedge");
+    db.execute("MATCH (a:TwoA)-[:NEXT]->(b:TwoB) CREATE HYPEREDGE (h:Step) FROM (a) TO (b)")
+        .expect("step hyperedge");
 
     // Verify existence
     let result = db.execute("MATCH HYPEREDGE (h) RETURN h").expect("match");

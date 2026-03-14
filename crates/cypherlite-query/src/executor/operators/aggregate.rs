@@ -171,8 +171,14 @@ mod tests {
         let aggregates = vec![("cnt".to_string(), AggregateFunc::CountStar)];
 
         let params = Params::new();
-        let result =
-            execute_aggregate(vec![r1, r2, r3], &group_keys, &aggregates, &engine, &params, &());
+        let result = execute_aggregate(
+            vec![r1, r2, r3],
+            &group_keys,
+            &aggregates,
+            &engine,
+            &params,
+            &(),
+        );
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 2);
 

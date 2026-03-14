@@ -95,7 +95,14 @@ pub fn execute_create(
         let mut new_record = record.clone();
 
         for chain in &pattern.chains {
-            create_chain(chain, &mut new_record, engine, params, scalar_fns, trigger_fns)?;
+            create_chain(
+                chain,
+                &mut new_record,
+                engine,
+                params,
+                scalar_fns,
+                trigger_fns,
+            )?;
         }
 
         results.push(new_record);
@@ -195,7 +202,8 @@ fn create_chain(
                     .collect();
 
                 // Resolve properties
-                let mut properties = resolve_properties(&np.properties, record, engine, params, scalar_fns)?;
+                let mut properties =
+                    resolve_properties(&np.properties, record, engine, params, scalar_fns)?;
 
                 // Inject timestamps if temporal tracking is enabled
                 if temporal_enabled {
@@ -272,8 +280,13 @@ fn create_chain(
                         .iter()
                         .map(|l| engine.get_or_create_label(l))
                         .collect();
-                    let mut properties =
-                        resolve_properties(&target_np.properties, record, engine, params, scalar_fns)?;
+                    let mut properties = resolve_properties(
+                        &target_np.properties,
+                        record,
+                        engine,
+                        params,
+                        scalar_fns,
+                    )?;
 
                     if temporal_enabled {
                         inject_create_timestamps(&mut properties, engine, params);
@@ -326,19 +339,17 @@ fn create_chain(
                 };
 
                 // Resolve relationship type
-                let rel_type_name = rp
-                    .rel_types
-                    .first()
-                    .ok_or_else(|| ExecutionError {
-                        message: "CREATE relationship requires a type".to_string(),
-                    })?;
+                let rel_type_name = rp.rel_types.first().ok_or_else(|| ExecutionError {
+                    message: "CREATE relationship requires a type".to_string(),
+                })?;
                 let rel_type_id = engine.get_or_create_rel_type(rel_type_name);
 
                 // Validate no system properties in relationship
                 validate_no_system_properties(&rp.properties)?;
 
                 // Resolve relationship properties
-                let mut rel_props = resolve_properties(&rp.properties, record, engine, params, scalar_fns)?;
+                let mut rel_props =
+                    resolve_properties(&rp.properties, record, engine, params, scalar_fns)?;
 
                 if temporal_enabled {
                     inject_create_timestamps(&mut rel_props, engine, params);
@@ -479,7 +490,14 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &(), &());
+        let result = execute_create(
+            vec![Record::new()],
+            &pattern,
+            &mut engine,
+            &params,
+            &(),
+            &(),
+        );
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert!(records[0].contains_key("n"));
@@ -511,7 +529,14 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &(), &());
+        let result = execute_create(
+            vec![Record::new()],
+            &pattern,
+            &mut engine,
+            &params,
+            &(),
+            &(),
+        );
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
 
@@ -555,7 +580,14 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &(), &());
+        let result = execute_create(
+            vec![Record::new()],
+            &pattern,
+            &mut engine,
+            &params,
+            &(),
+            &(),
+        );
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert!(records[0].contains_key("a"));
@@ -617,7 +649,14 @@ mod tests {
             "__query_start_ms__".to_string(),
             Value::Int64(1_700_000_000_000),
         );
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &(), &());
+        let result = execute_create(
+            vec![Record::new()],
+            &pattern,
+            &mut engine,
+            &params,
+            &(),
+            &(),
+        );
         let records = result.expect("should succeed");
 
         // Get the edge and verify it has _valid_from
@@ -682,7 +721,14 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![initial_record], &pattern, &mut engine, &params, &(), &());
+        let result = execute_create(
+            vec![initial_record],
+            &pattern,
+            &mut engine,
+            &params,
+            &(),
+            &(),
+        );
         let records = result.expect("should succeed");
 
         // Should reuse existing node "a" and create only "b"

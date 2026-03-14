@@ -55,13 +55,7 @@ pub fn execute_as_of_scan(
 
         for (var_name, value) in record {
             if let Value::Node(node_id) = value {
-                match find_node_state_at(
-                    *node_id,
-                    target_ms,
-                    updated_key,
-                    created_key,
-                    engine,
-                ) {
+                match find_node_state_at(*node_id, target_ms, updated_key, created_key, engine) {
                     Some(TemporalNodeState::Current) => {
                         // Current state is valid at target time; keep the record as-is
                     }
@@ -212,8 +206,8 @@ fn find_node_state_at(
     }
 
     // Get current node's _updated_at
-    let current_updated = get_timestamp_prop(&current.properties, updated_key)
-        .unwrap_or(current_created);
+    let current_updated =
+        get_timestamp_prop(&current.properties, updated_key).unwrap_or(current_created);
 
     // If current state's _updated_at <= target_ms, current state is valid
     if current_updated <= target_ms {

@@ -1218,10 +1218,7 @@ mod tests {
     #[test]
     fn lex_hh1_all_keywords_include_new() {
         // Verify SNAPSHOT and FROM are recognized alongside existing keywords
-        let kw_pairs = vec![
-            ("snapshot", Token::Snapshot),
-            ("from", Token::From),
-        ];
+        let kw_pairs = vec![("snapshot", Token::Snapshot), ("from", Token::From)];
         for (input, expected) in kw_pairs {
             assert_eq!(
                 tokens(input),

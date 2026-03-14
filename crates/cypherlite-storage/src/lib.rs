@@ -5,22 +5,22 @@
 pub mod btree;
 /// Catalog for label, property key, and relationship type name resolution.
 pub mod catalog;
-/// Page layout, buffer pool, and page manager.
-pub mod page;
-/// MVCC transaction management.
-pub mod transaction;
-/// Write-ahead log (WAL) for crash recovery.
-pub mod wal;
-/// Property index infrastructure for fast node lookups.
-pub mod index;
-/// Version storage for pre-update entity snapshots.
-pub mod version;
-/// Subgraph entity storage and membership index.
-#[cfg(feature = "subgraph")]
-pub mod subgraph;
 /// Hyperedge entity storage and reverse index.
 #[cfg(feature = "hypergraph")]
 pub mod hyperedge;
+/// Property index infrastructure for fast node lookups.
+pub mod index;
+/// Page layout, buffer pool, and page manager.
+pub mod page;
+/// Subgraph entity storage and membership index.
+#[cfg(feature = "subgraph")]
+pub mod subgraph;
+/// MVCC transaction management.
+pub mod transaction;
+/// Version storage for pre-update entity snapshots.
+pub mod version;
+/// Write-ahead log (WAL) for crash recovery.
+pub mod wal;
 
 use cypherlite_core::{
     DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId, PropertyValue,
@@ -31,27 +31,27 @@ use cypherlite_core::{SubgraphId, SubgraphRecord};
 
 use btree::edge_store::EdgeStore;
 use btree::node_store::NodeStore;
+#[cfg(feature = "hypergraph")]
+use cypherlite_core::{HyperEdgeId, HyperEdgeRecord};
+#[cfg(feature = "hypergraph")]
+use hyperedge::reverse_index::HyperEdgeReverseIndex;
+#[cfg(feature = "hypergraph")]
+use hyperedge::HyperEdgeStore;
 use index::edge_index::EdgeIndexManager;
 use index::IndexManager;
 use page::buffer_pool::BufferPool;
 use page::page_manager::PageManager;
 use page::PAGE_SIZE;
+#[cfg(feature = "subgraph")]
+use subgraph::membership::MembershipIndex;
+#[cfg(feature = "subgraph")]
+use subgraph::SubgraphStore;
 use transaction::mvcc::TransactionManager;
 use version::VersionStore;
 use wal::checkpoint::Checkpoint;
 use wal::reader::WalReader;
 use wal::recovery::Recovery;
 use wal::writer::WalWriter;
-#[cfg(feature = "subgraph")]
-use subgraph::SubgraphStore;
-#[cfg(feature = "subgraph")]
-use subgraph::membership::MembershipIndex;
-#[cfg(feature = "hypergraph")]
-use cypherlite_core::{HyperEdgeId, HyperEdgeRecord};
-#[cfg(feature = "hypergraph")]
-use hyperedge::HyperEdgeStore;
-#[cfg(feature = "hypergraph")]
-use hyperedge::reverse_index::HyperEdgeReverseIndex;
 
 /// The main storage engine for CypherLite.
 ///
@@ -171,7 +171,9 @@ impl StorageEngine {
         labels: Vec<u32>,
         properties: Vec<(u32, PropertyValue)>,
     ) -> NodeId {
-        let id = self.node_store.create_node(labels.clone(), properties.clone());
+        let id = self
+            .node_store
+            .create_node(labels.clone(), properties.clone());
         // Update header with new next_node_id
         self.page_manager.header_mut().next_node_id = self.node_store.next_id();
         // Auto-update indexes: for each label and property, check if an index applies
@@ -292,8 +294,7 @@ impl StorageEngine {
     ) -> Result<()> {
         // CC-T5: Update edge indexes on SET
         let old_edge = self.edge_store.get_edge(edge_id).cloned();
-        self.edge_store
-            .update_edge(edge_id, properties.clone())?;
+        self.edge_store.update_edge(edge_id, properties.clone())?;
         if let Some(old) = old_edge {
             let rel_type_id = old.rel_type_id;
             // Remove old values from indexes
@@ -443,9 +444,9 @@ impl StorageEngine {
                 continue;
             }
             // Check all required properties (exact equality)
-            let has_all_props = properties.iter().all(|(key, val)| {
-                node.properties.iter().any(|(k, v)| k == key && v == val)
-            });
+            let has_all_props = properties
+                .iter()
+                .all(|(key, val)| node.properties.iter().any(|(k, v)| k == key && v == val));
             if has_all_props {
                 return Some(node.node_id);
             }
@@ -457,12 +458,7 @@ impl StorageEngine {
     ///
     /// Checks edges connected to the start node and returns the first one
     /// matching both the end node and relationship type.
-    pub fn find_edge(
-        &self,
-        start: NodeId,
-        end: NodeId,
-        type_id: u32,
-    ) -> Option<EdgeId> {
+    pub fn find_edge(&self, start: NodeId, end: NodeId, type_id: u32) -> Option<EdgeId> {
         let edges = self.get_edges_for_node(start);
         for edge in edges {
             if edge.start_node == start && edge.end_node == end && edge.rel_type_id == type_id {
@@ -495,7 +491,11 @@ impl StorageEngine {
             self.node_store
                 .scan_by_label(label_id)
                 .iter()
-                .filter(|n| n.properties.iter().any(|(k, v)| *k == prop_key_id && v == value))
+                .filter(|n| {
+                    n.properties
+                        .iter()
+                        .any(|(k, v)| *k == prop_key_id && v == value)
+                })
                 .map(|n| n.node_id)
                 .collect()
         }
@@ -573,7 +573,11 @@ impl StorageEngine {
             self.edge_store
                 .scan_by_type(rel_type_id)
                 .iter()
-                .filter(|e| e.properties.iter().any(|(k, v)| *k == prop_key_id && v == value))
+                .filter(|e| {
+                    e.properties
+                        .iter()
+                        .any(|(k, v)| *k == prop_key_id && v == value)
+                })
                 .map(|e| e.edge_id)
                 .collect()
         }
@@ -693,12 +697,9 @@ impl StorageEngine {
         targets: Vec<cypherlite_core::GraphEntity>,
         properties: Vec<(u32, PropertyValue)>,
     ) -> HyperEdgeId {
-        let id = self.hyperedge_store.create(
-            rel_type_id,
-            sources.clone(),
-            targets.clone(),
-            properties,
-        );
+        let id =
+            self.hyperedge_store
+                .create(rel_type_id, sources.clone(), targets.clone(), properties);
         // Sync next_hyperedge_id with header
         self.page_manager.header_mut().next_hyperedge_id = self.hyperedge_store.next_id();
         // Update reverse index for all source and target participants
@@ -1041,7 +1042,10 @@ mod tests {
             vec![label_id],
             vec![(name_key, PropertyValue::String("Alice".into()))],
         );
-        let found = engine.find_node(&[label_id], &[(name_key, PropertyValue::String("Alice".into()))]);
+        let found = engine.find_node(
+            &[label_id],
+            &[(name_key, PropertyValue::String("Alice".into()))],
+        );
         assert_eq!(found, Some(nid));
     }
 
@@ -1055,7 +1059,10 @@ mod tests {
             vec![label_id],
             vec![(name_key, PropertyValue::String("Alice".into()))],
         );
-        let found = engine.find_node(&[label_id], &[(name_key, PropertyValue::String("Bob".into()))]);
+        let found = engine.find_node(
+            &[label_id],
+            &[(name_key, PropertyValue::String("Bob".into()))],
+        );
         assert_eq!(found, None);
     }
 
@@ -1079,10 +1086,16 @@ mod tests {
             vec![(name_key, PropertyValue::String("Alice".into()))],
         );
         // Both labels required
-        let found = engine.find_node(&[person, employee], &[(name_key, PropertyValue::String("Alice".into()))]);
+        let found = engine.find_node(
+            &[person, employee],
+            &[(name_key, PropertyValue::String("Alice".into()))],
+        );
         assert_eq!(found, Some(nid));
         // Only person label - should still match (node has both)
-        let found2 = engine.find_node(&[person], &[(name_key, PropertyValue::String("Alice".into()))]);
+        let found2 = engine.find_node(
+            &[person],
+            &[(name_key, PropertyValue::String("Alice".into()))],
+        );
         assert_eq!(found2, Some(nid));
     }
 
@@ -1168,7 +1181,9 @@ mod tests {
         );
 
         // Index should contain the new node
-        let result = engine.index_manager().find_index(label_id, name_key)
+        let result = engine
+            .index_manager()
+            .find_index(label_id, name_key)
             .expect("index exists")
             .lookup(&PropertyValue::String("Alice".into()));
         assert_eq!(result, vec![nid]);
@@ -1196,9 +1211,14 @@ mod tests {
             .update_node(nid, vec![(name_key, PropertyValue::String("Bob".into()))])
             .expect("update");
 
-        let idx = engine.index_manager().find_index(label_id, name_key).expect("idx");
+        let idx = engine
+            .index_manager()
+            .find_index(label_id, name_key)
+            .expect("idx");
         // Old value should not be in index
-        assert!(idx.lookup(&PropertyValue::String("Alice".into())).is_empty());
+        assert!(idx
+            .lookup(&PropertyValue::String("Alice".into()))
+            .is_empty());
         // New value should be in index
         assert_eq!(idx.lookup(&PropertyValue::String("Bob".into())), vec![nid]);
     }
@@ -1222,8 +1242,13 @@ mod tests {
 
         engine.delete_node(nid).expect("delete");
 
-        let idx = engine.index_manager().find_index(label_id, name_key).expect("idx");
-        assert!(idx.lookup(&PropertyValue::String("Alice".into())).is_empty());
+        let idx = engine
+            .index_manager()
+            .find_index(label_id, name_key)
+            .expect("idx");
+        assert!(idx
+            .lookup(&PropertyValue::String("Alice".into()))
+            .is_empty());
     }
 
     // ======================================================================
@@ -1307,7 +1332,9 @@ mod tests {
 
         // Linear scan result
         let without_idx = engine.scan_nodes_by_property(
-            label_id, name_key, &PropertyValue::String("Alice".into()),
+            label_id,
+            name_key,
+            &PropertyValue::String("Alice".into()),
         );
 
         // Now create index and backfill
@@ -1316,21 +1343,27 @@ mod tests {
             .create_index("idx".to_string(), label_id, name_key)
             .expect("create");
         // Backfill: manually insert existing nodes into the index
-        let nodes: Vec<_> = engine.scan_nodes_by_label(label_id)
+        let nodes: Vec<_> = engine
+            .scan_nodes_by_label(label_id)
             .iter()
             .map(|n| (n.node_id, n.properties.clone()))
             .collect();
         for (nid, props) in &nodes {
             for (pk, v) in props {
                 if *pk == name_key {
-                    engine.index_manager_mut().find_index_mut(label_id, name_key)
-                        .expect("idx").insert(v, *nid);
+                    engine
+                        .index_manager_mut()
+                        .find_index_mut(label_id, name_key)
+                        .expect("idx")
+                        .insert(v, *nid);
                 }
             }
         }
 
         let with_idx = engine.scan_nodes_by_property(
-            label_id, name_key, &PropertyValue::String("Alice".into()),
+            label_id,
+            name_key,
+            &PropertyValue::String("Alice".into()),
         );
 
         // Both paths should return same IDs (order may differ)
@@ -1358,14 +1391,12 @@ mod tests {
             .expect("create index");
 
         for age in [20, 25, 30, 35, 40] {
-            engine.create_node(
-                vec![label_id],
-                vec![(age_key, PropertyValue::Int64(age))],
-            );
+            engine.create_node(vec![label_id], vec![(age_key, PropertyValue::Int64(age))]);
         }
 
         let result = engine.scan_nodes_by_range(
-            label_id, age_key,
+            label_id,
+            age_key,
             &PropertyValue::Int64(25),
             &PropertyValue::Int64(35),
         );
@@ -1380,14 +1411,12 @@ mod tests {
         let age_key = engine.get_or_create_prop_key("age");
 
         for age in [20, 25, 30, 35, 40] {
-            engine.create_node(
-                vec![label_id],
-                vec![(age_key, PropertyValue::Int64(age))],
-            );
+            engine.create_node(vec![label_id], vec![(age_key, PropertyValue::Int64(age))]);
         }
 
         let result = engine.scan_nodes_by_range(
-            label_id, age_key,
+            label_id,
+            age_key,
             &PropertyValue::Int64(25),
             &PropertyValue::Int64(35),
         );
@@ -1467,10 +1496,8 @@ mod tests {
         fn test_engine_get_subgraph() {
             let dir = tempdir().expect("tempdir");
             let mut engine = test_engine_sg(dir.path());
-            let id = engine.create_subgraph(
-                vec![(1, PropertyValue::String("test".into()))],
-                Some(1_000),
-            );
+            let id = engine
+                .create_subgraph(vec![(1, PropertyValue::String("test".into()))], Some(1_000));
             let record = engine.get_subgraph(id).expect("found");
             assert_eq!(record.subgraph_id, id);
             assert_eq!(record.temporal_anchor, Some(1_000));

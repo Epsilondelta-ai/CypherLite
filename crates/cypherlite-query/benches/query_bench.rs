@@ -164,7 +164,8 @@ fn bench_var_length_path(c: &mut Criterion) {
     let dir = tempdir().expect("tempdir");
     let mut db = CypherLite::open(test_config(dir.path())).expect("open");
 
-    db.execute("CREATE (n:Node {idx: 0})").expect("create first");
+    db.execute("CREATE (n:Node {idx: 0})")
+        .expect("create first");
     for i in 1..20 {
         db.execute(&format!(
             "MATCH (a:Node {{idx: {}}}) CREATE (a)-[:NEXT]->(b:Node {{idx: {}}})",
@@ -286,11 +287,8 @@ fn bench_at_time_query(c: &mut Criterion) {
             "__query_start_ms__".to_string(),
             Value::Int64(1000 + i * 500),
         );
-        db.execute_with_params(
-            &format!("MATCH (n:Person) SET n.age = {}", 25 + i),
-            params,
-        )
-        .expect("update");
+        db.execute_with_params(&format!("MATCH (n:Person) SET n.age = {}", 25 + i), params)
+            .expect("update");
     }
 
     c.bench_function("at_time_10_versions", |b| {

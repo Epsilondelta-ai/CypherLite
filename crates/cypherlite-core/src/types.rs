@@ -719,9 +719,7 @@ mod tests {
             let record = SubgraphRecord {
                 subgraph_id: SubgraphId(1),
                 temporal_anchor: Some(1_700_000_000_000),
-                properties: vec![
-                    (1, PropertyValue::String("test-graph".into())),
-                ],
+                properties: vec![(1, PropertyValue::String("test-graph".into()))],
             };
             assert_eq!(record.temporal_anchor, Some(1_700_000_000_000));
             assert_eq!(record.properties.len(), 1);

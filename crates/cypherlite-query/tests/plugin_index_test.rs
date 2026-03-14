@@ -261,9 +261,7 @@ fn test_index_plugin_remove_then_lookup() {
         let plugin = db
             .get_index_plugin("hash-index")
             .expect("should find plugin");
-        let ids = plugin
-            .lookup(&PropertyValue::Int64(42))
-            .expect("lookup");
+        let ids = plugin.lookup(&PropertyValue::Int64(42)).expect("lookup");
         assert_eq!(ids, vec![NodeId(20)]);
     }
 
@@ -282,9 +280,7 @@ fn test_index_plugin_remove_then_lookup() {
         let plugin = db
             .get_index_plugin("hash-index")
             .expect("should find plugin");
-        let ids = plugin
-            .lookup(&PropertyValue::Int64(42))
-            .expect("lookup");
+        let ids = plugin.lookup(&PropertyValue::Int64(42)).expect("lookup");
         assert!(ids.is_empty());
     }
 }

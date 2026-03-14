@@ -296,10 +296,7 @@ mod tests {
     #[test]
     fn test_invalid_datetime_format_error() {
         let err = CypherLiteError::InvalidDateTimeFormat("bad input".to_string());
-        assert_eq!(
-            format!("{err}"),
-            "Invalid datetime format: bad input"
-        );
+        assert_eq!(format!("{err}"), "Invalid datetime format: bad input");
     }
 
     // AA-T4: FeatureIncompatible error

@@ -24,7 +24,15 @@ pub fn execute_set(
         for item in items {
             match item {
                 SetItem::Property { target, value } => {
-                    apply_set_property(target, value, record, engine, params, scalar_fns, trigger_fns)?;
+                    apply_set_property(
+                        target,
+                        value,
+                        record,
+                        engine,
+                        params,
+                        scalar_fns,
+                        trigger_fns,
+                    )?;
                 }
             }
         }
@@ -112,11 +120,10 @@ fn apply_set_property(
                         message: format!("node {} not found", nid.0),
                     })?;
                     let mut props = node.properties.clone();
-                    let label_name = node
-                        .labels
-                        .first()
-                        .copied()
-                        .and_then(|lid| engine.catalog().label_name(lid).map(|s| s.to_string()));
+                    let label_name =
+                        node.labels.first().copied().and_then(|lid| {
+                            engine.catalog().label_name(lid).map(|s| s.to_string())
+                        });
                     // Release the immutable borrow on engine (node is no longer needed)
                     let _ = node;
 
@@ -255,7 +262,14 @@ pub fn execute_remove(
         for item in items {
             match item {
                 RemoveItem::Property(prop_expr) => {
-                    apply_remove_property(prop_expr, record, engine, params, scalar_fns, trigger_fns)?;
+                    apply_remove_property(
+                        prop_expr,
+                        record,
+                        engine,
+                        params,
+                        scalar_fns,
+                        trigger_fns,
+                    )?;
                 }
                 RemoveItem::Label { variable, label } => {
                     apply_remove_label(variable, label, record, engine)?;
@@ -298,11 +312,10 @@ fn apply_remove_property(
                     let node = engine.get_node(nid).ok_or_else(|| ExecutionError {
                         message: format!("node {} not found", nid.0),
                     })?;
-                    let label_name = node
-                        .labels
-                        .first()
-                        .copied()
-                        .and_then(|lid| engine.catalog().label_name(lid).map(|s| s.to_string()));
+                    let label_name =
+                        node.labels.first().copied().and_then(|lid| {
+                            engine.catalog().label_name(lid).map(|s| s.to_string())
+                        });
                     let mut props: Vec<_> = node
                         .properties
                         .iter()
@@ -646,10 +659,7 @@ mod tests {
         }];
 
         let mut params = Params::new();
-        params.insert(
-            "__query_start_ms__".to_string(),
-            Value::Int64(9_999_999),
-        );
+        params.insert("__query_start_ms__".to_string(), Value::Int64(9_999_999));
         let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
 

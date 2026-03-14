@@ -39,11 +39,8 @@ fn xt6_at_time_returns_historical_state() {
         "__query_start_ms__".to_string(),
         cypherlite_query::executor::Value::Int64(1000),
     );
-    db.execute_with_params(
-        "CREATE (n:Person {name: 'Alice', age: 25})",
-        params,
-    )
-    .expect("create");
+    db.execute_with_params("CREATE (n:Person {name: 'Alice', age: 25})", params)
+        .expect("create");
 
     // Update at time 2000
     let mut params = Params::new();
@@ -84,11 +81,8 @@ fn xt6_at_time_returns_current_state_when_no_later_updates() {
         "__query_start_ms__".to_string(),
         cypherlite_query::executor::Value::Int64(1000),
     );
-    db.execute_with_params(
-        "CREATE (n:Person {name: 'Alice', age: 25})",
-        params,
-    )
-    .expect("create");
+    db.execute_with_params("CREATE (n:Person {name: 'Alice', age: 25})", params)
+        .expect("create");
 
     // AT TIME 5000: node was created at 1000 and never updated, so current state
     let result = db
@@ -110,11 +104,8 @@ fn xt6_at_time_excludes_nodes_created_after_timestamp() {
         "__query_start_ms__".to_string(),
         cypherlite_query::executor::Value::Int64(2000),
     );
-    db.execute_with_params(
-        "CREATE (n:Person {name: 'Alice', age: 25})",
-        params,
-    )
-    .expect("create");
+    db.execute_with_params("CREATE (n:Person {name: 'Alice', age: 25})", params)
+        .expect("create");
 
     // AT TIME 1000: node doesn't exist yet
     let result = db
@@ -165,7 +156,11 @@ fn xt6_at_time_after_second_update() {
         .expect("at time query");
     assert_eq!(result.rows.len(), 1);
     let age = result.rows[0].get_as::<i64>("n.age");
-    assert_eq!(age, Some(30), "age at time 2500 should be 30 (after first SET)");
+    assert_eq!(
+        age,
+        Some(30),
+        "age at time 2500 should be 30 (after first SET)"
+    );
 }
 
 #[test]
@@ -284,7 +279,11 @@ fn yt3_between_time_narrow_range() {
     // - Snapshot 2: state before SET n.age=35, which has age=30, _updated_at=2000
     // - Current: age=35, _updated_at=3000
     // In range [1500, 2500]: only snapshot 2 (_updated_at=2000) has age=30
-    assert_eq!(result.rows.len(), 1, "expected 1 version in range 1500-2500");
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "expected 1 version in range 1500-2500"
+    );
     let age = result.rows[0].get_as::<i64>("n.age");
     assert_eq!(age, Some(30));
 }
@@ -307,7 +306,11 @@ fn yt3_between_time_no_versions_in_range() {
     let result = db
         .execute("MATCH (n:Person) BETWEEN TIME 100 AND 200 RETURN n.age")
         .expect("between time no results");
-    assert_eq!(result.rows.len(), 0, "expected no versions in range 100-200");
+    assert_eq!(
+        result.rows.len(),
+        0,
+        "expected no versions in range 100-200"
+    );
 }
 
 // ======================================================================
@@ -372,7 +375,11 @@ fn zt5_create_update_at_time_returns_old_version() {
         .expect("at time query");
     assert_eq!(result.rows.len(), 1);
     let salary = result.rows[0].get_as::<i64>("n.salary");
-    assert_eq!(salary, Some(50000), "should see original salary before update");
+    assert_eq!(
+        salary,
+        Some(50000),
+        "should see original salary before update"
+    );
 }
 
 #[test]

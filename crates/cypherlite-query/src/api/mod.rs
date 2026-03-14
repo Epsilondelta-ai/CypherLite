@@ -106,8 +106,7 @@ pub struct CypherLite {
     index_plugins:
         cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::IndexPlugin>,
     #[cfg(feature = "plugin")]
-    serializers:
-        cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::Serializer>,
+    serializers: cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::Serializer>,
     #[cfg(feature = "plugin")]
     triggers: cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::Trigger>,
 }
@@ -222,11 +221,7 @@ impl CypherLite {
     pub fn list_scalar_functions(&self) -> Vec<(&str, &str)> {
         self.scalar_functions
             .list()
-            .filter_map(|name| {
-                self.scalar_functions
-                    .get(name)
-                    .map(|f| (name, f.version()))
-            })
+            .filter_map(|name| self.scalar_functions.get(name).map(|f| (name, f.version())))
             .collect()
     }
 
@@ -294,11 +289,7 @@ impl CypherLite {
     pub fn list_serializers(&self) -> Vec<(&str, &str)> {
         self.serializers
             .list()
-            .filter_map(|name| {
-                self.serializers
-                    .get(name)
-                    .map(|s| (name, s.version()))
-            })
+            .filter_map(|name| self.serializers.get(name).map(|s| (name, s.version())))
             .collect()
     }
 
@@ -308,11 +299,7 @@ impl CypherLite {
     /// `Vec<HashMap<String, PropertyValue>>`, then delegates to the
     /// serializer whose `format()` matches the requested format string.
     #[cfg(feature = "plugin")]
-    pub fn export_data(
-        &mut self,
-        format: &str,
-        query: &str,
-    ) -> Result<Vec<u8>, CypherLiteError> {
+    pub fn export_data(&mut self, format: &str, query: &str) -> Result<Vec<u8>, CypherLiteError> {
         // Validate format before executing (avoids running query for bad format).
         if !self.has_serializer_format(format) {
             return Err(CypherLiteError::UnsupportedFormat(format.to_string()));
@@ -387,11 +374,7 @@ impl CypherLite {
     pub fn list_triggers(&self) -> Vec<(&str, &str)> {
         self.triggers
             .list()
-            .filter_map(|name| {
-                self.triggers
-                    .get(name)
-                    .map(|t| (name, t.version()))
-            })
+            .filter_map(|name| self.triggers.get(name).map(|t| (name, t.version())))
             .collect()
     }
 

@@ -122,9 +122,7 @@ pub enum LogicalPlan {
         property: String,
     },
     /// DROP INDEX DDL operation.
-    DropIndex {
-        name: String,
-    },
+    DropIndex { name: String },
     /// Variable-length path expansion (BFS/DFS traversal with depth bounds).
     VarLengthExpand {
         source: Box<LogicalPlan>,
@@ -159,14 +157,10 @@ pub enum LogicalPlan {
     },
     /// Scan all subgraph entities. Used when MATCH pattern has label "Subgraph".
     #[cfg(feature = "subgraph")]
-    SubgraphScan {
-        variable: String,
-    },
+    SubgraphScan { variable: String },
     /// Scan all hyperedge entities.
     #[cfg(feature = "hypergraph")]
-    HyperEdgeScan {
-        variable: String,
-    },
+    HyperEdgeScan { variable: String },
     /// Create a hyperedge connecting multiple sources to multiple targets.
     #[cfg(feature = "hypergraph")]
     CreateHyperedgeOp {
@@ -259,8 +253,7 @@ fn annotate_temporal_filter(plan: &mut LogicalPlan, tfp: &TemporalFilterPlan) {
         | LogicalPlan::TemporalRangeScan { source, .. } => {
             annotate_temporal_filter(source, tfp);
         }
-        LogicalPlan::CreateOp { source, .. }
-        | LogicalPlan::MergeOp { source, .. } => {
+        LogicalPlan::CreateOp { source, .. } | LogicalPlan::MergeOp { source, .. } => {
             if let Some(s) = source {
                 annotate_temporal_filter(s, tfp);
             }
@@ -322,13 +315,11 @@ impl<'a> LogicalPlanner<'a> {
             Clause::Unwind(uc) => self.plan_unwind(uc, current),
             Clause::Merge(mc) => Ok(self.plan_merge(mc, current)),
             Clause::CreateIndex(ci) => match &ci.target {
-                crate::parser::ast::IndexTarget::NodeLabel(label) => {
-                    Ok(LogicalPlan::CreateIndex {
-                        name: ci.name.clone(),
-                        label: label.clone(),
-                        property: ci.property.clone(),
-                    })
-                }
+                crate::parser::ast::IndexTarget::NodeLabel(label) => Ok(LogicalPlan::CreateIndex {
+                    name: ci.name.clone(),
+                    label: label.clone(),
+                    property: ci.property.clone(),
+                }),
                 crate::parser::ast::IndexTarget::RelationshipType(rel_type) => {
                     Ok(LogicalPlan::CreateEdgeIndex {
                         name: ci.name.clone(),
@@ -625,9 +616,7 @@ impl<'a> LogicalPlanner<'a> {
 
                 // Apply inline property filter on the target node.
                 if let Some(ref props) = target_node.properties {
-                    if let Some(pred) =
-                        Self::build_inline_property_predicate(&target_var, props)
-                    {
+                    if let Some(pred) = Self::build_inline_property_predicate(&target_var, props) {
                         plan = LogicalPlan::Filter {
                             source: Box::new(plan),
                             predicate: pred,
@@ -644,7 +633,11 @@ impl<'a> LogicalPlanner<'a> {
             .first()
             .map(|name| self.registry.get_or_create_label(name));
 
-        let mut plan = LogicalPlan::NodeScan { variable: variable.clone(), label_id, limit: None };
+        let mut plan = LogicalPlan::NodeScan {
+            variable: variable.clone(),
+            label_id,
+            limit: None,
+        };
 
         // Apply inline property filters as a Filter node (e.g., {name: 'Alice'}).
         if let Some(ref props) = first_node.properties {
@@ -777,7 +770,10 @@ impl<'a> LogicalPlanner<'a> {
 
         // Detect aggregate functions in RETURN items.
         // If any item contains an aggregate, split into group_keys + aggregates.
-        let has_aggregate = rc.items.iter().any(|item| Self::is_aggregate_expr(&item.expr));
+        let has_aggregate = rc
+            .items
+            .iter()
+            .any(|item| Self::is_aggregate_expr(&item.expr));
 
         let mut plan = if has_aggregate {
             let mut group_keys = Vec::new();
@@ -894,7 +890,10 @@ impl<'a> LogicalPlanner<'a> {
 
         // Detect aggregate functions in WITH items.
         // If any item contains an aggregate, split into group_keys + aggregates.
-        let has_aggregate = wc.items.iter().any(|item| Self::is_aggregate_expr(&item.expr));
+        let has_aggregate = wc
+            .items
+            .iter()
+            .any(|item| Self::is_aggregate_expr(&item.expr));
 
         if has_aggregate {
             let mut group_keys = Vec::new();
@@ -956,9 +955,7 @@ impl<'a> LogicalPlanner<'a> {
     fn extract_aggregate_func(expr: &Expression) -> Result<AggregateFunc, PlanError> {
         match expr {
             Expression::CountStar => Ok(AggregateFunc::CountStar),
-            Expression::FunctionCall {
-                name, distinct, ..
-            } => match name.to_lowercase().as_str() {
+            Expression::FunctionCall { name, distinct, .. } => match name.to_lowercase().as_str() {
                 "count" => Ok(AggregateFunc::Count {
                     distinct: *distinct,
                 }),
@@ -1061,9 +1058,14 @@ impl<'a> LogicalPlanner<'a> {
         sc: &crate::parser::ast::CreateSnapshotClause,
     ) -> Result<LogicalPlan, PlanError> {
         // Build sub-plan from the FROM MATCH clause.
-        let chain = sc.from_match.pattern.chains.first().ok_or_else(|| PlanError {
-            message: "CREATE SNAPSHOT FROM MATCH clause has no pattern chains".to_string(),
-        })?;
+        let chain = sc
+            .from_match
+            .pattern
+            .chains
+            .first()
+            .ok_or_else(|| PlanError {
+                message: "CREATE SNAPSHOT FROM MATCH clause has no pattern chains".to_string(),
+            })?;
         let mut sub_plan = self.plan_pattern_chain(chain)?;
 
         // Apply WHERE predicate if present.
@@ -1149,7 +1151,9 @@ mod tests {
             } => {
                 assert!(!distinct);
                 match source.as_ref() {
-                    LogicalPlan::NodeScan { variable, label_id, .. } => {
+                    LogicalPlan::NodeScan {
+                        variable, label_id, ..
+                    } => {
                         assert_eq!(variable, "n");
                         assert_eq!(*label_id, Some(person_id));
                     }
@@ -1214,7 +1218,9 @@ mod tests {
 
         // NodeScan(a)
         match scan {
-            LogicalPlan::NodeScan { variable, label_id, .. } => {
+            LogicalPlan::NodeScan {
+                variable, label_id, ..
+            } => {
                 assert_eq!(variable, "a");
                 assert_eq!(*label_id, None); // no label on (a)
             }
@@ -1259,7 +1265,9 @@ mod tests {
 
         // NodeScan
         match filter_source {
-            LogicalPlan::NodeScan { variable, label_id, .. } => {
+            LogicalPlan::NodeScan {
+                variable, label_id, ..
+            } => {
                 assert_eq!(variable, "n");
                 assert!(label_id.is_some());
             }
@@ -1279,7 +1287,9 @@ mod tests {
                 // Source should be NodeScan(n)
                 let src = source.as_ref().expect("should have source");
                 match src.as_ref() {
-                    LogicalPlan::NodeScan { variable, label_id, .. } => {
+                    LogicalPlan::NodeScan {
+                        variable, label_id, ..
+                    } => {
                         assert_eq!(variable, "n");
                         assert_eq!(*label_id, None);
                     }
@@ -1549,7 +1559,9 @@ mod tests {
         };
 
         match project_source {
-            LogicalPlan::With { distinct, items, .. } => {
+            LogicalPlan::With {
+                distinct, items, ..
+            } => {
                 assert!(distinct);
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].alias, Some("name".to_string()));
@@ -1584,10 +1596,7 @@ mod tests {
             } => {
                 // group key: n
                 assert_eq!(group_keys.len(), 1);
-                assert_eq!(
-                    group_keys[0],
-                    Expression::Variable("n".to_string())
-                );
+                assert_eq!(group_keys[0], Expression::Variable("n".to_string()));
                 // aggregate: count(*) AS cnt
                 assert_eq!(aggregates.len(), 1);
                 assert_eq!(aggregates[0].0, "cnt");
@@ -1749,7 +1758,9 @@ mod tests {
 
         // NodeScan(a:Person)
         match opt_source {
-            LogicalPlan::NodeScan { variable, label_id, .. } => {
+            LogicalPlan::NodeScan {
+                variable, label_id, ..
+            } => {
                 assert_eq!(variable, "a");
                 assert!(label_id.is_some());
             }
@@ -1760,8 +1771,8 @@ mod tests {
     /// OPTIONAL MATCH without preceding MATCH should fail
     #[test]
     fn test_plan_optional_match_without_source_fails() {
-        let query = parse_query("OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a, b")
-            .expect("should parse");
+        let query =
+            parse_query("OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a, b").expect("should parse");
         let mut catalog = Catalog::default();
         let mut planner = LogicalPlanner::new(&mut catalog);
         let result = planner.plan(&query);
@@ -1805,9 +1816,7 @@ mod tests {
     /// -> OptionalExpand with rel_var
     #[test]
     fn test_plan_optional_match_with_rel_var() {
-        let plan = plan_query(
-            "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b",
-        );
+        let plan = plan_query("MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b");
 
         let project_source = match &plan {
             LogicalPlan::Project { source, .. } => source.as_ref(),
@@ -1970,9 +1979,7 @@ mod tests {
         // MM-001: CREATE HYPEREDGE produces CreateHyperedgeOp
         #[test]
         fn plan_create_hyperedge_basic() {
-            let plan = plan_query(
-                "CREATE HYPEREDGE (h:GroupMigration) FROM (a, b) TO (c)",
-            );
+            let plan = plan_query("CREATE HYPEREDGE (h:GroupMigration) FROM (a, b) TO (c)");
             match plan {
                 LogicalPlan::CreateHyperedgeOp {
                     source,
@@ -1981,7 +1988,10 @@ mod tests {
                     sources,
                     targets,
                 } => {
-                    assert!(source.is_none(), "standalone CREATE HYPEREDGE has no source");
+                    assert!(
+                        source.is_none(),
+                        "standalone CREATE HYPEREDGE has no source"
+                    );
                     assert_eq!(variable, Some("h".to_string()));
                     assert_eq!(labels, vec!["GroupMigration".to_string()]);
                     assert_eq!(sources.len(), 2);
@@ -1994,9 +2004,7 @@ mod tests {
         // MM-003: MATCH HYPEREDGE produces HyperEdgeScan
         #[test]
         fn plan_match_hyperedge_basic() {
-            let plan = plan_query(
-                "MATCH HYPEREDGE (h:GroupMigration) RETURN h",
-            );
+            let plan = plan_query("MATCH HYPEREDGE (h:GroupMigration) RETURN h");
             // Should be Project -> HyperEdgeScan
             match plan {
                 LogicalPlan::Project { source, .. } => match *source {

@@ -7,19 +7,13 @@ use cypherlite_storage::StorageEngine;
 
 /// Scan all hyperedges from the engine.
 /// Each hyperedge produces a Record with the variable bound to Value::Hyperedge(id).
-pub fn execute_hyperedge_scan(
-    variable: &str,
-    engine: &StorageEngine,
-) -> Vec<Record> {
+pub fn execute_hyperedge_scan(variable: &str, engine: &StorageEngine) -> Vec<Record> {
     engine
         .scan_hyperedges()
         .into_iter()
         .map(|he| {
             let mut record = Record::new();
-            record.insert(
-                variable.to_string(),
-                Value::Hyperedge(HyperEdgeId(he.id.0)),
-            );
+            record.insert(variable.to_string(), Value::Hyperedge(HyperEdgeId(he.id.0)));
             record
         })
         .collect()
@@ -75,9 +69,6 @@ mod tests {
         let records = execute_hyperedge_scan("h", &engine);
 
         assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].get("h"),
-            Some(&Value::Hyperedge(he_id))
-        );
+        assert_eq!(records[0].get("h"), Some(&Value::Hyperedge(he_id)));
     }
 }

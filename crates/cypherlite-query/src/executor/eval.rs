@@ -145,9 +145,8 @@ pub fn eval(
                     let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::String(s) => {
-                            let millis = parse_iso8601_to_millis(&s).map_err(|e| ExecutionError {
-                                message: e,
-                            })?;
+                            let millis = parse_iso8601_to_millis(&s)
+                                .map_err(|e| ExecutionError { message: e })?;
                             Ok(Value::DateTime(millis))
                         }
                         _ => Err(ExecutionError {
@@ -717,11 +716,7 @@ fn parse_iso8601_to_millis(s: &str) -> Result<i64, String> {
             } else if tz_part.len() == 6
                 && (tz_part.as_bytes()[0] == b'+' || tz_part.as_bytes()[0] == b'-')
             {
-                let sign: i64 = if tz_part.as_bytes()[0] == b'+' {
-                    1
-                } else {
-                    -1
-                };
+                let sign: i64 = if tz_part.as_bytes()[0] == b'+' { 1 } else { -1 };
                 let tz_hour: i64 = tz_part[1..3]
                     .parse()
                     .map_err(|_| format!("invalid timezone hour in '{}'", s))?;
@@ -737,8 +732,7 @@ fn parse_iso8601_to_millis(s: &str) -> Result<i64, String> {
 
     // Convert to days since epoch using Howard Hinnant's algorithm
     let days = days_from_civil(year, month, day);
-    let total_seconds =
-        days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64
+    let total_seconds = days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64
         - tz_offset_minutes * 60;
 
     Ok(total_seconds * 1000)
@@ -1260,7 +1254,12 @@ mod tests {
             &params,
             &(),
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
+        assert_eq!(
+            result,
+            Ok(Value::DateTime(
+                1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000
+            ))
+        );
     }
 
     #[test]
@@ -1283,7 +1282,12 @@ mod tests {
             &params,
             &(),
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
+        assert_eq!(
+            result,
+            Ok(Value::DateTime(
+                1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000
+            ))
+        );
     }
 
     #[test]
@@ -1307,7 +1311,10 @@ mod tests {
             &params,
             &(),
         );
-        assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 3_600_000 + 30 * 60_000)));
+        assert_eq!(
+            result,
+            Ok(Value::DateTime(1_705_276_800_000 + 3_600_000 + 30 * 60_000))
+        );
     }
 
     #[test]
@@ -1504,11 +1511,7 @@ mod tests {
 
     #[test]
     fn test_eval_cmp_datetime_vs_non_datetime_error() {
-        let result = eval_cmp(
-            &Value::DateTime(1_000),
-            &Value::Int64(1_000),
-            BinaryOp::Eq,
-        );
+        let result = eval_cmp(&Value::DateTime(1_000), &Value::Int64(1_000), BinaryOp::Eq);
         assert!(result.is_err());
     }
 
@@ -1641,7 +1644,10 @@ mod tests {
             let name_key = engine.get_or_create_prop_key("name");
             let nid = engine.create_node(
                 vec![],
-                vec![(name_key, cypherlite_core::PropertyValue::String("Alice".into()))],
+                vec![(
+                    name_key,
+                    cypherlite_core::PropertyValue::String("Alice".into()),
+                )],
             );
 
             let mut record = Record::new();
@@ -1656,7 +1662,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
-            &(),
+                &(),
             );
             assert_eq!(result, Ok(Value::String("Alice".into())));
         }
@@ -1675,8 +1681,14 @@ mod tests {
             let nid = engine.create_node(
                 vec![],
                 vec![
-                    (name_key, cypherlite_core::PropertyValue::String("Alice".into())),
-                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(100)),
+                    (
+                        name_key,
+                        cypherlite_core::PropertyValue::String("Alice".into()),
+                    ),
+                    (
+                        updated_at_key,
+                        cypherlite_core::PropertyValue::DateTime(100),
+                    ),
                 ],
             );
 
@@ -1686,8 +1698,14 @@ mod tests {
                 .update_node(
                     nid,
                     vec![
-                        (name_key, cypherlite_core::PropertyValue::String("Bob".into())),
-                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                        (
+                            name_key,
+                            cypherlite_core::PropertyValue::String("Bob".into()),
+                        ),
+                        (
+                            updated_at_key,
+                            cypherlite_core::PropertyValue::DateTime(200),
+                        ),
                     ],
                 )
                 .expect("update");
@@ -1706,7 +1724,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
-            &(),
+                &(),
             );
             assert_eq!(result, Ok(Value::String("Alice".into())));
         }
@@ -1725,8 +1743,14 @@ mod tests {
             let nid = engine.create_node(
                 vec![],
                 vec![
-                    (name_key, cypherlite_core::PropertyValue::String("v1".into())),
-                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(100)),
+                    (
+                        name_key,
+                        cypherlite_core::PropertyValue::String("v1".into()),
+                    ),
+                    (
+                        updated_at_key,
+                        cypherlite_core::PropertyValue::DateTime(100),
+                    ),
                 ],
             );
 
@@ -1735,8 +1759,14 @@ mod tests {
                 .update_node(
                     nid,
                     vec![
-                        (name_key, cypherlite_core::PropertyValue::String("v2".into())),
-                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                        (
+                            name_key,
+                            cypherlite_core::PropertyValue::String("v2".into()),
+                        ),
+                        (
+                            updated_at_key,
+                            cypherlite_core::PropertyValue::DateTime(200),
+                        ),
                     ],
                 )
                 .expect("update 1");
@@ -1746,8 +1776,14 @@ mod tests {
                 .update_node(
                     nid,
                     vec![
-                        (name_key, cypherlite_core::PropertyValue::String("v3".into())),
-                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(300)),
+                        (
+                            name_key,
+                            cypherlite_core::PropertyValue::String("v3".into()),
+                        ),
+                        (
+                            updated_at_key,
+                            cypherlite_core::PropertyValue::DateTime(300),
+                        ),
                     ],
                 )
                 .expect("update 2");
@@ -1765,7 +1801,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
-            &(),
+                &(),
             );
             assert_eq!(result, Ok(Value::String("v2".into())));
         }
@@ -1784,8 +1820,14 @@ mod tests {
             let nid = engine.create_node(
                 vec![],
                 vec![
-                    (name_key, cypherlite_core::PropertyValue::String("Alice".into())),
-                    (updated_at_key, cypherlite_core::PropertyValue::DateTime(200)),
+                    (
+                        name_key,
+                        cypherlite_core::PropertyValue::String("Alice".into()),
+                    ),
+                    (
+                        updated_at_key,
+                        cypherlite_core::PropertyValue::DateTime(200),
+                    ),
                 ],
             );
 
@@ -1794,8 +1836,14 @@ mod tests {
                 .update_node(
                     nid,
                     vec![
-                        (name_key, cypherlite_core::PropertyValue::String("Bob".into())),
-                        (updated_at_key, cypherlite_core::PropertyValue::DateTime(300)),
+                        (
+                            name_key,
+                            cypherlite_core::PropertyValue::String("Bob".into()),
+                        ),
+                        (
+                            updated_at_key,
+                            cypherlite_core::PropertyValue::DateTime(300),
+                        ),
                     ],
                 )
                 .expect("update");
@@ -1814,7 +1862,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
-            &(),
+                &(),
             );
             assert_eq!(result, Ok(Value::String("Bob".into())));
         }
@@ -1828,7 +1876,10 @@ mod tests {
             let name_key = engine.get_or_create_prop_key("name");
             let nid = engine.create_node(
                 vec![],
-                vec![(name_key, cypherlite_core::PropertyValue::String("Alice".into()))],
+                vec![(
+                    name_key,
+                    cypherlite_core::PropertyValue::String("Alice".into()),
+                )],
             );
 
             let mut record = Record::new();
@@ -1843,7 +1894,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
-            &(),
+                &(),
             );
             assert_eq!(result, Ok(Value::Null));
         }

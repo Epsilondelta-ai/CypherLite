@@ -208,11 +208,8 @@ impl ScalarFnLookup
     fn call_scalar(&self, name: &str, args: &[Value]) -> Option<Result<Value, ExecutionError>> {
         let func = self.get(name)?;
         // Convert Value -> PropertyValue for each argument.
-        let pv_args: Result<Vec<PropertyValue>, String> = args
-            .iter()
-            .cloned()
-            .map(PropertyValue::try_from)
-            .collect();
+        let pv_args: Result<Vec<PropertyValue>, String> =
+            args.iter().cloned().map(PropertyValue::try_from).collect();
         let pv_args = match pv_args {
             Ok(a) => a,
             Err(e) => {
@@ -292,17 +289,11 @@ impl TryFrom<Value> for PropertyValue {
                 Err("cannot convert graph entity to property".into())
             }
             #[cfg(feature = "subgraph")]
-            Value::Subgraph(_) => {
-                Err("cannot convert graph entity to property".into())
-            }
+            Value::Subgraph(_) => Err("cannot convert graph entity to property".into()),
             #[cfg(feature = "hypergraph")]
-            Value::Hyperedge(_) => {
-                Err("cannot convert graph entity to property".into())
-            }
+            Value::Hyperedge(_) => Err("cannot convert graph entity to property".into()),
             #[cfg(feature = "hypergraph")]
-            Value::TemporalNode(_, _) => {
-                Err("cannot convert graph entity to property".into())
-            }
+            Value::TemporalNode(_, _) => Err("cannot convert graph entity to property".into()),
         }
     }
 }
@@ -340,11 +331,12 @@ pub fn execute(
     match plan {
         LogicalPlan::EmptySource => Ok(vec![Record::new()]),
         LogicalPlan::NodeScan {
-            variable, label_id, limit, ..
+            variable,
+            label_id,
+            limit,
+            ..
         } => {
-            let mut records = operators::node_scan::execute_node_scan(
-                variable, *label_id, engine,
-            );
+            let mut records = operators::node_scan::execute_node_scan(variable, *label_id, engine);
             if let Some(lim) = limit {
                 records.truncate(*lim);
             }
@@ -382,8 +374,13 @@ pub fn execute(
             distinct,
         } => {
             let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
-            let mut result =
-                operators::project::execute_project(source_records, items, engine, params, scalar_fns)?;
+            let mut result = operators::project::execute_project(
+                source_records,
+                items,
+                engine,
+                params,
+                scalar_fns,
+            )?;
             if *distinct {
                 deduplicate_records(&mut result);
             }
@@ -429,7 +426,14 @@ pub fn execute(
                 Some(s) => execute(s, engine, params, scalar_fns, trigger_fns)?,
                 None => vec![Record::new()],
             };
-            operators::create::execute_create(source_records, pattern, engine, params, scalar_fns, trigger_fns)
+            operators::create::execute_create(
+                source_records,
+                pattern,
+                engine,
+                params,
+                scalar_fns,
+                trigger_fns,
+            )
         }
         LogicalPlan::DeleteOp {
             source,
@@ -437,15 +441,37 @@ pub fn execute(
             detach,
         } => {
             let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
-            operators::delete::execute_delete(source_records, exprs, *detach, engine, params, scalar_fns, trigger_fns)
+            operators::delete::execute_delete(
+                source_records,
+                exprs,
+                *detach,
+                engine,
+                params,
+                scalar_fns,
+                trigger_fns,
+            )
         }
         LogicalPlan::SetOp { source, items } => {
             let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
-            operators::set_props::execute_set(source_records, items, engine, params, scalar_fns, trigger_fns)
+            operators::set_props::execute_set(
+                source_records,
+                items,
+                engine,
+                params,
+                scalar_fns,
+                trigger_fns,
+            )
         }
         LogicalPlan::RemoveOp { source, items } => {
             let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
-            operators::set_props::execute_remove(source_records, items, engine, params, scalar_fns, trigger_fns)
+            operators::set_props::execute_remove(
+                source_records,
+                items,
+                engine,
+                params,
+                scalar_fns,
+                trigger_fns,
+            )
         }
         LogicalPlan::Unwind {
             source,
@@ -453,7 +479,14 @@ pub fn execute(
             variable,
         } => {
             let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
-            operators::unwind::execute_unwind(source_records, expr, variable, engine, params, scalar_fns)
+            operators::unwind::execute_unwind(
+                source_records,
+                expr,
+                variable,
+                engine,
+                params,
+                scalar_fns,
+            )
         }
         LogicalPlan::With {
             source,
@@ -468,7 +501,9 @@ pub fn execute(
                 deduplicate_records(&mut result);
             }
             if let Some(ref predicate) = where_clause {
-                result = operators::filter::execute_filter(result, predicate, engine, params, scalar_fns)?;
+                result = operators::filter::execute_filter(
+                    result, predicate, engine, params, scalar_fns,
+                )?;
             }
             Ok(result)
         }
@@ -482,7 +517,16 @@ pub fn execute(
                 Some(s) => execute(s, engine, params, scalar_fns, trigger_fns)?,
                 None => vec![Record::new()],
             };
-            operators::merge::execute_merge(source_records, pattern, on_match, on_create, engine, params, scalar_fns, trigger_fns)
+            operators::merge::execute_merge(
+                source_records,
+                pattern,
+                on_match,
+                on_create,
+                engine,
+                params,
+                scalar_fns,
+                trigger_fns,
+            )
         }
         LogicalPlan::CreateIndex {
             name,
@@ -508,16 +552,19 @@ pub fn execute(
                 })?;
 
             // Register in catalog
-            engine.catalog_mut().add_index_definition(
-                cypherlite_storage::index::IndexDefinition {
+            engine
+                .catalog_mut()
+                .add_index_definition(cypherlite_storage::index::IndexDefinition {
                     name: index_name,
                     label_id,
                     prop_key_id,
-                },
-            );
+                });
 
             // Backfill: index existing nodes that match the label + property
-            let nodes: Vec<(cypherlite_core::NodeId, Vec<(u32, cypherlite_core::PropertyValue)>)> = engine
+            let nodes: Vec<(
+                cypherlite_core::NodeId,
+                Vec<(u32, cypherlite_core::PropertyValue)>,
+            )> = engine
                 .scan_nodes_by_label(label_id)
                 .iter()
                 .map(|n| (n.node_id, n.properties.clone()))
@@ -525,7 +572,10 @@ pub fn execute(
             for (nid, props) in &nodes {
                 for (pk, v) in props {
                     if *pk == prop_key_id {
-                        if let Some(idx) = engine.index_manager_mut().find_index_mut(label_id, prop_key_id) {
+                        if let Some(idx) = engine
+                            .index_manager_mut()
+                            .find_index_mut(label_id, prop_key_id)
+                        {
                             idx.insert(v, *nid);
                         }
                     }
@@ -558,7 +608,10 @@ pub fn execute(
                 })?;
 
             // Backfill: index existing edges that match the rel_type + property
-            let edges: Vec<(cypherlite_core::EdgeId, Vec<(u32, cypherlite_core::PropertyValue)>)> = engine
+            let edges: Vec<(
+                cypherlite_core::EdgeId,
+                Vec<(u32, cypherlite_core::PropertyValue)>,
+            )> = engine
                 .scan_edges_by_type(rel_type_id)
                 .iter()
                 .map(|e| (e.edge_id, e.properties.clone()))
@@ -656,9 +709,9 @@ pub fn execute(
             scalar_fns,
         ),
         #[cfg(feature = "subgraph")]
-        LogicalPlan::SubgraphScan { variable } => {
-            Ok(operators::subgraph_scan::execute_subgraph_scan(variable, engine))
-        }
+        LogicalPlan::SubgraphScan { variable } => Ok(
+            operators::subgraph_scan::execute_subgraph_scan(variable, engine),
+        ),
         #[cfg(feature = "subgraph")]
         LogicalPlan::CreateSnapshotOp {
             variable,
@@ -667,21 +720,19 @@ pub fn execute(
             temporal_anchor,
             sub_plan,
             return_vars,
-        } => {
-            execute_create_snapshot(
-                variable.as_deref(),
-                properties,
-                temporal_anchor.as_ref(),
-                sub_plan,
-                return_vars,
-                engine,
-                params,
-            )
-        }
+        } => execute_create_snapshot(
+            variable.as_deref(),
+            properties,
+            temporal_anchor.as_ref(),
+            sub_plan,
+            return_vars,
+            engine,
+            params,
+        ),
         #[cfg(feature = "hypergraph")]
-        LogicalPlan::HyperEdgeScan { variable } => {
-            Ok(operators::hyperedge_scan::execute_hyperedge_scan(variable, engine))
-        }
+        LogicalPlan::HyperEdgeScan { variable } => Ok(
+            operators::hyperedge_scan::execute_hyperedge_scan(variable, engine),
+        ),
         #[cfg(feature = "hypergraph")]
         LogicalPlan::CreateHyperedgeOp {
             source,
@@ -922,12 +973,8 @@ fn execute_create_hyperedge(
     let resolved_targets = resolve_hyperedge_participants(targets, &record, engine, params)?;
 
     // Create the hyperedge (properties come from subsequent SET clause).
-    let he_id: HyperEdgeId = engine.create_hyperedge(
-        rel_type_id,
-        resolved_sources,
-        resolved_targets,
-        vec![],
-    );
+    let he_id: HyperEdgeId =
+        engine.create_hyperedge(rel_type_id, resolved_sources, resolved_targets, vec![]);
 
     // Return result record with all bindings from source plus the new hyperedge.
     let mut result_record = record;

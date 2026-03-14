@@ -131,22 +131,14 @@ impl Serializer for MockSerializer {
         "mock_json"
     }
 
-    fn export(
-        &self,
-        data: &[HashMap<String, PropertyValue>],
-    ) -> Result<Vec<u8>, CypherLiteError> {
+    fn export(&self, data: &[HashMap<String, PropertyValue>]) -> Result<Vec<u8>, CypherLiteError> {
         // Trivial: return the number of rows as bytes.
         Ok((data.len() as u64).to_le_bytes().to_vec())
     }
 
-    fn import(
-        &self,
-        bytes: &[u8],
-    ) -> Result<Vec<HashMap<String, PropertyValue>>, CypherLiteError> {
+    fn import(&self, bytes: &[u8]) -> Result<Vec<HashMap<String, PropertyValue>>, CypherLiteError> {
         if bytes.len() < 8 {
-            return Err(CypherLiteError::UnsupportedFormat(
-                "too short".to_string(),
-            ));
+            return Err(CypherLiteError::UnsupportedFormat("too short".to_string()));
         }
         let count = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
         Ok(vec![HashMap::new(); count])
@@ -308,7 +300,10 @@ fn test_registry_duplicate_name_returns_plugin_error() {
 
     match err {
         CypherLiteError::PluginError(msg) => {
-            assert!(msg.contains("dup"), "Error message should contain plugin name");
+            assert!(
+                msg.contains("dup"),
+                "Error message should contain plugin name"
+            );
         }
         other => panic!("Expected PluginError, got: {other}"),
     }
@@ -347,9 +342,7 @@ fn test_registry_contains() {
 #[test]
 fn test_registry_get_mut() {
     let mut registry = PluginRegistry::<dyn IndexPlugin>::new();
-    registry
-        .register(Box::new(MockIndexPlugin::new()))
-        .unwrap();
+    registry.register(Box::new(MockIndexPlugin::new())).unwrap();
 
     // Insert via get_mut
     let idx = registry.get_mut("mock_index").unwrap();
@@ -398,7 +391,10 @@ fn test_trigger_error_display() {
 #[test]
 fn test_trigger_context_construction() {
     let mut props = HashMap::new();
-    props.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
     props.insert("age".to_string(), PropertyValue::Int64(30));
 
     let ctx = TriggerContext {

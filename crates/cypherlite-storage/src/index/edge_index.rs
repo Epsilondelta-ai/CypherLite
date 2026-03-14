@@ -115,8 +115,7 @@ impl EdgeIndexManager {
             rel_type_id,
             prop_key_id,
         };
-        self.indexes
-            .insert(name, (def, EdgePropertyIndex::new()));
+        self.indexes.insert(name, (def, EdgePropertyIndex::new()));
         Ok(())
     }
 
@@ -131,11 +130,7 @@ impl EdgeIndexManager {
     }
 
     /// Find an edge index by (rel_type_id, prop_key_id) if one exists.
-    pub fn find_index(
-        &self,
-        rel_type_id: u32,
-        prop_key_id: u32,
-    ) -> Option<&EdgePropertyIndex> {
+    pub fn find_index(&self, rel_type_id: u32, prop_key_id: u32) -> Option<&EdgePropertyIndex> {
         self.indexes
             .values()
             .find(|(def, _)| def.rel_type_id == rel_type_id && def.prop_key_id == prop_key_id)
@@ -160,9 +155,7 @@ impl EdgeIndexManager {
     }
 
     /// Iterate over all edge indexes as (definition, edge_property_index) pairs.
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&EdgeIndexDefinition, &EdgePropertyIndex)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&EdgeIndexDefinition, &EdgePropertyIndex)> {
         self.indexes.values().map(|(def, idx)| (def, idx))
     }
 
@@ -330,10 +323,7 @@ mod tests {
     fn test_edge_property_index_datetime_range() {
         let mut idx = EdgePropertyIndex::new();
         for i in 1..=5 {
-            idx.insert(
-                &PropertyValue::DateTime(i * 1_000_000),
-                EdgeId(i as u64),
-            );
+            idx.insert(&PropertyValue::DateTime(i * 1_000_000), EdgeId(i as u64));
         }
         let result = idx.range(
             &PropertyValue::DateTime(2_000_000),

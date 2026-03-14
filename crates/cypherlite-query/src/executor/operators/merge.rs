@@ -31,7 +31,14 @@ pub fn execute_merge(
         let mut new_record = record.clone();
 
         for chain in &pattern.chains {
-            let created = merge_chain(chain, &mut new_record, engine, params, scalar_fns, trigger_fns)?;
+            let created = merge_chain(
+                chain,
+                &mut new_record,
+                engine,
+                params,
+                scalar_fns,
+                trigger_fns,
+            )?;
 
             // Apply ON MATCH SET or ON CREATE SET
             if created {
@@ -106,7 +113,8 @@ fn merge_chain(
                 // Only attempt find if we have all labels resolved
                 let all_labels_exist = np.labels.len() == label_ids.len();
 
-                let props = resolve_find_properties(&np.properties, record, engine, params, scalar_fns)?;
+                let props =
+                    resolve_find_properties(&np.properties, record, engine, params, scalar_fns)?;
 
                 let found = if all_labels_exist && !label_ids.is_empty() {
                     find_node_with_index(engine, &label_ids, &props)
@@ -136,8 +144,13 @@ fn merge_chain(
                             .iter()
                             .map(|l| engine.get_or_create_label(l))
                             .collect();
-                        let mut properties =
-                            resolve_properties_mut(&np.properties, record, engine, params, scalar_fns)?;
+                        let mut properties = resolve_properties_mut(
+                            &np.properties,
+                            record,
+                            engine,
+                            params,
+                            scalar_fns,
+                        )?;
 
                         if temporal_enabled {
                             inject_create_timestamps(&mut properties, engine, params);
@@ -160,8 +173,7 @@ fn merge_chain(
             PatternElement::Relationship(rp) => {
                 // Next element should be a node
                 let next_node = elements.next().ok_or_else(|| ExecutionError {
-                    message: "relationship must be followed by a node in MERGE pattern"
-                        .to_string(),
+                    message: "relationship must be followed by a node in MERGE pattern".to_string(),
                 })?;
 
                 let target_np = match next_node {
@@ -182,10 +194,7 @@ fn merge_chain(
                         Some(Value::Node(nid)) => *nid,
                         _ => {
                             return Err(ExecutionError {
-                                message: format!(
-                                    "variable '{}' is not a node",
-                                    target_var_name
-                                ),
+                                message: format!("variable '{}' is not a node", target_var_name),
                             })
                         }
                     }
@@ -196,10 +205,14 @@ fn merge_chain(
                         .iter()
                         .filter_map(|l| engine.label_id(l))
                         .collect();
-                    let all_target_labels_exist =
-                        target_np.labels.len() == target_label_ids.len();
-                    let target_props =
-                        resolve_find_properties(&target_np.properties, record, engine, params, scalar_fns)?;
+                    let all_target_labels_exist = target_np.labels.len() == target_label_ids.len();
+                    let target_props = resolve_find_properties(
+                        &target_np.properties,
+                        record,
+                        engine,
+                        params,
+                        scalar_fns,
+                    )?;
 
                     let found_target = if all_target_labels_exist && !target_label_ids.is_empty() {
                         find_node_with_index(engine, &target_label_ids, &target_props)
@@ -288,8 +301,13 @@ fn merge_chain(
                         validate_no_system_properties(&rp.properties)?;
 
                         let rel_type_id = engine.get_or_create_rel_type(rel_type_name);
-                        let mut rel_props =
-                            resolve_properties_mut(&rp.properties, record, engine, params, scalar_fns)?;
+                        let mut rel_props = resolve_properties_mut(
+                            &rp.properties,
+                            record,
+                            engine,
+                            params,
+                            scalar_fns,
+                        )?;
 
                         if temporal_enabled {
                             inject_create_timestamps(&mut rel_props, engine, params);
@@ -333,9 +351,14 @@ fn find_node_with_index(
     if let Some(&first_label) = label_ids.first() {
         // Try to use an index for any of the properties
         for (prop_key_id, prop_value) in properties {
-            if engine.index_manager().find_index(first_label, *prop_key_id).is_some() {
+            if engine
+                .index_manager()
+                .find_index(first_label, *prop_key_id)
+                .is_some()
+            {
                 // Index exists: use scan_nodes_by_property for fast lookup
-                let candidates = engine.scan_nodes_by_property(first_label, *prop_key_id, prop_value);
+                let candidates =
+                    engine.scan_nodes_by_property(first_label, *prop_key_id, prop_value);
                 // Filter candidates by remaining labels and properties
                 for nid in candidates {
                     if let Some(node) = engine.get_node(nid) {
@@ -819,7 +842,10 @@ mod tests {
             .create_index("idx_person_name".into(), person_label, name_key)
             .expect("create index");
         // Backfill
-        if let Some(idx) = engine.index_manager_mut().find_index_mut(person_label, name_key) {
+        if let Some(idx) = engine
+            .index_manager_mut()
+            .find_index_mut(person_label, name_key)
+        {
             idx.insert(&PropertyValue::String("Alice".into()), n1);
         }
 
@@ -965,7 +991,10 @@ mod tests {
             .index_manager_mut()
             .create_index("idx_person_name".into(), person_label, name_key)
             .expect("create index");
-        if let Some(idx) = engine.index_manager_mut().find_index_mut(person_label, name_key) {
+        if let Some(idx) = engine
+            .index_manager_mut()
+            .find_index_mut(person_label, name_key)
+        {
             idx.insert(&PropertyValue::String("Alice".into()), n1);
         }
 

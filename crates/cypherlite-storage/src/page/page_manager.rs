@@ -445,7 +445,10 @@ mod tests {
         drop(file);
 
         let result = PageManager::open_database(&config);
-        assert!(matches!(result, Err(CypherLiteError::FeatureIncompatible { .. })));
+        assert!(matches!(
+            result,
+            Err(CypherLiteError::FeatureIncompatible { .. })
+        ));
     }
 
     // AA-T3: New database gets current FORMAT_VERSION with feature flags

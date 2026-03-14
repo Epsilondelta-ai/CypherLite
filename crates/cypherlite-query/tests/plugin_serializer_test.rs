@@ -33,10 +33,7 @@ impl Serializer for TestJsonSerializer {
         "json"
     }
 
-    fn export(
-        &self,
-        data: &[HashMap<String, PropertyValue>],
-    ) -> Result<Vec<u8>, CypherLiteError> {
+    fn export(&self, data: &[HashMap<String, PropertyValue>]) -> Result<Vec<u8>, CypherLiteError> {
         let mut output = String::from("[");
         for (i, row) in data.iter().enumerate() {
             if i > 0 {
@@ -65,10 +62,7 @@ impl Serializer for TestJsonSerializer {
         Ok(output.into_bytes())
     }
 
-    fn import(
-        &self,
-        bytes: &[u8],
-    ) -> Result<Vec<HashMap<String, PropertyValue>>, CypherLiteError> {
+    fn import(&self, bytes: &[u8]) -> Result<Vec<HashMap<String, PropertyValue>>, CypherLiteError> {
         if bytes.is_empty() {
             return Err(CypherLiteError::PluginError("empty input".into()));
         }
@@ -99,15 +93,18 @@ impl Serializer for TestCsvSerializer {
         "csv"
     }
 
-    fn export(
-        &self,
-        data: &[HashMap<String, PropertyValue>],
-    ) -> Result<Vec<u8>, CypherLiteError> {
+    fn export(&self, data: &[HashMap<String, PropertyValue>]) -> Result<Vec<u8>, CypherLiteError> {
         let mut output = String::new();
         if let Some(first) = data.first() {
             let mut keys: Vec<_> = first.keys().collect();
             keys.sort();
-            output.push_str(&keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(","));
+            output.push_str(
+                &keys
+                    .iter()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             output.push('\n');
             for row in data {
                 let vals: Vec<String> = keys
@@ -126,10 +123,7 @@ impl Serializer for TestCsvSerializer {
         Ok(output.into_bytes())
     }
 
-    fn import(
-        &self,
-        bytes: &[u8],
-    ) -> Result<Vec<HashMap<String, PropertyValue>>, CypherLiteError> {
+    fn import(&self, bytes: &[u8]) -> Result<Vec<HashMap<String, PropertyValue>>, CypherLiteError> {
         if bytes.is_empty() {
             return Err(CypherLiteError::PluginError("empty input".into()));
         }
@@ -160,7 +154,9 @@ fn test_register_serializer_and_list() {
 
     let serializers = db.list_serializers();
     assert_eq!(serializers.len(), 1);
-    assert!(serializers.iter().any(|(name, _)| *name == "json-serializer"));
+    assert!(serializers
+        .iter()
+        .any(|(name, _)| *name == "json-serializer"));
 }
 
 /// P10D-002: Register multiple serializers and verify all are listed.

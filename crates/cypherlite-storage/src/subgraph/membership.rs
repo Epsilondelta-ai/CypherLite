@@ -70,10 +70,7 @@ impl MembershipIndex {
     /// Remove all members from a subgraph.
     /// Returns the list of removed node IDs.
     pub fn remove_all(&mut self, subgraph_id: SubgraphId) -> Vec<NodeId> {
-        let node_ids = self
-            .forward
-            .remove(&subgraph_id.0)
-            .unwrap_or_default();
+        let node_ids = self.forward.remove(&subgraph_id.0).unwrap_or_default();
 
         // Clean reverse indexes
         for &nid in &node_ids {

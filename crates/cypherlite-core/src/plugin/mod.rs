@@ -66,16 +66,10 @@ pub trait Serializer: Plugin {
     fn format(&self) -> &str;
 
     /// Serialize a slice of rows into bytes.
-    fn export(
-        &self,
-        data: &[HashMap<String, PropertyValue>],
-    ) -> Result<Vec<u8>, CypherLiteError>;
+    fn export(&self, data: &[HashMap<String, PropertyValue>]) -> Result<Vec<u8>, CypherLiteError>;
 
     /// Deserialize bytes into a vector of rows.
-    fn import(
-        &self,
-        bytes: &[u8],
-    ) -> Result<Vec<HashMap<String, PropertyValue>>, CypherLiteError>;
+    fn import(&self, bytes: &[u8]) -> Result<Vec<HashMap<String, PropertyValue>>, CypherLiteError>;
 }
 
 /// A trigger that fires before/after create, update, and delete operations.

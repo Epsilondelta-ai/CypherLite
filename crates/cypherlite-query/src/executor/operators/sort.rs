@@ -15,8 +15,10 @@ pub fn execute_sort(
 ) -> Vec<Record> {
     records.sort_by(|a, b| {
         for item in items {
-            let val_a = eval(&item.expr, a, engine, params, scalar_fns).unwrap_or(crate::executor::Value::Null);
-            let val_b = eval(&item.expr, b, engine, params, scalar_fns).unwrap_or(crate::executor::Value::Null);
+            let val_a = eval(&item.expr, a, engine, params, scalar_fns)
+                .unwrap_or(crate::executor::Value::Null);
+            let val_b = eval(&item.expr, b, engine, params, scalar_fns)
+                .unwrap_or(crate::executor::Value::Null);
             let ord = compare_values(&val_a, &val_b);
             let ord = if item.ascending { ord } else { ord.reverse() };
             if ord != std::cmp::Ordering::Equal {

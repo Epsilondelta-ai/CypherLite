@@ -56,9 +56,12 @@ pub fn execute_delete(
             .get_edge(*eid)
             .map(|e| e.properties.clone())
             .unwrap_or_default();
-        let rel_type_name = engine
-            .get_edge(*eid)
-            .and_then(|e| engine.catalog().rel_type_name(e.rel_type_id).map(|s| s.to_string()));
+        let rel_type_name = engine.get_edge(*eid).and_then(|e| {
+            engine
+                .catalog()
+                .rel_type_name(e.rel_type_id)
+                .map(|s| s.to_string())
+        });
         let ctx = cypherlite_core::TriggerContext {
             entity_type: cypherlite_core::EntityType::Edge,
             entity_id: eid.0,

@@ -52,8 +52,10 @@ impl VersionStore {
     pub fn snapshot_relationship(&mut self, entity_id: u64, record: RelationshipRecord) -> u64 {
         let seq = self.next_seq.entry(entity_id).or_insert(1);
         let current_seq = *seq;
-        self.versions
-            .insert((entity_id, current_seq), VersionRecord::Relationship(record));
+        self.versions.insert(
+            (entity_id, current_seq),
+            VersionRecord::Relationship(record),
+        );
         *seq += 1;
         current_seq
     }
@@ -202,10 +204,7 @@ mod tests {
         let latest = store.get_latest_version(1).expect("latest exists");
         match latest {
             VersionRecord::Node(n) => {
-                assert_eq!(
-                    n.properties[0].1,
-                    PropertyValue::String("v2".to_string())
-                );
+                assert_eq!(n.properties[0].1, PropertyValue::String("v2".to_string()));
             }
             _ => panic!("expected node version"),
         }

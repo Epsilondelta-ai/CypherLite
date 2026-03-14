@@ -28,9 +28,13 @@ fn setup_temporal_db() -> (tempfile::TempDir, CypherLite) {
         if i < 9 {
             let q = format!(
                 "CREATE (a:{} {{idx: {}}})-[:BLINK]->(b:{} {{idx: {}}})",
-                label, i, next_label, i + 1
+                label,
+                i,
+                next_label,
+                i + 1
             );
-            db.execute_with_params(&q, params.clone()).expect("create chain");
+            db.execute_with_params(&q, params.clone())
+                .expect("create chain");
         }
     }
 
@@ -61,8 +65,10 @@ fn bench_at_time_simple(c: &mut Criterion) {
     )
     .expect("create");
 
-    db.execute("MATCH (a:BenchStart)-[r:BENCH]->(b:BenchEnd) SET r._valid_from = 100, r._valid_to = 5000")
-        .expect("set");
+    db.execute(
+        "MATCH (a:BenchStart)-[r:BENCH]->(b:BenchEnd) SET r._valid_from = 100, r._valid_to = 5000",
+    )
+    .expect("set");
 
     c.bench_function("at_time_simple_match", |b| {
         b.iter(|| {
@@ -95,5 +101,9 @@ fn bench_at_time_no_filter(c: &mut Criterion) {
     });
 }
 
-criterion_group!(temporal_edge_benches, bench_at_time_simple, bench_at_time_no_filter);
+criterion_group!(
+    temporal_edge_benches,
+    bench_at_time_simple,
+    bench_at_time_no_filter
+);
 criterion_main!(temporal_edge_benches);

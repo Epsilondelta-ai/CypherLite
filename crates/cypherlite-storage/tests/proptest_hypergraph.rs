@@ -8,8 +8,8 @@
 #![cfg(feature = "hypergraph")]
 
 use cypherlite_core::*;
-use cypherlite_storage::hyperedge::HyperEdgeStore;
 use cypherlite_storage::hyperedge::reverse_index::HyperEdgeReverseIndex;
+use cypherlite_storage::hyperedge::HyperEdgeStore;
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -21,8 +21,7 @@ fn arb_graph_entity() -> impl Strategy<Value = GraphEntity> {
         (1u64..1000).prop_map(|id| GraphEntity::Node(NodeId(id))),
         (1u64..100).prop_map(|id| GraphEntity::Subgraph(SubgraphId(id))),
         (1u64..100).prop_map(|id| GraphEntity::HyperEdge(HyperEdgeId(id))),
-        (1u64..1000, any::<i64>())
-            .prop_map(|(id, ts)| GraphEntity::TemporalRef(NodeId(id), ts)),
+        (1u64..1000, any::<i64>()).prop_map(|(id, ts)| GraphEntity::TemporalRef(NodeId(id), ts)),
     ]
 }
 

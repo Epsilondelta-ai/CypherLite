@@ -59,8 +59,15 @@ fn test_optional_match_null_when_no_edges() {
         }
     }
 
-    assert!(found_alice_bob, "Should find Alice->Bob match. Rows: {:?}",
-        result.rows.iter().map(|r| format!("a.name={:?} b.name={:?}", r.get("a.name"), r.get("b.name"))).collect::<Vec<_>>());
+    assert!(
+        found_alice_bob,
+        "Should find Alice->Bob match. Rows: {:?}",
+        result
+            .rows
+            .iter()
+            .map(|r| format!("a.name={:?} b.name={:?}", r.get("a.name"), r.get("b.name")))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(found_null_count, 2, "Bob and Carol should have NULL b.name");
 }
 
@@ -79,20 +86,28 @@ fn test_optional_match_multiple_matches() {
 
     // Alice should have 2 outgoing KNOWS edges (Bob and Carol)
     let result = db
-        .execute(
-            "MATCH (a:Person {name: 'Alice'}) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN b.name",
-        )
+        .execute("MATCH (a:Person {name: 'Alice'}) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN b.name")
         .expect("optional match multi");
 
     // Filter to only Alice results: should find exactly 2 matches
-    assert!(result.rows.len() >= 2, "Expected at least 2 rows, got {}", result.rows.len());
+    assert!(
+        result.rows.len() >= 2,
+        "Expected at least 2 rows, got {}",
+        result.rows.len()
+    );
     let b_names: Vec<Option<String>> = result
         .rows
         .iter()
         .map(|r| r.get_as::<String>("b.name"))
         .collect();
-    assert!(b_names.contains(&Some("Bob".to_string())), "Should contain Bob");
-    assert!(b_names.contains(&Some("Carol".to_string())), "Should contain Carol");
+    assert!(
+        b_names.contains(&Some("Bob".to_string())),
+        "Should contain Bob"
+    );
+    assert!(
+        b_names.contains(&Some("Carol".to_string())),
+        "Should contain Carol"
+    );
 }
 
 /// OPTIONAL MATCH on non-existent relationship type produces NULL.

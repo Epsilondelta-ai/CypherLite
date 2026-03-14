@@ -7,10 +7,7 @@ use cypherlite_storage::StorageEngine;
 
 /// Scan all subgraphs from the engine.
 /// Each subgraph produces a Record with the variable bound to Value::Subgraph(subgraph_id).
-pub fn execute_subgraph_scan(
-    variable: &str,
-    engine: &StorageEngine,
-) -> Vec<Record> {
+pub fn execute_subgraph_scan(variable: &str, engine: &StorageEngine) -> Vec<Record> {
     engine
         .scan_subgraphs()
         .into_iter()

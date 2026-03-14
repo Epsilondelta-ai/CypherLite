@@ -89,17 +89,13 @@ fn bench_membership_lookup_forward(c: &mut Criterion) {
     let (dir, mut db) = setup_db_with_nodes(100);
 
     // Create snapshot
-    db.execute(
-        "CREATE SNAPSHOT (sg:Snap {name: 'lookup-fwd'}) FROM MATCH (x:BenchSG) RETURN x",
-    )
-    .expect("snapshot");
+    db.execute("CREATE SNAPSHOT (sg:Snap {name: 'lookup-fwd'}) FROM MATCH (x:BenchSG) RETURN x")
+        .expect("snapshot");
 
     c.bench_function("subgraph_membership_lookup_forward_100", |b| {
         b.iter(|| {
             let _ = db
-                .execute(
-                    "MATCH (sg:Subgraph {name: 'lookup-fwd'})-[:CONTAINS]->(x) RETURN x.idx",
-                )
+                .execute("MATCH (sg:Subgraph {name: 'lookup-fwd'})-[:CONTAINS]->(x) RETURN x.idx")
                 .expect("query");
         });
     });
@@ -135,9 +131,7 @@ fn bench_subgraph_scan_with_filter(c: &mut Criterion) {
     c.bench_function("subgraph_scan_with_property_filter", |b| {
         b.iter(|| {
             let _ = db
-                .execute(
-                    "MATCH (sg:Subgraph) WHERE sg.name = 'scan-5' RETURN sg.name",
-                )
+                .execute("MATCH (sg:Subgraph) WHERE sg.name = 'scan-5' RETURN sg.name")
                 .expect("query");
         });
     });
@@ -156,7 +150,8 @@ fn bench_subgraph_scan_all(c: &mut Criterion) {
     let mut db = CypherLite::open(config).expect("open");
 
     // Create a node and 10 subgraphs
-    db.execute("CREATE (x:AllScanNode {idx: 0})").expect("create");
+    db.execute("CREATE (x:AllScanNode {idx: 0})")
+        .expect("create");
     for i in 0..10 {
         let q = format!(
             "CREATE SNAPSHOT (sg:Snap {{name: 'all-{}'}}) FROM MATCH (x:AllScanNode) RETURN x",

@@ -104,7 +104,10 @@ mod tests {
         for (nid, props) in &nodes {
             for (pk, v) in props {
                 if *pk == name_key {
-                    if let Some(idx) = engine.index_manager_mut().find_index_mut(person_label, name_key) {
+                    if let Some(idx) = engine
+                        .index_manager_mut()
+                        .find_index_mut(person_label, name_key)
+                    {
                         idx.insert(v, *nid);
                     }
                 }
@@ -113,7 +116,8 @@ mod tests {
 
         let params = Params::new();
         let lookup = Expression::Literal(Literal::String("Alice".into()));
-        let records = execute_index_scan("n", person_label, "name", &lookup, &engine, &params, &()).expect("should succeed");
+        let records = execute_index_scan("n", person_label, "name", &lookup, &engine, &params, &())
+            .expect("should succeed");
 
         assert_eq!(records.len(), 1);
         assert!(matches!(records[0].get("n"), Some(Value::Node(_))));
@@ -140,7 +144,8 @@ mod tests {
         // No index created - should still work via fallback
         let params = Params::new();
         let lookup = Expression::Literal(Literal::String("Alice".into()));
-        let records = execute_index_scan("n", person_label, "name", &lookup, &engine, &params, &()).expect("should succeed");
+        let records = execute_index_scan("n", person_label, "name", &lookup, &engine, &params, &())
+            .expect("should succeed");
 
         assert_eq!(records.len(), 1);
     }
@@ -155,7 +160,16 @@ mod tests {
 
         let params = Params::new();
         let lookup = Expression::Literal(Literal::String("Alice".into()));
-        let records = execute_index_scan("n", person_label, "nonexistent", &lookup, &engine, &params, &()).expect("should succeed");
+        let records = execute_index_scan(
+            "n",
+            person_label,
+            "nonexistent",
+            &lookup,
+            &engine,
+            &params,
+            &(),
+        )
+        .expect("should succeed");
 
         assert!(records.is_empty());
     }

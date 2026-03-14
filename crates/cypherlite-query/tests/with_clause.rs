@@ -50,8 +50,10 @@ fn test_with_alias_projection() {
     let dir = tempdir().expect("tempdir");
     let mut db = open_db(dir.path());
 
-    db.execute("CREATE (n:Person {name: 'Alice'})").expect("create");
-    db.execute("CREATE (n:Person {name: 'Bob'})").expect("create");
+    db.execute("CREATE (n:Person {name: 'Alice'})")
+        .expect("create");
+    db.execute("CREATE (n:Person {name: 'Bob'})")
+        .expect("create");
 
     let result = db
         .execute("MATCH (n:Person) WITH n.name AS name RETURN name")
@@ -180,7 +182,8 @@ fn test_with_count_star_aggregation() {
 
     db.execute("CREATE (n:Person {name: 'Alice'})").expect("c1");
     db.execute("CREATE (n:Person {name: 'Bob'})").expect("c2");
-    db.execute("CREATE (n:Person {name: 'Charlie'})").expect("c3");
+    db.execute("CREATE (n:Person {name: 'Charlie'})")
+        .expect("c3");
 
     let result = db
         .execute("MATCH (n:Person) WITH count(*) AS total RETURN total")
@@ -201,9 +204,7 @@ fn test_with_scope_error_unprojected_variable() {
 
     // MATCH (n:Person)-[r:KNOWS]->(m:Person) WITH n RETURN m
     // 'm' is not projected in WITH, so it should be inaccessible
-    let result = db.execute(
-        "MATCH (n:Person)-[r:KNOWS]->(m:Person) WITH n RETURN m",
-    );
+    let result = db.execute("MATCH (n:Person)-[r:KNOWS]->(m:Person) WITH n RETURN m");
     assert!(result.is_err());
     let err = result.expect_err("should fail");
     match err {

@@ -236,10 +236,7 @@ fn optimize_children(plan: LogicalPlan) -> LogicalPlan {
 /// into IndexScan when the predicate matches `variable.prop == literal`.
 fn push_index_scan(plan: LogicalPlan) -> LogicalPlan {
     match plan {
-        LogicalPlan::Filter {
-            source,
-            predicate,
-        } => {
+        LogicalPlan::Filter { source, predicate } => {
             if let LogicalPlan::NodeScan {
                 ref variable,
                 label_id: Some(lid),
@@ -262,16 +259,10 @@ fn push_index_scan(plan: LogicalPlan) -> LogicalPlan {
                             None => index_scan,
                         }
                     }
-                    None => LogicalPlan::Filter {
-                        source,
-                        predicate,
-                    },
+                    None => LogicalPlan::Filter { source, predicate },
                 }
             } else {
-                LogicalPlan::Filter {
-                    source,
-                    predicate,
-                }
+                LogicalPlan::Filter { source, predicate }
             }
         }
         other => other,
@@ -307,10 +298,7 @@ fn try_extract_index_predicate(
 }
 
 /// Try to match `variable.property == literal_value` or `literal_value == variable.property`.
-fn try_extract_eq_predicate(
-    expr: &Expression,
-    variable: &str,
-) -> Option<(String, Expression)> {
+fn try_extract_eq_predicate(expr: &Expression, variable: &str) -> Option<(String, Expression)> {
     if let Expression::BinaryOp(BinaryOp::Eq, left, right) = expr {
         // Case 1: variable.property == literal
         if let Some((prop, val)) = match_property_eq_literal(left, right, variable) {
@@ -899,7 +887,7 @@ mod tests {
                 source: Box::new(LogicalPlan::NodeScan {
                     variable: "m".into(),
                     label_id: Some(1),
-                limit: None,
+                    limit: None,
                 }),
                 src_var: "m".into(),
                 rel_var: None,
@@ -1190,10 +1178,7 @@ mod tests {
             Box::new(Expression::Literal(Literal::Bool(false))),
             Box::new(Expression::Variable("x".into())),
         );
-        assert_eq!(
-            fold_expr(expr),
-            Expression::Literal(Literal::Bool(false))
-        );
+        assert_eq!(fold_expr(expr), Expression::Literal(Literal::Bool(false)));
     }
 
     #[test]
@@ -1222,10 +1207,7 @@ mod tests {
             UnaryOp::Not,
             Box::new(Expression::Literal(Literal::Bool(true))),
         );
-        assert_eq!(
-            fold_expr(expr),
-            Expression::Literal(Literal::Bool(false))
-        );
+        assert_eq!(fold_expr(expr), Expression::Literal(Literal::Bool(false)));
     }
 
     #[test]
@@ -1258,7 +1240,7 @@ mod tests {
         let source = LogicalPlan::NodeScan {
             variable: "n".into(),
             label_id: Some(1),
-                limit: None,
+            limit: None,
         };
         let plan = LogicalPlan::Filter {
             source: Box::new(source.clone()),
@@ -1304,7 +1286,7 @@ mod tests {
         let source = LogicalPlan::NodeScan {
             variable: "n".into(),
             label_id: Some(1),
-                limit: None,
+            limit: None,
         };
         let inner_items = vec![
             ReturnItem {
@@ -1354,7 +1336,7 @@ mod tests {
         let source = LogicalPlan::NodeScan {
             variable: "n".into(),
             label_id: Some(1),
-                limit: None,
+            limit: None,
         };
         let items = vec![ReturnItem {
             expr: Expression::Variable("n".into()),
@@ -1369,7 +1351,9 @@ mod tests {
         let optimized = optimize(plan);
         match optimized {
             LogicalPlan::Project {
-                source: s, items: i, ..
+                source: s,
+                items: i,
+                ..
             } => {
                 assert_eq!(*s, source);
                 assert_eq!(i, items);
@@ -1384,7 +1368,7 @@ mod tests {
         let source = LogicalPlan::NodeScan {
             variable: "n".into(),
             label_id: Some(1),
-                limit: None,
+            limit: None,
         };
         let items_a = vec![ReturnItem {
             expr: Expression::Variable("a".into()),
@@ -1431,7 +1415,7 @@ mod tests {
         let source = LogicalPlan::NodeScan {
             variable: "n".into(),
             label_id: Some(1),
-                limit: None,
+            limit: None,
         };
         let items = vec![ReturnItem {
             expr: Expression::Variable("n".into()),
@@ -1466,7 +1450,7 @@ mod tests {
         let plan = LogicalPlan::NodeScan {
             variable: "n".into(),
             label_id: Some(1),
-                limit: None,
+            limit: None,
         };
         assert_eq!(optimize(plan.clone()), plan);
     }
@@ -1486,7 +1470,7 @@ mod tests {
                 source: Box::new(LogicalPlan::NodeScan {
                     variable: "n".into(),
                     label_id: Some(1),
-                limit: None,
+                    limit: None,
                 }),
                 predicate: Expression::BinaryOp(
                     BinaryOp::Eq,
