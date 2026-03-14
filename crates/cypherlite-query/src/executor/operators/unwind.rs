@@ -1,7 +1,7 @@
 // UnwindOp: flatten a list expression into individual rows
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::Expression;
 use cypherlite_storage::StorageEngine;
 
@@ -15,11 +15,12 @@ pub fn execute_unwind(
     variable: &str,
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let mut results = Vec::new();
 
     for record in &source_records {
-        let value = eval(expr, record, engine, params)?;
+        let value = eval(expr, record, engine, params, scalar_fns)?;
         match value {
             Value::List(elements) => {
                 for element in elements {
@@ -79,7 +80,7 @@ mod tests {
         ]);
 
         let params = Params::new();
-        let result = execute_unwind(vec![record], &expr, "x", &engine, &params);
+        let result = execute_unwind(vec![record], &expr, "x", &engine, &params, &());
         let records = result.expect("should succeed");
 
         assert_eq!(records.len(), 3);
@@ -110,7 +111,7 @@ mod tests {
         ]);
 
         let params = Params::new();
-        let result = execute_unwind(vec![r1, r2], &expr, "x", &engine, &params);
+        let result = execute_unwind(vec![r1, r2], &expr, "x", &engine, &params, &());
         let records = result.expect("should succeed");
 
         // 2 source records x 2 list elements = 4 output records
@@ -137,7 +138,7 @@ mod tests {
         let expr = Expression::ListLiteral(vec![]);
 
         let params = Params::new();
-        let result = execute_unwind(vec![record], &expr, "x", &engine, &params);
+        let result = execute_unwind(vec![record], &expr, "x", &engine, &params, &());
         let records = result.expect("should succeed");
 
         assert!(records.is_empty());
@@ -155,7 +156,7 @@ mod tests {
         let expr = Expression::Literal(Literal::Null);
 
         let params = Params::new();
-        let result = execute_unwind(vec![record], &expr, "x", &engine, &params);
+        let result = execute_unwind(vec![record], &expr, "x", &engine, &params, &());
         let records = result.expect("should succeed");
 
         assert!(records.is_empty());
@@ -171,7 +172,7 @@ mod tests {
         let expr = Expression::Literal(Literal::Integer(42));
 
         let params = Params::new();
-        let result = execute_unwind(vec![record], &expr, "x", &engine, &params);
+        let result = execute_unwind(vec![record], &expr, "x", &engine, &params, &());
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -192,7 +193,7 @@ mod tests {
         let expr = Expression::Literal(Literal::String("not a list".into()));
 
         let params = Params::new();
-        let result = execute_unwind(vec![record], &expr, "x", &engine, &params);
+        let result = execute_unwind(vec![record], &expr, "x", &engine, &params, &());
 
         assert!(result.is_err());
     }
@@ -208,7 +209,7 @@ mod tests {
         ]);
 
         let params = Params::new();
-        let result = execute_unwind(vec![], &expr, "x", &engine, &params);
+        let result = execute_unwind(vec![], &expr, "x", &engine, &params, &());
         let records = result.expect("should succeed");
 
         assert!(records.is_empty());
@@ -232,7 +233,7 @@ mod tests {
         let expr = Expression::Variable("items".to_string());
 
         let params = Params::new();
-        let result = execute_unwind(vec![record], &expr, "x", &engine, &params);
+        let result = execute_unwind(vec![record], &expr, "x", &engine, &params, &());
         let records = result.expect("should succeed");
 
         assert_eq!(records.len(), 2);

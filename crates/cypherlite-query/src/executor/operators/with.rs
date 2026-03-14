@@ -1,7 +1,7 @@
 // WithOp: intermediate projection for WITH clause (scope reset)
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup};
 use crate::parser::ast::{Expression, ReturnItem};
 use cypherlite_storage::StorageEngine;
 
@@ -13,6 +13,7 @@ pub fn execute_with(
     items: &[ReturnItem],
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let mut results = Vec::new();
 
@@ -20,7 +21,7 @@ pub fn execute_with(
         let mut projected = Record::new();
 
         for item in items {
-            let value = eval(&item.expr, record, engine, params)?;
+            let value = eval(&item.expr, record, engine, params, scalar_fns)?;
             let column_name = match &item.alias {
                 Some(alias) => alias.clone(),
                 None => expr_display_name(&item.expr),
@@ -82,7 +83,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_with(vec![record], &items, &engine, &params);
+        let result = execute_with(vec![record], &items, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].get("x"), Some(&Value::Int64(1)));
@@ -118,7 +119,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_with(vec![record], &items, &engine, &params);
+        let result = execute_with(vec![record], &items, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -152,7 +153,7 @@ mod tests {
         ];
 
         let params = Params::new();
-        let result = execute_with(vec![record], &items, &engine, &params);
+        let result = execute_with(vec![record], &items, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].get("a"), Some(&Value::Int64(10)));
@@ -180,7 +181,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_with(vec![r1, r2], &items, &engine, &params);
+        let result = execute_with(vec![r1, r2], &items, &engine, &params, &());
         let records = result.expect("should succeed");
         // Without DISTINCT, duplicates are preserved
         assert_eq!(records.len(), 2);
@@ -200,7 +201,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_with(vec![], &items, &engine, &params);
+        let result = execute_with(vec![], &items, &engine, &params, &());
         let records = result.expect("should succeed");
         assert!(records.is_empty());
     }

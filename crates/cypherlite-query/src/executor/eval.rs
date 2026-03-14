@@ -1,6 +1,6 @@
 // Expression evaluator: eval(), eval_cmp() with typed comparison
 
-use super::{ExecutionError, Params, Record, Value};
+use super::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::*;
 use cypherlite_core::LabelRegistry;
 use cypherlite_storage::StorageEngine;
@@ -13,6 +13,7 @@ pub fn eval(
     record: &Record,
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Value, ExecutionError> {
     match expr {
         Expression::Literal(lit) => Ok(eval_literal(lit)),
@@ -25,21 +26,21 @@ pub fn eval(
                     return eval_temporal_property_access(props_list, prop_name, engine);
                 }
             }
-            let inner = eval(inner_expr, record, engine, params)?;
+            let inner = eval(inner_expr, record, engine, params, scalar_fns)?;
             eval_property_access(&inner, prop_name, engine)
         }
         Expression::Parameter(name) => Ok(params.get(name).cloned().unwrap_or(Value::Null)),
         Expression::BinaryOp(op, lhs, rhs) => {
-            let left = eval(lhs, record, engine, params)?;
-            let right = eval(rhs, record, engine, params)?;
+            let left = eval(lhs, record, engine, params, scalar_fns)?;
+            let right = eval(rhs, record, engine, params, scalar_fns)?;
             eval_binary_op(*op, &left, &right)
         }
         Expression::UnaryOp(op, inner) => {
-            let val = eval(inner, record, engine, params)?;
+            let val = eval(inner, record, engine, params, scalar_fns)?;
             eval_unary_op(*op, &val)
         }
         Expression::IsNull(inner, negated) => {
-            let val = eval(inner, record, engine, params)?;
+            let val = eval(inner, record, engine, params, scalar_fns)?;
             let is_null = val == Value::Null;
             if *negated {
                 Ok(Value::Bool(!is_null))
@@ -50,7 +51,7 @@ pub fn eval(
         Expression::ListLiteral(elements) => {
             let mut values = Vec::with_capacity(elements.len());
             for elem in elements {
-                values.push(eval(elem, record, engine, params)?);
+                values.push(eval(elem, record, engine, params, scalar_fns)?);
             }
             Ok(Value::List(values))
         }
@@ -71,7 +72,7 @@ pub fn eval(
                             message: "id() requires exactly one argument".to_string(),
                         });
                     }
-                    let val = eval(&args[0], record, engine, params)?;
+                    let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::Node(nid) => Ok(Value::Int64(nid.0 as i64)),
                         Value::Edge(eid) => Ok(Value::Int64(eid.0 as i64)),
@@ -86,7 +87,7 @@ pub fn eval(
                             message: "type() requires exactly one argument".to_string(),
                         });
                     }
-                    let val = eval(&args[0], record, engine, params)?;
+                    let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::Edge(eid) => {
                             if let Some(edge) = engine.get_edge(eid) {
@@ -111,7 +112,7 @@ pub fn eval(
                             message: "labels() requires exactly one argument".to_string(),
                         });
                     }
-                    let val = eval(&args[0], record, engine, params)?;
+                    let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::Node(nid) => {
                             if let Some(node) = engine.get_node(nid) {
@@ -141,7 +142,7 @@ pub fn eval(
                             message: "datetime() requires exactly one string argument".to_string(),
                         });
                     }
-                    let val = eval(&args[0], record, engine, params)?;
+                    let val = eval(&args[0], record, engine, params, scalar_fns)?;
                     match val {
                         Value::String(s) => {
                             let millis = parse_iso8601_to_millis(&s).map_err(|e| ExecutionError {
@@ -173,20 +174,31 @@ pub fn eval(
                         }
                     }
                 }
-                _ => Err(ExecutionError {
-                    message: format!("unknown function: {}", name),
-                }),
+                _ => {
+                    // Evaluate arguments, then try plugin scalar function lookup.
+                    let evaluated_args: Result<Vec<_>, _> = args
+                        .iter()
+                        .map(|a| eval(a, record, engine, params, scalar_fns))
+                        .collect();
+                    let evaluated_args = evaluated_args?;
+                    match scalar_fns.call_scalar(&func_name, &evaluated_args) {
+                        Some(result) => result,
+                        None => Err(ExecutionError {
+                            message: format!("unknown function: {}", name),
+                        }),
+                    }
+                }
             }
         }
         #[cfg(feature = "hypergraph")]
         Expression::TemporalRef { node, timestamp } => {
             // Evaluate both sub-expressions and return a placeholder.
             // The actual interpretation is done in the executor during hyperedge creation.
-            let _node_val = eval(node, record, engine, params)?;
-            let _ts_val = eval(timestamp, record, engine, params)?;
+            let _node_val = eval(node, record, engine, params, scalar_fns)?;
+            let _ts_val = eval(timestamp, record, engine, params, scalar_fns)?;
             // For expression evaluation context, return the node value
             // (temporal resolution happens at the hyperedge executor level).
-            eval(node, record, engine, params)
+            eval(node, record, engine, params, scalar_fns)
         }
     }
 }
@@ -888,6 +900,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Int64(42)));
 
@@ -896,6 +909,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Float64(3.15)));
 
@@ -904,6 +918,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::String("hello".into())));
 
@@ -912,6 +927,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Bool(true)));
 
@@ -920,6 +936,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Null));
     }
@@ -937,6 +954,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Int64(99)));
 
@@ -946,6 +964,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Null));
     }
@@ -963,6 +982,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::String("Alice".into())));
 
@@ -972,6 +992,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Null));
     }
@@ -1003,6 +1024,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::String("Alice".into())));
 
@@ -1015,6 +1037,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Null));
     }
@@ -1112,6 +1135,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Bool(true)));
 
@@ -1121,6 +1145,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Bool(true)));
     }
@@ -1140,6 +1165,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Bool(false)));
     }
@@ -1159,6 +1185,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::Int64(-42)));
     }
@@ -1207,6 +1234,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000)));
     }
@@ -1230,6 +1258,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
     }
@@ -1252,6 +1281,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 10 * 3_600_000 + 30 * 60_000)));
     }
@@ -1275,6 +1305,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(1_705_276_800_000 + 3_600_000 + 30 * 60_000)));
     }
@@ -1297,6 +1328,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert!(result.is_err());
     }
@@ -1317,6 +1349,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert!(result.is_err());
     }
@@ -1337,6 +1370,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert!(result.is_err());
     }
@@ -1365,6 +1399,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(1_700_000_000_000)));
     }
@@ -1390,6 +1425,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert!(result.is_err());
     }
@@ -1520,6 +1556,7 @@ mod tests {
             &record,
             &engine,
             &params,
+            &(),
         );
         assert_eq!(result, Ok(Value::DateTime(0)));
     }
@@ -1619,6 +1656,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+            &(),
             );
             assert_eq!(result, Ok(Value::String("Alice".into())));
         }
@@ -1668,6 +1706,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+            &(),
             );
             assert_eq!(result, Ok(Value::String("Alice".into())));
         }
@@ -1726,6 +1765,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+            &(),
             );
             assert_eq!(result, Ok(Value::String("v2".into())));
         }
@@ -1774,6 +1814,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+            &(),
             );
             assert_eq!(result, Ok(Value::String("Bob".into())));
         }
@@ -1802,6 +1843,7 @@ mod tests {
                 &record,
                 &engine,
                 &params,
+            &(),
             );
             assert_eq!(result, Ok(Value::Null));
         }

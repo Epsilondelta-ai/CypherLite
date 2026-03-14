@@ -1,7 +1,7 @@
 // CreateOp: node and edge creation via storage engine
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, PropertyValue};
 use cypherlite_storage::StorageEngine;
@@ -86,6 +86,7 @@ pub fn execute_create(
     pattern: &Pattern,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let mut results = Vec::new();
 
@@ -93,7 +94,7 @@ pub fn execute_create(
         let mut new_record = record.clone();
 
         for chain in &pattern.chains {
-            create_chain(chain, &mut new_record, engine, params)?;
+            create_chain(chain, &mut new_record, engine, params, scalar_fns)?;
         }
 
         results.push(new_record);
@@ -108,6 +109,7 @@ fn create_chain(
     record: &mut Record,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<(), ExecutionError> {
     let mut elements = chain.elements.iter();
     let mut prev_var: Option<String> = None;
@@ -135,7 +137,7 @@ fn create_chain(
                     .collect();
 
                 // Resolve properties
-                let mut properties = resolve_properties(&np.properties, record, engine, params)?;
+                let mut properties = resolve_properties(&np.properties, record, engine, params, scalar_fns)?;
 
                 // Inject timestamps if temporal tracking is enabled
                 if temporal_enabled {
@@ -192,7 +194,7 @@ fn create_chain(
                         .map(|l| engine.get_or_create_label(l))
                         .collect();
                     let mut properties =
-                        resolve_properties(&target_np.properties, record, engine, params)?;
+                        resolve_properties(&target_np.properties, record, engine, params, scalar_fns)?;
 
                     if temporal_enabled {
                         inject_create_timestamps(&mut properties, engine, params);
@@ -235,7 +237,7 @@ fn create_chain(
                 validate_no_system_properties(&rp.properties)?;
 
                 // Resolve relationship properties
-                let mut rel_props = resolve_properties(&rp.properties, record, engine, params)?;
+                let mut rel_props = resolve_properties(&rp.properties, record, engine, params, scalar_fns)?;
 
                 if temporal_enabled {
                     inject_create_timestamps(&mut rel_props, engine, params);
@@ -279,13 +281,14 @@ fn resolve_properties(
     record: &Record,
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<(u32, PropertyValue)>, ExecutionError> {
     match props {
         None => Ok(vec![]),
         Some(map) => {
             let mut result = Vec::new();
             for (key, expr) in map {
-                let value = eval(expr, record, engine, params)?;
+                let value = eval(expr, record, engine, params, scalar_fns)?;
                 let pv = PropertyValue::try_from(value).map_err(|e| ExecutionError {
                     message: format!("invalid property value for '{}': {}", key, e),
                 })?;
@@ -304,13 +307,14 @@ pub fn resolve_properties_mut(
     record: &Record,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<(u32, PropertyValue)>, ExecutionError> {
     match props {
         None => Ok(vec![]),
         Some(map) => {
             let mut result = Vec::new();
             for (key, expr) in map {
-                let value = eval(expr, record, &*engine, params)?;
+                let value = eval(expr, record, &*engine, params, scalar_fns)?;
                 let pv = PropertyValue::try_from(value).map_err(|e| ExecutionError {
                     message: format!("invalid property value for '{}': {}", key, e),
                 })?;
@@ -354,7 +358,7 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params);
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert!(records[0].contains_key("n"));
@@ -386,7 +390,7 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params);
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
 
@@ -430,7 +434,7 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params);
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert!(records[0].contains_key("a"));
@@ -492,7 +496,7 @@ mod tests {
             "__query_start_ms__".to_string(),
             Value::Int64(1_700_000_000_000),
         );
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params);
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &());
         let records = result.expect("should succeed");
 
         // Get the edge and verify it has _valid_from
@@ -557,7 +561,7 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![initial_record], &pattern, &mut engine, &params);
+        let result = execute_create(vec![initial_record], &pattern, &mut engine, &params, &());
         let records = result.expect("should succeed");
 
         // Should reuse existing node "a" and create only "b"

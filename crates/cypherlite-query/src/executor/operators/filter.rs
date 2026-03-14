@@ -1,7 +1,7 @@
 // FilterOp: applies predicate via eval()
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::Expression;
 use cypherlite_storage::StorageEngine;
 
@@ -12,11 +12,12 @@ pub fn execute_filter(
     predicate: &Expression,
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let mut results = Vec::new();
 
     for record in source_records {
-        let val = eval(predicate, &record, engine, params)?;
+        let val = eval(predicate, &record, engine, params, scalar_fns)?;
         if val == Value::Bool(true) {
             results.push(record);
         }
@@ -81,7 +82,7 @@ mod tests {
         );
 
         let params = Params::new();
-        let result = execute_filter(vec![r1, r2, r3], &predicate, &engine, &params);
+        let result = execute_filter(vec![r1, r2, r3], &predicate, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 2);
     }
@@ -104,7 +105,7 @@ mod tests {
         );
 
         let params = Params::new();
-        let result = execute_filter(vec![r1, r2], &predicate, &engine, &params);
+        let result = execute_filter(vec![r1, r2], &predicate, &engine, &params, &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].get("x"), Some(&Value::Int64(10)));
@@ -126,7 +127,7 @@ mod tests {
         );
 
         let params = Params::new();
-        let result = execute_filter(vec![r1], &predicate, &engine, &params);
+        let result = execute_filter(vec![r1], &predicate, &engine, &params, &());
         assert!(result.expect("should succeed").is_empty());
     }
 }

@@ -99,13 +99,20 @@ impl FromValue for bool {
 /// The main CypherLite database interface.
 pub struct CypherLite {
     engine: StorageEngine,
+    #[cfg(feature = "plugin")]
+    scalar_functions:
+        cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::ScalarFunction>,
 }
 
 impl CypherLite {
     /// Open or create a CypherLite database.
     pub fn open(config: DatabaseConfig) -> Result<Self, CypherLiteError> {
         let engine = StorageEngine::open(config)?;
-        Ok(Self { engine })
+        Ok(Self {
+            engine,
+            #[cfg(feature = "plugin")]
+            scalar_functions: cypherlite_core::plugin::PluginRegistry::new(),
+        })
     }
 
     /// Execute a Cypher query string.
@@ -151,7 +158,11 @@ impl CypherLite {
         }
 
         // 5. Execute
-        let records = crate::executor::execute(&plan, &mut self.engine, &params)
+        #[cfg(feature = "plugin")]
+        let scalar_fns: &dyn crate::executor::ScalarFnLookup = &self.scalar_functions;
+        #[cfg(not(feature = "plugin"))]
+        let scalar_fns: &dyn crate::executor::ScalarFnLookup = &();
+        let records = crate::executor::execute(&plan, &mut self.engine, &params, scalar_fns)
             .map_err(|e| CypherLiteError::ExecutionError(e.message))?;
 
         // 6. Convert to QueryResult
@@ -172,6 +183,32 @@ impl CypherLite {
     /// Get a mutable reference to the underlying storage engine.
     pub fn engine_mut(&mut self) -> &mut StorageEngine {
         &mut self.engine
+    }
+
+    /// Register a user-defined scalar function (plugin feature).
+    ///
+    /// Returns an error if a function with the same name is already registered.
+    #[cfg(feature = "plugin")]
+    pub fn register_scalar_function(
+        &mut self,
+        func: Box<dyn cypherlite_core::plugin::ScalarFunction>,
+    ) -> Result<(), CypherLiteError> {
+        self.scalar_functions
+            .register(func)
+            .map_err(|e| CypherLiteError::PluginError(e.to_string()))
+    }
+
+    /// List all registered scalar functions as `(name, version)` pairs.
+    #[cfg(feature = "plugin")]
+    pub fn list_scalar_functions(&self) -> Vec<(&str, &str)> {
+        self.scalar_functions
+            .list()
+            .filter_map(|name| {
+                self.scalar_functions
+                    .get(name)
+                    .map(|f| (name, f.version()))
+            })
+            .collect()
     }
 
     /// Begin a transaction (simplified - wraps execute calls).

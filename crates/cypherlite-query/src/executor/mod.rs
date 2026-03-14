@@ -8,6 +8,58 @@ use cypherlite_core::{EdgeId, LabelRegistry, NodeId, PropertyValue};
 use cypherlite_storage::StorageEngine;
 use std::collections::HashMap;
 
+// ---------------------------------------------------------------------------
+// Plugin: ScalarFnLookup trait for pluggable function dispatch
+// ---------------------------------------------------------------------------
+
+/// Trait for resolving unknown scalar functions at evaluation time.
+///
+/// Implemented for `()` (no-op) and for `PluginRegistry<dyn ScalarFunction>`
+/// when the `plugin` feature is enabled.
+pub trait ScalarFnLookup {
+    /// Try to call a scalar function by name with the given arguments.
+    ///
+    /// Returns `None` if the function is not found, allowing the caller to
+    /// produce a default "unknown function" error.
+    fn call_scalar(&self, name: &str, args: &[Value]) -> Option<Result<Value, ExecutionError>>;
+}
+
+/// No-op implementation: always returns `None` (function not found).
+impl ScalarFnLookup for () {
+    fn call_scalar(&self, _name: &str, _args: &[Value]) -> Option<Result<Value, ExecutionError>> {
+        None
+    }
+}
+
+#[cfg(feature = "plugin")]
+impl ScalarFnLookup
+    for cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::ScalarFunction>
+{
+    fn call_scalar(&self, name: &str, args: &[Value]) -> Option<Result<Value, ExecutionError>> {
+        let func = self.get(name)?;
+        // Convert Value -> PropertyValue for each argument.
+        let pv_args: Result<Vec<PropertyValue>, String> = args
+            .iter()
+            .cloned()
+            .map(PropertyValue::try_from)
+            .collect();
+        let pv_args = match pv_args {
+            Ok(a) => a,
+            Err(e) => {
+                return Some(Err(ExecutionError {
+                    message: format!("plugin function argument conversion: {}", e),
+                }))
+            }
+        };
+        match func.call(&pv_args) {
+            Ok(result) => Some(Ok(Value::from(result))),
+            Err(e) => Some(Err(ExecutionError {
+                message: e.to_string(),
+            })),
+        }
+    }
+}
+
 /// Runtime value in query execution. Extends PropertyValue with graph entity references.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -112,6 +164,7 @@ pub fn execute(
     plan: &LogicalPlan,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     match plan {
         LogicalPlan::EmptySource => Ok(vec![Record::new()]),
@@ -135,8 +188,8 @@ pub fn execute(
             direction,
             temporal_filter,
         } => {
-            let source_records = execute(source, engine, params)?;
-            let tf = resolve_temporal_filter(temporal_filter, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
+            let tf = resolve_temporal_filter(temporal_filter, engine, params, scalar_fns)?;
             Ok(operators::expand::execute_expand(
                 source_records,
                 src_var,
@@ -149,38 +202,39 @@ pub fn execute(
             ))
         }
         LogicalPlan::Filter { source, predicate } => {
-            let source_records = execute(source, engine, params)?;
-            operators::filter::execute_filter(source_records, predicate, engine, params)
+            let source_records = execute(source, engine, params, scalar_fns)?;
+            operators::filter::execute_filter(source_records, predicate, engine, params, scalar_fns)
         }
         LogicalPlan::Project {
             source,
             items,
             distinct,
         } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             let mut result =
-                operators::project::execute_project(source_records, items, engine, params)?;
+                operators::project::execute_project(source_records, items, engine, params, scalar_fns)?;
             if *distinct {
                 deduplicate_records(&mut result);
             }
             Ok(result)
         }
         LogicalPlan::Sort { source, items } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             Ok(operators::sort::execute_sort(
                 source_records,
                 items,
                 engine,
                 params,
+                scalar_fns,
             ))
         }
         LogicalPlan::Skip { source, count } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             let n = eval_count_expr(count)?;
             Ok(operators::limit::execute_skip(source_records, n))
         }
         LogicalPlan::Limit { source, count } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             let n = eval_count_expr(count)?;
             Ok(operators::limit::execute_limit(source_records, n))
         }
@@ -189,45 +243,46 @@ pub fn execute(
             group_keys,
             aggregates,
         } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             operators::aggregate::execute_aggregate(
                 source_records,
                 group_keys,
                 aggregates,
                 engine,
                 params,
+                scalar_fns,
             )
         }
         LogicalPlan::CreateOp { source, pattern } => {
             let source_records = match source {
-                Some(s) => execute(s, engine, params)?,
+                Some(s) => execute(s, engine, params, scalar_fns)?,
                 None => vec![Record::new()],
             };
-            operators::create::execute_create(source_records, pattern, engine, params)
+            operators::create::execute_create(source_records, pattern, engine, params, scalar_fns)
         }
         LogicalPlan::DeleteOp {
             source,
             exprs,
             detach,
         } => {
-            let source_records = execute(source, engine, params)?;
-            operators::delete::execute_delete(source_records, exprs, *detach, engine, params)
+            let source_records = execute(source, engine, params, scalar_fns)?;
+            operators::delete::execute_delete(source_records, exprs, *detach, engine, params, scalar_fns)
         }
         LogicalPlan::SetOp { source, items } => {
-            let source_records = execute(source, engine, params)?;
-            operators::set_props::execute_set(source_records, items, engine, params)
+            let source_records = execute(source, engine, params, scalar_fns)?;
+            operators::set_props::execute_set(source_records, items, engine, params, scalar_fns)
         }
         LogicalPlan::RemoveOp { source, items } => {
-            let source_records = execute(source, engine, params)?;
-            operators::set_props::execute_remove(source_records, items, engine, params)
+            let source_records = execute(source, engine, params, scalar_fns)?;
+            operators::set_props::execute_remove(source_records, items, engine, params, scalar_fns)
         }
         LogicalPlan::Unwind {
             source,
             expr,
             variable,
         } => {
-            let source_records = execute(source, engine, params)?;
-            operators::unwind::execute_unwind(source_records, expr, variable, engine, params)
+            let source_records = execute(source, engine, params, scalar_fns)?;
+            operators::unwind::execute_unwind(source_records, expr, variable, engine, params, scalar_fns)
         }
         LogicalPlan::With {
             source,
@@ -235,14 +290,14 @@ pub fn execute(
             where_clause,
             distinct,
         } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             let mut result =
-                operators::with::execute_with(source_records, items, engine, params)?;
+                operators::with::execute_with(source_records, items, engine, params, scalar_fns)?;
             if *distinct {
                 deduplicate_records(&mut result);
             }
             if let Some(ref predicate) = where_clause {
-                result = operators::filter::execute_filter(result, predicate, engine, params)?;
+                result = operators::filter::execute_filter(result, predicate, engine, params, scalar_fns)?;
             }
             Ok(result)
         }
@@ -253,10 +308,10 @@ pub fn execute(
             on_create,
         } => {
             let source_records = match source {
-                Some(s) => execute(s, engine, params)?,
+                Some(s) => execute(s, engine, params, scalar_fns)?,
                 None => vec![Record::new()],
             };
-            operators::merge::execute_merge(source_records, pattern, on_match, on_create, engine, params)
+            operators::merge::execute_merge(source_records, pattern, on_match, on_create, engine, params, scalar_fns)
         }
         LogicalPlan::CreateIndex {
             name,
@@ -381,8 +436,8 @@ pub fn execute(
             max_hops,
             temporal_filter,
         } => {
-            let source_records = execute(source, engine, params)?;
-            let tf = resolve_temporal_filter(temporal_filter, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
+            let tf = resolve_temporal_filter(temporal_filter, engine, params, scalar_fns)?;
             Ok(operators::var_length_expand::execute_var_length_expand(
                 source_records,
                 src_var,
@@ -404,7 +459,7 @@ pub fn execute(
             rel_type_id,
             direction,
         } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             Ok(operators::optional_expand::execute_optional_expand(
                 source_records,
                 src_var,
@@ -427,6 +482,7 @@ pub fn execute(
             lookup_value,
             engine,
             params,
+            scalar_fns,
         ),
         #[cfg(feature = "subgraph")]
         LogicalPlan::SubgraphScan { variable } => {
@@ -464,7 +520,7 @@ pub fn execute(
             targets,
         } => {
             let source_records = match source {
-                Some(s) => execute(s, engine, params)?,
+                Some(s) => execute(s, engine, params, scalar_fns)?,
                 None => vec![Record::new()],
             };
             execute_create_hyperedge(
@@ -481,12 +537,13 @@ pub fn execute(
             source,
             timestamp_expr,
         } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             operators::temporal_scan::execute_as_of_scan(
                 source_records,
                 timestamp_expr,
                 engine,
                 params,
+                scalar_fns,
             )
         }
         LogicalPlan::TemporalRangeScan {
@@ -494,13 +551,14 @@ pub fn execute(
             start_expr,
             end_expr,
         } => {
-            let source_records = execute(source, engine, params)?;
+            let source_records = execute(source, engine, params, scalar_fns)?;
             operators::temporal_scan::execute_temporal_range_scan(
                 source_records,
                 start_expr,
                 end_expr,
                 engine,
                 params,
+                scalar_fns,
             )
         }
     }
@@ -511,6 +569,7 @@ fn resolve_temporal_filter(
     plan: &Option<TemporalFilterPlan>,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Option<operators::temporal_filter::TemporalFilter>, ExecutionError> {
     let tfp = match plan {
         Some(p) => p,
@@ -519,13 +578,13 @@ fn resolve_temporal_filter(
     let empty_record = Record::new();
     match tfp {
         TemporalFilterPlan::AsOf(expr) => {
-            let val = eval::eval(expr, &empty_record, engine, params)?;
+            let val = eval::eval(expr, &empty_record, engine, params, scalar_fns)?;
             let ms = extract_timestamp(val)?;
             Ok(Some(operators::temporal_filter::TemporalFilter::AsOf(ms)))
         }
         TemporalFilterPlan::Between(start_expr, end_expr) => {
-            let start_val = eval::eval(start_expr, &empty_record, engine, params)?;
-            let end_val = eval::eval(end_expr, &empty_record, engine, params)?;
+            let start_val = eval::eval(start_expr, &empty_record, engine, params, scalar_fns)?;
+            let end_val = eval::eval(end_expr, &empty_record, engine, params, scalar_fns)?;
             let start_ms = extract_timestamp(start_val)?;
             let end_ms = extract_timestamp(end_val)?;
             Ok(Some(operators::temporal_filter::TemporalFilter::Between(
@@ -582,7 +641,7 @@ fn execute_create_snapshot(
     use cypherlite_core::{LabelRegistry, PropertyValue, SubgraphId};
 
     // 1. Execute sub-plan to collect results.
-    let sub_records = execute(sub_plan, engine, params)?;
+    let sub_records = execute(sub_plan, engine, params, &())?;
 
     // 2. Collect unique node IDs from the results.
     let mut node_ids = Vec::new();
@@ -602,7 +661,7 @@ fn execute_create_snapshot(
         Some(map) => {
             let mut result = Vec::new();
             for (key, expr) in map {
-                let value = eval::eval(expr, &empty_record, engine, params)?;
+                let value = eval::eval(expr, &empty_record, engine, params, &())?;
                 let pv = PropertyValue::try_from(value).map_err(|e| ExecutionError {
                     message: format!("invalid property value for '{}': {}", key, e),
                 })?;
@@ -617,7 +676,7 @@ fn execute_create_snapshot(
     // 4. Resolve temporal anchor.
     let temporal_anchor = match temporal_anchor_expr {
         Some(expr) => {
-            let val = eval::eval(expr, &empty_record, engine, params)?;
+            let val = eval::eval(expr, &empty_record, engine, params, &())?;
             let ms = extract_timestamp(val)?;
             Some(ms)
         }
@@ -722,8 +781,8 @@ fn resolve_hyperedge_participants(
         match expr {
             Expression::TemporalRef { node, timestamp } => {
                 // Evaluate node expression to get NodeId.
-                let node_val = eval::eval(node, record, engine, params)?;
-                let ts_val = eval::eval(timestamp, record, engine, params)?;
+                let node_val = eval::eval(node, record, engine, params, &())?;
+                let ts_val = eval::eval(timestamp, record, engine, params, &())?;
                 let node_id = match node_val {
                     Value::Node(nid) => nid,
                     _ => {
@@ -737,7 +796,7 @@ fn resolve_hyperedge_participants(
             }
             _ => {
                 // Evaluate the expression to get a Value.
-                let val = eval::eval(expr, record, engine, params)?;
+                let val = eval::eval(expr, record, engine, params, &())?;
                 match val {
                     Value::Node(nid) => entities.push(GraphEntity::Node(nid)),
                     #[cfg(feature = "subgraph")]

@@ -5,7 +5,7 @@ use crate::executor::operators::create::{
     is_system_property, resolve_properties_mut, validate_no_system_properties,
     SYSTEM_PROP_CREATED_AT, SYSTEM_PROP_UPDATED_AT,
 };
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, NodeId, PropertyValue};
 use cypherlite_storage::StorageEngine;
@@ -21,6 +21,7 @@ pub fn execute_merge(
     on_create: &[SetItem],
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let mut results = Vec::new();
 
@@ -28,13 +29,13 @@ pub fn execute_merge(
         let mut new_record = record.clone();
 
         for chain in &pattern.chains {
-            let created = merge_chain(chain, &mut new_record, engine, params)?;
+            let created = merge_chain(chain, &mut new_record, engine, params, scalar_fns)?;
 
             // Apply ON MATCH SET or ON CREATE SET
             if created {
-                apply_set_items(on_create, &new_record, engine, params)?;
+                apply_set_items(on_create, &new_record, engine, params, scalar_fns)?;
             } else {
-                apply_set_items(on_match, &new_record, engine, params)?;
+                apply_set_items(on_match, &new_record, engine, params, scalar_fns)?;
             }
         }
 
@@ -74,6 +75,7 @@ fn merge_chain(
     record: &mut Record,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<bool, ExecutionError> {
     let mut elements = chain.elements.iter();
     let mut prev_var: Option<String> = None;
@@ -101,7 +103,7 @@ fn merge_chain(
                 // Only attempt find if we have all labels resolved
                 let all_labels_exist = np.labels.len() == label_ids.len();
 
-                let props = resolve_find_properties(&np.properties, record, engine, params)?;
+                let props = resolve_find_properties(&np.properties, record, engine, params, scalar_fns)?;
 
                 let found = if all_labels_exist && !label_ids.is_empty() {
                     find_node_with_index(engine, &label_ids, &props)
@@ -132,7 +134,7 @@ fn merge_chain(
                             .map(|l| engine.get_or_create_label(l))
                             .collect();
                         let mut properties =
-                            resolve_properties_mut(&np.properties, record, engine, params)?;
+                            resolve_properties_mut(&np.properties, record, engine, params, scalar_fns)?;
 
                         if temporal_enabled {
                             inject_create_timestamps(&mut properties, engine, params);
@@ -194,7 +196,7 @@ fn merge_chain(
                     let all_target_labels_exist =
                         target_np.labels.len() == target_label_ids.len();
                     let target_props =
-                        resolve_find_properties(&target_np.properties, record, engine, params)?;
+                        resolve_find_properties(&target_np.properties, record, engine, params, scalar_fns)?;
 
                     let found_target = if all_target_labels_exist && !target_label_ids.is_empty() {
                         find_node_with_index(engine, &target_label_ids, &target_props)
@@ -222,6 +224,7 @@ fn merge_chain(
                                 record,
                                 engine,
                                 params,
+                                scalar_fns,
                             )?;
 
                             if temporal_enabled {
@@ -283,7 +286,7 @@ fn merge_chain(
 
                         let rel_type_id = engine.get_or_create_rel_type(rel_type_name);
                         let mut rel_props =
-                            resolve_properties_mut(&rp.properties, record, engine, params)?;
+                            resolve_properties_mut(&rp.properties, record, engine, params, scalar_fns)?;
 
                         if temporal_enabled {
                             inject_create_timestamps(&mut rel_props, engine, params);
@@ -360,13 +363,14 @@ fn resolve_find_properties(
     record: &Record,
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<(u32, PropertyValue)>, ExecutionError> {
     match props {
         None => Ok(vec![]),
         Some(map) => {
             let mut result = Vec::new();
             for (key, expr) in map {
-                let value = eval(expr, record, engine, params)?;
+                let value = eval(expr, record, engine, params, scalar_fns)?;
                 let pv = PropertyValue::try_from(value).map_err(|e| ExecutionError {
                     message: format!("invalid property value for '{}': {}", key, e),
                 })?;
@@ -388,11 +392,12 @@ fn apply_set_items(
     record: &Record,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<(), ExecutionError> {
     for item in items {
         match item {
             SetItem::Property { target, value } => {
-                apply_set_property(target, value, record, engine, params)?;
+                apply_set_property(target, value, record, engine, params, scalar_fns)?;
             }
         }
     }
@@ -406,6 +411,7 @@ fn apply_set_property(
     record: &Record,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<(), ExecutionError> {
     match target {
         Expression::Property(var_expr, prop_name) => {
@@ -416,8 +422,8 @@ fn apply_set_property(
                 });
             }
 
-            let entity = eval(var_expr, record, &*engine, params)?;
-            let new_value = eval(value_expr, record, &*engine, params)?;
+            let entity = eval(var_expr, record, &*engine, params, scalar_fns)?;
+            let new_value = eval(value_expr, record, &*engine, params, scalar_fns)?;
             let pv = PropertyValue::try_from(new_value).map_err(|e| ExecutionError {
                 message: format!("invalid property value: {}", e),
             })?;
@@ -525,6 +531,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         );
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
@@ -561,6 +568,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         )
         .expect("first merge");
         assert_eq!(engine.node_count(), 1);
@@ -573,6 +581,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         )
         .expect("second merge");
         assert_eq!(engine.node_count(), 1); // Still 1, not 2
@@ -614,6 +623,7 @@ mod tests {
             &on_create,
             &mut engine,
             &params,
+            &(),
         )
         .expect("merge");
 
@@ -669,6 +679,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         )
         .expect("first merge");
 
@@ -680,6 +691,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         )
         .expect("second merge");
 
@@ -755,6 +767,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         )
         .expect("merge");
         assert_eq!(engine.edge_count(), 1);
@@ -768,6 +781,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         )
         .expect("second merge");
         assert_eq!(engine.edge_count(), 1); // Still 1
@@ -820,6 +834,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         )
         .expect("merge");
 
@@ -863,6 +878,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
         )
         .expect("merge");
 

@@ -4,7 +4,7 @@ use crate::executor::eval::eval;
 use crate::executor::operators::create::{
     is_system_property, is_temporal_edge_property, SYSTEM_PROP_UPDATED_AT,
 };
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, PropertyValue};
 use cypherlite_storage::StorageEngine;
@@ -17,12 +17,13 @@ pub fn execute_set(
     items: &[SetItem],
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     for record in &source_records {
         for item in items {
             match item {
                 SetItem::Property { target, value } => {
-                    apply_set_property(target, value, record, engine, params)?;
+                    apply_set_property(target, value, record, engine, params, scalar_fns)?;
                 }
             }
         }
@@ -70,6 +71,7 @@ fn apply_set_property(
     record: &Record,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<(), ExecutionError> {
     // target should be Property(Variable(name), prop_name)
     match target {
@@ -82,8 +84,8 @@ fn apply_set_property(
                 });
             }
 
-            let entity = eval(var_expr, record, &*engine, params)?;
-            let new_value = eval(value_expr, record, &*engine, params)?;
+            let entity = eval(var_expr, record, &*engine, params, scalar_fns)?;
+            let new_value = eval(value_expr, record, &*engine, params, scalar_fns)?;
             let pv = PropertyValue::try_from(new_value).map_err(|e| ExecutionError {
                 message: format!("invalid property value: {}", e),
             })?;
@@ -187,12 +189,13 @@ pub fn execute_remove(
     items: &[RemoveItem],
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     for record in &source_records {
         for item in items {
             match item {
                 RemoveItem::Property(prop_expr) => {
-                    apply_remove_property(prop_expr, record, engine, params)?;
+                    apply_remove_property(prop_expr, record, engine, params, scalar_fns)?;
                 }
                 RemoveItem::Label { variable, label } => {
                     apply_remove_label(variable, label, record, engine)?;
@@ -210,6 +213,7 @@ fn apply_remove_property(
     record: &Record,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<(), ExecutionError> {
     match prop_expr {
         Expression::Property(var_expr, prop_name) => {
@@ -220,7 +224,7 @@ fn apply_remove_property(
                 });
             }
 
-            let entity = eval(var_expr, record, &*engine, params)?;
+            let entity = eval(var_expr, record, &*engine, params, scalar_fns)?;
             let temporal_enabled = engine.config().temporal_tracking_enabled;
 
             match entity {
@@ -370,7 +374,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
 
         // Verify property was updated
@@ -402,7 +406,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
 
         let age_key = engine.catalog().prop_key_id("age").expect("age key");
@@ -432,7 +436,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
     }
 
@@ -460,7 +464,7 @@ mod tests {
         ))];
 
         let params = Params::new();
-        let result = execute_remove(vec![record], &items, &mut engine, &params);
+        let result = execute_remove(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
 
         let node = engine.get_node(nid).expect("node exists");
@@ -496,7 +500,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
 
         let edge = engine.get_edge(eid).expect("edge exists");
@@ -534,7 +538,7 @@ mod tests {
             "__query_start_ms__".to_string(),
             Value::Int64(9_999_999),
         );
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
 
         let edge = engine.get_edge(eid).expect("edge exists");
@@ -572,7 +576,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
 
         let edge = engine.get_edge(eid).expect("edge exists");
@@ -610,7 +614,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
     }
 
@@ -634,7 +638,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_err());
     }
 
@@ -660,7 +664,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params);
+        let result = execute_set(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_err());
     }
 
@@ -695,7 +699,7 @@ mod tests {
         ))];
 
         let params = Params::new();
-        let result = execute_remove(vec![record], &items, &mut engine, &params);
+        let result = execute_remove(vec![record], &items, &mut engine, &params, &());
         assert!(result.is_ok());
 
         let edge = engine.get_edge(eid).expect("edge exists");

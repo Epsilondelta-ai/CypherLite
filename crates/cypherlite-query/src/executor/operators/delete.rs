@@ -1,7 +1,7 @@
 // DeleteOp: node/edge deletion, ConstraintError if non-detach with edges
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
 use crate::parser::ast::Expression;
 use cypherlite_storage::StorageEngine;
 
@@ -14,6 +14,7 @@ pub fn execute_delete(
     detach: bool,
     engine: &mut StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     // Collect all entity IDs to delete first, then delete.
     // This avoids issues with deleting while iterating.
@@ -22,7 +23,7 @@ pub fn execute_delete(
 
     for record in &source_records {
         for expr in exprs {
-            let val = eval(expr, record, &*engine, params)?;
+            let val = eval(expr, record, &*engine, params, scalar_fns)?;
             match val {
                 Value::Node(nid) => {
                     if !node_ids_to_delete.contains(&nid) {
@@ -112,7 +113,7 @@ mod tests {
         let exprs = vec![Expression::Variable("n".to_string())];
         let params = Params::new();
 
-        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params);
+        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params, &());
         assert!(result.is_err());
         let err = result.expect_err("should error");
         assert!(err.message.contains("cannot delete node"));
@@ -137,7 +138,7 @@ mod tests {
         let exprs = vec![Expression::Variable("n".to_string())];
         let params = Params::new();
 
-        let result = execute_delete(vec![record], &exprs, true, &mut engine, &params);
+        let result = execute_delete(vec![record], &exprs, true, &mut engine, &params, &());
         assert!(result.is_ok());
         assert!(engine.get_node(n1).is_none());
         assert_eq!(engine.edge_count(), 0);
@@ -156,7 +157,7 @@ mod tests {
         let exprs = vec![Expression::Variable("n".to_string())];
         let params = Params::new();
 
-        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params);
+        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params, &());
         assert!(result.is_ok());
         assert!(engine.get_node(n1).is_none());
     }
@@ -172,7 +173,7 @@ mod tests {
         let exprs = vec![Expression::Variable("n".to_string())];
         let params = Params::new();
 
-        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params);
+        let result = execute_delete(vec![record], &exprs, false, &mut engine, &params, &());
         assert!(result.is_ok());
     }
 }

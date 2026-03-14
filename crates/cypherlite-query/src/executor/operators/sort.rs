@@ -1,7 +1,7 @@
 // SortOp: full-materialization sort with max_sort_rows guard
 
 use crate::executor::eval::{compare_values, eval};
-use crate::executor::{Params, Record};
+use crate::executor::{Params, Record, ScalarFnLookup};
 use crate::parser::ast::OrderItem;
 use cypherlite_storage::StorageEngine;
 
@@ -11,11 +11,12 @@ pub fn execute_sort(
     items: &[OrderItem],
     engine: &StorageEngine,
     params: &Params,
+    scalar_fns: &dyn ScalarFnLookup,
 ) -> Vec<Record> {
     records.sort_by(|a, b| {
         for item in items {
-            let val_a = eval(&item.expr, a, engine, params).unwrap_or(crate::executor::Value::Null);
-            let val_b = eval(&item.expr, b, engine, params).unwrap_or(crate::executor::Value::Null);
+            let val_a = eval(&item.expr, a, engine, params, scalar_fns).unwrap_or(crate::executor::Value::Null);
+            let val_b = eval(&item.expr, b, engine, params, scalar_fns).unwrap_or(crate::executor::Value::Null);
             let ord = compare_values(&val_a, &val_b);
             let ord = if item.ascending { ord } else { ord.reverse() };
             if ord != std::cmp::Ordering::Equal {
@@ -62,7 +63,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_sort(vec![r1, r2, r3], &items, &engine, &params);
+        let result = execute_sort(vec![r1, r2, r3], &items, &engine, &params, &());
         assert_eq!(result[0].get("x"), Some(&Value::Int64(1)));
         assert_eq!(result[1].get("x"), Some(&Value::Int64(2)));
         assert_eq!(result[2].get("x"), Some(&Value::Int64(3)));
@@ -84,7 +85,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_sort(vec![r1, r2], &items, &engine, &params);
+        let result = execute_sort(vec![r1, r2], &items, &engine, &params, &());
         assert_eq!(result[0].get("x"), Some(&Value::Int64(3)));
         assert_eq!(result[1].get("x"), Some(&Value::Int64(1)));
     }
