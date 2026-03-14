@@ -4,7 +4,7 @@ use crate::executor::eval::eval;
 use crate::executor::operators::create::{
     is_system_property, is_temporal_edge_property, SYSTEM_PROP_UPDATED_AT,
 };
-use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, TriggerLookup, Value};
 use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, PropertyValue};
 use cypherlite_storage::StorageEngine;
@@ -18,12 +18,13 @@ pub fn execute_set(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     for record in &source_records {
         for item in items {
             match item {
                 SetItem::Property { target, value } => {
-                    apply_set_property(target, value, record, engine, params, scalar_fns)?;
+                    apply_set_property(target, value, record, engine, params, scalar_fns, trigger_fns)?;
                 }
             }
         }
@@ -72,6 +73,7 @@ fn apply_set_property(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<(), ExecutionError> {
     // target should be Property(Variable(name), prop_name)
     match target {
@@ -105,11 +107,18 @@ fn apply_set_property(
                     }
 
                     let prop_key_id = engine.get_or_create_prop_key(prop_name);
-                    // Get current node properties
+                    // Get current node properties and label info before mutable borrow
                     let node = engine.get_node(nid).ok_or_else(|| ExecutionError {
                         message: format!("node {} not found", nid.0),
                     })?;
                     let mut props = node.properties.clone();
+                    let label_name = node
+                        .labels
+                        .first()
+                        .copied()
+                        .and_then(|lid| engine.catalog().label_name(lid).map(|s| s.to_string()));
+                    // Release the immutable borrow on engine (node is no longer needed)
+                    let _ = node;
 
                     // Update or add the property
                     let mut found = false;
@@ -129,17 +138,45 @@ fn apply_set_property(
                         inject_updated_at(&mut props, engine, params);
                     }
 
+                    // Fire before_update trigger
+                    let ctx = cypherlite_core::TriggerContext {
+                        entity_type: cypherlite_core::EntityType::Node,
+                        entity_id: nid.0,
+                        label_or_type: label_name,
+                        properties: props
+                            .iter()
+                            .map(|(k, v)| {
+                                let name = engine
+                                    .catalog()
+                                    .prop_key_name(*k)
+                                    .unwrap_or("?")
+                                    .to_string();
+                                (name, v.clone())
+                            })
+                            .collect(),
+                        operation: cypherlite_core::TriggerOperation::Update,
+                    };
+                    trigger_fns.fire_before_update(&ctx)?;
+
                     engine.update_node(nid, props).map_err(|e| ExecutionError {
                         message: format!("failed to update node: {}", e),
                     })?;
+
+                    trigger_fns.fire_after_update(&ctx)?;
                 }
                 Value::Edge(eid) => {
                     let prop_key_id = engine.get_or_create_prop_key(prop_name);
-                    // Get current edge properties
+                    // Get current edge properties and rel_type info before mutable borrow
                     let edge = engine.get_edge(eid).ok_or_else(|| ExecutionError {
                         message: format!("edge {} not found", eid.0),
                     })?;
                     let mut props = edge.properties.clone();
+                    let rel_type_name = engine
+                        .catalog()
+                        .rel_type_name(edge.rel_type_id)
+                        .map(|s| s.to_string());
+                    // Release the immutable borrow on engine
+                    let _ = edge;
 
                     // Update or add the property
                     let mut found = false;
@@ -159,9 +196,31 @@ fn apply_set_property(
                         inject_updated_at(&mut props, engine, params);
                     }
 
+                    // Fire before_update trigger
+                    let ctx = cypherlite_core::TriggerContext {
+                        entity_type: cypherlite_core::EntityType::Edge,
+                        entity_id: eid.0,
+                        label_or_type: rel_type_name,
+                        properties: props
+                            .iter()
+                            .map(|(k, v)| {
+                                let name = engine
+                                    .catalog()
+                                    .prop_key_name(*k)
+                                    .unwrap_or("?")
+                                    .to_string();
+                                (name, v.clone())
+                            })
+                            .collect(),
+                        operation: cypherlite_core::TriggerOperation::Update,
+                    };
+                    trigger_fns.fire_before_update(&ctx)?;
+
                     engine.update_edge(eid, props).map_err(|e| ExecutionError {
                         message: format!("failed to update edge: {}", e),
                     })?;
+
+                    trigger_fns.fire_after_update(&ctx)?;
                 }
                 Value::Null => {
                     // SET on null is a no-op (Cypher behavior)
@@ -190,12 +249,13 @@ pub fn execute_remove(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     for record in &source_records {
         for item in items {
             match item {
                 RemoveItem::Property(prop_expr) => {
-                    apply_remove_property(prop_expr, record, engine, params, scalar_fns)?;
+                    apply_remove_property(prop_expr, record, engine, params, scalar_fns, trigger_fns)?;
                 }
                 RemoveItem::Label { variable, label } => {
                     apply_remove_label(variable, label, record, engine)?;
@@ -214,6 +274,7 @@ fn apply_remove_property(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<(), ExecutionError> {
     match prop_expr {
         Expression::Property(var_expr, prop_name) => {
@@ -237,6 +298,11 @@ fn apply_remove_property(
                     let node = engine.get_node(nid).ok_or_else(|| ExecutionError {
                         message: format!("node {} not found", nid.0),
                     })?;
+                    let label_name = node
+                        .labels
+                        .first()
+                        .copied()
+                        .and_then(|lid| engine.catalog().label_name(lid).map(|s| s.to_string()));
                     let mut props: Vec<_> = node
                         .properties
                         .iter()
@@ -249,9 +315,30 @@ fn apply_remove_property(
                         inject_updated_at(&mut props, engine, params);
                     }
 
+                    let ctx = cypherlite_core::TriggerContext {
+                        entity_type: cypherlite_core::EntityType::Node,
+                        entity_id: nid.0,
+                        label_or_type: label_name,
+                        properties: props
+                            .iter()
+                            .map(|(k, v)| {
+                                let name = engine
+                                    .catalog()
+                                    .prop_key_name(*k)
+                                    .unwrap_or("?")
+                                    .to_string();
+                                (name, v.clone())
+                            })
+                            .collect(),
+                        operation: cypherlite_core::TriggerOperation::Update,
+                    };
+                    trigger_fns.fire_before_update(&ctx)?;
+
                     engine.update_node(nid, props).map_err(|e| ExecutionError {
                         message: format!("failed to update node: {}", e),
                     })?;
+
+                    trigger_fns.fire_after_update(&ctx)?;
                 }
                 Value::Edge(eid) => {
                     let prop_key_id = match engine.catalog().prop_key_id(prop_name) {
@@ -262,6 +349,10 @@ fn apply_remove_property(
                     let edge = engine.get_edge(eid).ok_or_else(|| ExecutionError {
                         message: format!("edge {} not found", eid.0),
                     })?;
+                    let rel_type_name = engine
+                        .catalog()
+                        .rel_type_name(edge.rel_type_id)
+                        .map(|s| s.to_string());
                     let mut props: Vec<_> = edge
                         .properties
                         .iter()
@@ -273,9 +364,30 @@ fn apply_remove_property(
                         inject_updated_at(&mut props, engine, params);
                     }
 
+                    let ctx = cypherlite_core::TriggerContext {
+                        entity_type: cypherlite_core::EntityType::Edge,
+                        entity_id: eid.0,
+                        label_or_type: rel_type_name,
+                        properties: props
+                            .iter()
+                            .map(|(k, v)| {
+                                let name = engine
+                                    .catalog()
+                                    .prop_key_name(*k)
+                                    .unwrap_or("?")
+                                    .to_string();
+                                (name, v.clone())
+                            })
+                            .collect(),
+                        operation: cypherlite_core::TriggerOperation::Update,
+                    };
+                    trigger_fns.fire_before_update(&ctx)?;
+
                     engine.update_edge(eid, props).map_err(|e| ExecutionError {
                         message: format!("failed to update edge: {}", e),
                     })?;
+
+                    trigger_fns.fire_after_update(&ctx)?;
                 }
                 Value::Null => {} // no-op
                 _ => {
@@ -374,7 +486,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
 
         // Verify property was updated
@@ -406,7 +518,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
 
         let age_key = engine.catalog().prop_key_id("age").expect("age key");
@@ -436,7 +548,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
     }
 
@@ -464,7 +576,7 @@ mod tests {
         ))];
 
         let params = Params::new();
-        let result = execute_remove(vec![record], &items, &mut engine, &params, &());
+        let result = execute_remove(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
 
         let node = engine.get_node(nid).expect("node exists");
@@ -500,7 +612,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
 
         let edge = engine.get_edge(eid).expect("edge exists");
@@ -538,7 +650,7 @@ mod tests {
             "__query_start_ms__".to_string(),
             Value::Int64(9_999_999),
         );
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
 
         let edge = engine.get_edge(eid).expect("edge exists");
@@ -576,7 +688,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
 
         let edge = engine.get_edge(eid).expect("edge exists");
@@ -614,7 +726,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
     }
 
@@ -638,7 +750,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_err());
     }
 
@@ -664,7 +776,7 @@ mod tests {
         }];
 
         let params = Params::new();
-        let result = execute_set(vec![record], &items, &mut engine, &params, &());
+        let result = execute_set(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_err());
     }
 
@@ -699,7 +811,7 @@ mod tests {
         ))];
 
         let params = Params::new();
-        let result = execute_remove(vec![record], &items, &mut engine, &params, &());
+        let result = execute_remove(vec![record], &items, &mut engine, &params, &(), &());
         assert!(result.is_ok());
 
         let edge = engine.get_edge(eid).expect("edge exists");

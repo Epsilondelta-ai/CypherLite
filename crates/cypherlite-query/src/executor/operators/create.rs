@@ -1,7 +1,7 @@
 // CreateOp: node and edge creation via storage engine
 
 use crate::executor::eval::eval;
-use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, TriggerLookup, Value};
 use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, PropertyValue};
 use cypherlite_storage::StorageEngine;
@@ -87,6 +87,7 @@ pub fn execute_create(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let mut results = Vec::new();
 
@@ -94,13 +95,69 @@ pub fn execute_create(
         let mut new_record = record.clone();
 
         for chain in &pattern.chains {
-            create_chain(chain, &mut new_record, engine, params, scalar_fns)?;
+            create_chain(chain, &mut new_record, engine, params, scalar_fns, trigger_fns)?;
         }
 
         results.push(new_record);
     }
 
     Ok(results)
+}
+
+/// Build a TriggerContext for a node.
+fn build_node_trigger_context(
+    entity_id: u64,
+    label: Option<&str>,
+    properties: &[(u32, PropertyValue)],
+    engine: &StorageEngine,
+    operation: cypherlite_core::TriggerOperation,
+) -> cypherlite_core::TriggerContext {
+    let props_map = properties
+        .iter()
+        .map(|(k, v)| {
+            let name = engine
+                .catalog()
+                .prop_key_name(*k)
+                .unwrap_or("?")
+                .to_string();
+            (name, v.clone())
+        })
+        .collect();
+    cypherlite_core::TriggerContext {
+        entity_type: cypherlite_core::EntityType::Node,
+        entity_id,
+        label_or_type: label.map(|s| s.to_string()),
+        properties: props_map,
+        operation,
+    }
+}
+
+/// Build a TriggerContext for an edge.
+fn build_edge_trigger_context(
+    entity_id: u64,
+    rel_type: Option<&str>,
+    properties: &[(u32, PropertyValue)],
+    engine: &StorageEngine,
+    operation: cypherlite_core::TriggerOperation,
+) -> cypherlite_core::TriggerContext {
+    let props_map = properties
+        .iter()
+        .map(|(k, v)| {
+            let name = engine
+                .catalog()
+                .prop_key_name(*k)
+                .unwrap_or("?")
+                .to_string();
+            (name, v.clone())
+        })
+        .collect();
+    cypherlite_core::TriggerContext {
+        entity_type: cypherlite_core::EntityType::Edge,
+        entity_id,
+        label_or_type: rel_type.map(|s| s.to_string()),
+        properties: props_map,
+        operation,
+    }
 }
 
 /// Create nodes and edges from a single pattern chain.
@@ -110,6 +167,7 @@ fn create_chain(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<(), ExecutionError> {
     let mut elements = chain.elements.iter();
     let mut prev_var: Option<String> = None;
@@ -144,7 +202,28 @@ fn create_chain(
                     inject_create_timestamps(&mut properties, engine, params);
                 }
 
-                let node_id = engine.create_node(labels, properties);
+                // Fire before_create trigger
+                let first_label = np.labels.first().map(|s| s.as_str());
+                let before_ctx = build_node_trigger_context(
+                    0,
+                    first_label,
+                    &properties,
+                    engine,
+                    cypherlite_core::TriggerOperation::Create,
+                );
+                trigger_fns.fire_before_create(&before_ctx)?;
+
+                let node_id = engine.create_node(labels, properties.clone());
+
+                // Fire after_create trigger with actual node_id
+                let after_ctx = build_node_trigger_context(
+                    node_id.0,
+                    first_label,
+                    &properties,
+                    engine,
+                    cypherlite_core::TriggerOperation::Create,
+                );
+                trigger_fns.fire_after_create(&after_ctx)?;
 
                 if !var_name.is_empty() {
                     record.insert(var_name.to_string(), Value::Node(node_id));
@@ -200,7 +279,29 @@ fn create_chain(
                         inject_create_timestamps(&mut properties, engine, params);
                     }
 
-                    let nid = engine.create_node(labels, properties);
+                    // Fire before_create trigger for target node
+                    let first_label = target_np.labels.first().map(|s| s.as_str());
+                    let before_ctx = build_node_trigger_context(
+                        0,
+                        first_label,
+                        &properties,
+                        engine,
+                        cypherlite_core::TriggerOperation::Create,
+                    );
+                    trigger_fns.fire_before_create(&before_ctx)?;
+
+                    let nid = engine.create_node(labels, properties.clone());
+
+                    // Fire after_create trigger for target node
+                    let after_ctx = build_node_trigger_context(
+                        nid.0,
+                        first_label,
+                        &properties,
+                        engine,
+                        cypherlite_core::TriggerOperation::Create,
+                    );
+                    trigger_fns.fire_after_create(&after_ctx)?;
+
                     if !target_var_name.is_empty() {
                         record.insert(target_var_name.to_string(), Value::Node(nid));
                     }
@@ -225,13 +326,13 @@ fn create_chain(
                 };
 
                 // Resolve relationship type
-                let rel_type_id = rp
+                let rel_type_name = rp
                     .rel_types
                     .first()
-                    .map(|t| engine.get_or_create_rel_type(t))
                     .ok_or_else(|| ExecutionError {
                         message: "CREATE relationship requires a type".to_string(),
                     })?;
+                let rel_type_id = engine.get_or_create_rel_type(rel_type_name);
 
                 // Validate no system properties in relationship
                 validate_no_system_properties(&rp.properties)?;
@@ -253,11 +354,31 @@ fn create_chain(
                     RelDirection::Incoming => (target_node_id, src_node_id),
                 };
 
+                // Fire before_create trigger for edge
+                let before_edge_ctx = build_edge_trigger_context(
+                    0,
+                    Some(rel_type_name),
+                    &rel_props,
+                    engine,
+                    cypherlite_core::TriggerOperation::Create,
+                );
+                trigger_fns.fire_before_create(&before_edge_ctx)?;
+
                 let edge_id = engine
-                    .create_edge(start, end, rel_type_id, rel_props)
+                    .create_edge(start, end, rel_type_id, rel_props.clone())
                     .map_err(|e| ExecutionError {
                         message: format!("failed to create edge: {}", e),
                     })?;
+
+                // Fire after_create trigger for edge
+                let after_edge_ctx = build_edge_trigger_context(
+                    edge_id.0,
+                    Some(rel_type_name),
+                    &rel_props,
+                    engine,
+                    cypherlite_core::TriggerOperation::Create,
+                );
+                trigger_fns.fire_after_create(&after_edge_ctx)?;
 
                 if let Some(rv) = &rp.variable {
                     record.insert(rv.clone(), Value::Edge(edge_id));
@@ -358,7 +479,7 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &());
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &(), &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert!(records[0].contains_key("n"));
@@ -390,7 +511,7 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &());
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &(), &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
 
@@ -434,7 +555,7 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &());
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &(), &());
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
         assert!(records[0].contains_key("a"));
@@ -496,7 +617,7 @@ mod tests {
             "__query_start_ms__".to_string(),
             Value::Int64(1_700_000_000_000),
         );
-        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &());
+        let result = execute_create(vec![Record::new()], &pattern, &mut engine, &params, &(), &());
         let records = result.expect("should succeed");
 
         // Get the edge and verify it has _valid_from
@@ -561,7 +682,7 @@ mod tests {
         };
 
         let params = Params::new();
-        let result = execute_create(vec![initial_record], &pattern, &mut engine, &params, &());
+        let result = execute_create(vec![initial_record], &pattern, &mut engine, &params, &(), &());
         let records = result.expect("should succeed");
 
         // Should reuse existing node "a" and create only "b"

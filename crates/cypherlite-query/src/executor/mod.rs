@@ -31,6 +31,176 @@ impl ScalarFnLookup for () {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Plugin: TriggerLookup trait for trigger hook dispatch
+// ---------------------------------------------------------------------------
+
+/// Trait for firing trigger hooks during mutation operations.
+///
+/// Implemented for `()` (no-op) and for `PluginRegistry<dyn Trigger>`
+/// when the `plugin` feature is enabled.
+pub trait TriggerLookup {
+    /// Fire all before-create triggers. Returns error to abort the operation.
+    fn fire_before_create(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError>;
+
+    /// Fire all after-create triggers.
+    fn fire_after_create(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError>;
+
+    /// Fire all before-update triggers. Returns error to abort the operation.
+    fn fire_before_update(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError>;
+
+    /// Fire all after-update triggers.
+    fn fire_after_update(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError>;
+
+    /// Fire all before-delete triggers. Returns error to abort the operation.
+    fn fire_before_delete(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError>;
+
+    /// Fire all after-delete triggers.
+    fn fire_after_delete(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError>;
+}
+
+/// No-op implementation: all triggers succeed with no action.
+impl TriggerLookup for () {
+    fn fire_before_create(
+        &self,
+        _ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+    fn fire_after_create(
+        &self,
+        _ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+    fn fire_before_update(
+        &self,
+        _ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+    fn fire_after_update(
+        &self,
+        _ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+    fn fire_before_delete(
+        &self,
+        _ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+    fn fire_after_delete(
+        &self,
+        _ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "plugin")]
+impl TriggerLookup
+    for cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::Trigger>
+{
+    fn fire_before_create(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        for name in self.list() {
+            if let Some(trigger) = self.get(name) {
+                trigger.on_before_create(ctx).map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
+            }
+        }
+        Ok(())
+    }
+    fn fire_after_create(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        for name in self.list() {
+            if let Some(trigger) = self.get(name) {
+                trigger.on_after_create(ctx).map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
+            }
+        }
+        Ok(())
+    }
+    fn fire_before_update(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        for name in self.list() {
+            if let Some(trigger) = self.get(name) {
+                trigger.on_before_update(ctx).map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
+            }
+        }
+        Ok(())
+    }
+    fn fire_after_update(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        for name in self.list() {
+            if let Some(trigger) = self.get(name) {
+                trigger.on_after_update(ctx).map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
+            }
+        }
+        Ok(())
+    }
+    fn fire_before_delete(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        for name in self.list() {
+            if let Some(trigger) = self.get(name) {
+                trigger.on_before_delete(ctx).map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
+            }
+        }
+        Ok(())
+    }
+    fn fire_after_delete(
+        &self,
+        ctx: &cypherlite_core::TriggerContext,
+    ) -> Result<(), ExecutionError> {
+        for name in self.list() {
+            if let Some(trigger) = self.get(name) {
+                trigger.on_after_delete(ctx).map_err(|e| ExecutionError {
+                    message: e.to_string(),
+                })?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(feature = "plugin")]
 impl ScalarFnLookup
     for cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::ScalarFunction>
@@ -165,6 +335,7 @@ pub fn execute(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     match plan {
         LogicalPlan::EmptySource => Ok(vec![Record::new()]),
@@ -188,7 +359,7 @@ pub fn execute(
             direction,
             temporal_filter,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             let tf = resolve_temporal_filter(temporal_filter, engine, params, scalar_fns)?;
             Ok(operators::expand::execute_expand(
                 source_records,
@@ -202,7 +373,7 @@ pub fn execute(
             ))
         }
         LogicalPlan::Filter { source, predicate } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             operators::filter::execute_filter(source_records, predicate, engine, params, scalar_fns)
         }
         LogicalPlan::Project {
@@ -210,7 +381,7 @@ pub fn execute(
             items,
             distinct,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             let mut result =
                 operators::project::execute_project(source_records, items, engine, params, scalar_fns)?;
             if *distinct {
@@ -219,7 +390,7 @@ pub fn execute(
             Ok(result)
         }
         LogicalPlan::Sort { source, items } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             Ok(operators::sort::execute_sort(
                 source_records,
                 items,
@@ -229,12 +400,12 @@ pub fn execute(
             ))
         }
         LogicalPlan::Skip { source, count } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             let n = eval_count_expr(count)?;
             Ok(operators::limit::execute_skip(source_records, n))
         }
         LogicalPlan::Limit { source, count } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             let n = eval_count_expr(count)?;
             Ok(operators::limit::execute_limit(source_records, n))
         }
@@ -243,7 +414,7 @@ pub fn execute(
             group_keys,
             aggregates,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             operators::aggregate::execute_aggregate(
                 source_records,
                 group_keys,
@@ -255,33 +426,33 @@ pub fn execute(
         }
         LogicalPlan::CreateOp { source, pattern } => {
             let source_records = match source {
-                Some(s) => execute(s, engine, params, scalar_fns)?,
+                Some(s) => execute(s, engine, params, scalar_fns, trigger_fns)?,
                 None => vec![Record::new()],
             };
-            operators::create::execute_create(source_records, pattern, engine, params, scalar_fns)
+            operators::create::execute_create(source_records, pattern, engine, params, scalar_fns, trigger_fns)
         }
         LogicalPlan::DeleteOp {
             source,
             exprs,
             detach,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
-            operators::delete::execute_delete(source_records, exprs, *detach, engine, params, scalar_fns)
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
+            operators::delete::execute_delete(source_records, exprs, *detach, engine, params, scalar_fns, trigger_fns)
         }
         LogicalPlan::SetOp { source, items } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
-            operators::set_props::execute_set(source_records, items, engine, params, scalar_fns)
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
+            operators::set_props::execute_set(source_records, items, engine, params, scalar_fns, trigger_fns)
         }
         LogicalPlan::RemoveOp { source, items } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
-            operators::set_props::execute_remove(source_records, items, engine, params, scalar_fns)
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
+            operators::set_props::execute_remove(source_records, items, engine, params, scalar_fns, trigger_fns)
         }
         LogicalPlan::Unwind {
             source,
             expr,
             variable,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             operators::unwind::execute_unwind(source_records, expr, variable, engine, params, scalar_fns)
         }
         LogicalPlan::With {
@@ -290,7 +461,7 @@ pub fn execute(
             where_clause,
             distinct,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             let mut result =
                 operators::with::execute_with(source_records, items, engine, params, scalar_fns)?;
             if *distinct {
@@ -308,10 +479,10 @@ pub fn execute(
             on_create,
         } => {
             let source_records = match source {
-                Some(s) => execute(s, engine, params, scalar_fns)?,
+                Some(s) => execute(s, engine, params, scalar_fns, trigger_fns)?,
                 None => vec![Record::new()],
             };
-            operators::merge::execute_merge(source_records, pattern, on_match, on_create, engine, params, scalar_fns)
+            operators::merge::execute_merge(source_records, pattern, on_match, on_create, engine, params, scalar_fns, trigger_fns)
         }
         LogicalPlan::CreateIndex {
             name,
@@ -436,7 +607,7 @@ pub fn execute(
             max_hops,
             temporal_filter,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             let tf = resolve_temporal_filter(temporal_filter, engine, params, scalar_fns)?;
             Ok(operators::var_length_expand::execute_var_length_expand(
                 source_records,
@@ -459,7 +630,7 @@ pub fn execute(
             rel_type_id,
             direction,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             Ok(operators::optional_expand::execute_optional_expand(
                 source_records,
                 src_var,
@@ -520,7 +691,7 @@ pub fn execute(
             targets,
         } => {
             let source_records = match source {
-                Some(s) => execute(s, engine, params, scalar_fns)?,
+                Some(s) => execute(s, engine, params, scalar_fns, trigger_fns)?,
                 None => vec![Record::new()],
             };
             execute_create_hyperedge(
@@ -537,7 +708,7 @@ pub fn execute(
             source,
             timestamp_expr,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             operators::temporal_scan::execute_as_of_scan(
                 source_records,
                 timestamp_expr,
@@ -551,7 +722,7 @@ pub fn execute(
             start_expr,
             end_expr,
         } => {
-            let source_records = execute(source, engine, params, scalar_fns)?;
+            let source_records = execute(source, engine, params, scalar_fns, trigger_fns)?;
             operators::temporal_scan::execute_temporal_range_scan(
                 source_records,
                 start_expr,
@@ -641,7 +812,7 @@ fn execute_create_snapshot(
     use cypherlite_core::{LabelRegistry, PropertyValue, SubgraphId};
 
     // 1. Execute sub-plan to collect results.
-    let sub_records = execute(sub_plan, engine, params, &())?;
+    let sub_records = execute(sub_plan, engine, params, &(), &())?;
 
     // 2. Collect unique node IDs from the results.
     let mut node_ids = Vec::new();

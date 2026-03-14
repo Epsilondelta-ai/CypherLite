@@ -5,7 +5,7 @@ use crate::executor::operators::create::{
     is_system_property, resolve_properties_mut, validate_no_system_properties,
     SYSTEM_PROP_CREATED_AT, SYSTEM_PROP_UPDATED_AT,
 };
-use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, Value};
+use crate::executor::{ExecutionError, Params, Record, ScalarFnLookup, TriggerLookup, Value};
 use crate::parser::ast::*;
 use cypherlite_core::{LabelRegistry, NodeId, PropertyValue};
 use cypherlite_storage::StorageEngine;
@@ -14,6 +14,7 @@ use cypherlite_storage::StorageEngine;
 /// nodes/edges matching the pattern. If found, bind them (matched).
 /// If not found, create them (created). Then apply ON MATCH SET or
 /// ON CREATE SET accordingly.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_merge(
     source_records: Vec<Record>,
     pattern: &Pattern,
@@ -22,6 +23,7 @@ pub fn execute_merge(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    trigger_fns: &dyn TriggerLookup,
 ) -> Result<Vec<Record>, ExecutionError> {
     let mut results = Vec::new();
 
@@ -29,7 +31,7 @@ pub fn execute_merge(
         let mut new_record = record.clone();
 
         for chain in &pattern.chains {
-            let created = merge_chain(chain, &mut new_record, engine, params, scalar_fns)?;
+            let created = merge_chain(chain, &mut new_record, engine, params, scalar_fns, trigger_fns)?;
 
             // Apply ON MATCH SET or ON CREATE SET
             if created {
@@ -76,6 +78,7 @@ fn merge_chain(
     engine: &mut StorageEngine,
     params: &Params,
     scalar_fns: &dyn ScalarFnLookup,
+    _trigger_fns: &dyn TriggerLookup,
 ) -> Result<bool, ExecutionError> {
     let mut elements = chain.elements.iter();
     let mut prev_var: Option<String> = None;
@@ -532,6 +535,7 @@ mod tests {
             &mut engine,
             &params,
             &(),
+            &(),
         );
         let records = result.expect("should succeed");
         assert_eq!(records.len(), 1);
@@ -569,6 +573,7 @@ mod tests {
             &mut engine,
             &params,
             &(),
+            &(),
         )
         .expect("first merge");
         assert_eq!(engine.node_count(), 1);
@@ -581,6 +586,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
             &(),
         )
         .expect("second merge");
@@ -623,6 +629,7 @@ mod tests {
             &on_create,
             &mut engine,
             &params,
+            &(),
             &(),
         )
         .expect("merge");
@@ -680,6 +687,7 @@ mod tests {
             &mut engine,
             &params,
             &(),
+            &(),
         )
         .expect("first merge");
 
@@ -691,6 +699,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
             &(),
         )
         .expect("second merge");
@@ -768,6 +777,7 @@ mod tests {
             &mut engine,
             &params,
             &(),
+            &(),
         )
         .expect("merge");
         assert_eq!(engine.edge_count(), 1);
@@ -781,6 +791,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
             &(),
         )
         .expect("second merge");
@@ -835,6 +846,7 @@ mod tests {
             &mut engine,
             &params,
             &(),
+            &(),
         )
         .expect("merge");
 
@@ -878,6 +890,7 @@ mod tests {
             &[],
             &mut engine,
             &params,
+            &(),
             &(),
         )
         .expect("merge");

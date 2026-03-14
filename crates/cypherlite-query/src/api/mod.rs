@@ -108,6 +108,8 @@ pub struct CypherLite {
     #[cfg(feature = "plugin")]
     serializers:
         cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::Serializer>,
+    #[cfg(feature = "plugin")]
+    triggers: cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::Trigger>,
 }
 
 impl CypherLite {
@@ -122,6 +124,8 @@ impl CypherLite {
             index_plugins: cypherlite_core::plugin::PluginRegistry::new(),
             #[cfg(feature = "plugin")]
             serializers: cypherlite_core::plugin::PluginRegistry::new(),
+            #[cfg(feature = "plugin")]
+            triggers: cypherlite_core::plugin::PluginRegistry::new(),
         })
     }
 
@@ -172,8 +176,13 @@ impl CypherLite {
         let scalar_fns: &dyn crate::executor::ScalarFnLookup = &self.scalar_functions;
         #[cfg(not(feature = "plugin"))]
         let scalar_fns: &dyn crate::executor::ScalarFnLookup = &();
-        let records = crate::executor::execute(&plan, &mut self.engine, &params, scalar_fns)
-            .map_err(|e| CypherLiteError::ExecutionError(e.message))?;
+        #[cfg(feature = "plugin")]
+        let trigger_fns: &dyn crate::executor::TriggerLookup = &self.triggers;
+        #[cfg(not(feature = "plugin"))]
+        let trigger_fns: &dyn crate::executor::TriggerLookup = &();
+        let records =
+            crate::executor::execute(&plan, &mut self.engine, &params, scalar_fns, trigger_fns)
+                .map_err(|e| CypherLiteError::ExecutionError(e.message))?;
 
         // 6. Convert to QueryResult
         let columns = extract_columns(&records);
@@ -358,6 +367,32 @@ impl CypherLite {
             }
         }
         Err(CypherLiteError::UnsupportedFormat(format.to_string()))
+    }
+
+    /// Register a custom trigger plugin.
+    ///
+    /// Returns an error if a trigger with the same name is already registered.
+    #[cfg(feature = "plugin")]
+    pub fn register_trigger(
+        &mut self,
+        trigger: Box<dyn cypherlite_core::plugin::Trigger>,
+    ) -> Result<(), CypherLiteError> {
+        self.triggers
+            .register(trigger)
+            .map_err(|e| CypherLiteError::PluginError(e.to_string()))
+    }
+
+    /// List all registered triggers as `(name, version)` pairs.
+    #[cfg(feature = "plugin")]
+    pub fn list_triggers(&self) -> Vec<(&str, &str)> {
+        self.triggers
+            .list()
+            .filter_map(|name| {
+                self.triggers
+                    .get(name)
+                    .map(|t| (name, t.version()))
+            })
+            .collect()
     }
 
     /// Begin a transaction (simplified - wraps execute calls).
