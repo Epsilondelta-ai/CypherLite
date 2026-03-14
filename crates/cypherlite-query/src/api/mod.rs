@@ -102,6 +102,12 @@ pub struct CypherLite {
     #[cfg(feature = "plugin")]
     scalar_functions:
         cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::ScalarFunction>,
+    #[cfg(feature = "plugin")]
+    index_plugins:
+        cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::IndexPlugin>,
+    #[cfg(feature = "plugin")]
+    serializers:
+        cypherlite_core::plugin::PluginRegistry<dyn cypherlite_core::plugin::Serializer>,
 }
 
 impl CypherLite {
@@ -112,6 +118,10 @@ impl CypherLite {
             engine,
             #[cfg(feature = "plugin")]
             scalar_functions: cypherlite_core::plugin::PluginRegistry::new(),
+            #[cfg(feature = "plugin")]
+            index_plugins: cypherlite_core::plugin::PluginRegistry::new(),
+            #[cfg(feature = "plugin")]
+            serializers: cypherlite_core::plugin::PluginRegistry::new(),
         })
     }
 
@@ -211,6 +221,145 @@ impl CypherLite {
             .collect()
     }
 
+    /// Register a custom index plugin.
+    ///
+    /// Returns an error if an index plugin with the same name is already registered.
+    #[cfg(feature = "plugin")]
+    pub fn register_index_plugin(
+        &mut self,
+        plugin: Box<dyn cypherlite_core::plugin::IndexPlugin>,
+    ) -> Result<(), CypherLiteError> {
+        self.index_plugins
+            .register(plugin)
+            .map_err(|e| CypherLiteError::PluginError(e.to_string()))
+    }
+
+    /// List all registered index plugins as `(name, version, index_type)` tuples.
+    #[cfg(feature = "plugin")]
+    pub fn list_index_plugins(&self) -> Vec<(&str, &str, &str)> {
+        self.index_plugins
+            .list()
+            .filter_map(|name| {
+                self.index_plugins
+                    .get(name)
+                    .map(|p| (name, p.version(), p.index_type()))
+            })
+            .collect()
+    }
+
+    /// Get an immutable reference to a registered index plugin by name.
+    #[cfg(feature = "plugin")]
+    pub fn get_index_plugin(
+        &self,
+        name: &str,
+    ) -> Option<&dyn cypherlite_core::plugin::IndexPlugin> {
+        self.index_plugins.get(name)
+    }
+
+    /// Get a mutable reference to a registered index plugin by name.
+    ///
+    /// Useful for calling `insert()` and `remove()` which require `&mut self`.
+    #[cfg(feature = "plugin")]
+    pub fn get_index_plugin_mut(
+        &mut self,
+        name: &str,
+    ) -> Option<&mut (dyn cypherlite_core::plugin::IndexPlugin + 'static)> {
+        self.index_plugins.get_mut(name)
+    }
+
+    /// Register a custom serializer plugin.
+    ///
+    /// Returns an error if a serializer with the same name is already registered.
+    #[cfg(feature = "plugin")]
+    pub fn register_serializer(
+        &mut self,
+        serializer: Box<dyn cypherlite_core::plugin::Serializer>,
+    ) -> Result<(), CypherLiteError> {
+        self.serializers
+            .register(serializer)
+            .map_err(|e| CypherLiteError::PluginError(e.to_string()))
+    }
+
+    /// List all registered serializers as `(name, version)` pairs.
+    #[cfg(feature = "plugin")]
+    pub fn list_serializers(&self) -> Vec<(&str, &str)> {
+        self.serializers
+            .list()
+            .filter_map(|name| {
+                self.serializers
+                    .get(name)
+                    .map(|s| (name, s.version()))
+            })
+            .collect()
+    }
+
+    /// Export query results through a registered serializer.
+    ///
+    /// Executes the given query, converts the resulting rows to
+    /// `Vec<HashMap<String, PropertyValue>>`, then delegates to the
+    /// serializer whose `format()` matches the requested format string.
+    #[cfg(feature = "plugin")]
+    pub fn export_data(
+        &mut self,
+        format: &str,
+        query: &str,
+    ) -> Result<Vec<u8>, CypherLiteError> {
+        // Validate format before executing (avoids running query for bad format).
+        if !self.has_serializer_format(format) {
+            return Err(CypherLiteError::UnsupportedFormat(format.to_string()));
+        }
+
+        // Execute the query first (requires &mut self).
+        let result = self.execute(query)?;
+
+        // Convert rows to property maps (filter out non-convertible values).
+        let data = rows_to_property_maps(&result.rows);
+
+        // Now borrow serializer (only &self needed) and export.
+        let serializer = self.find_serializer_by_format(format)?;
+        serializer.export(&data)
+    }
+
+    /// Import data through a registered serializer.
+    ///
+    /// Looks up the serializer whose `format()` matches the requested format
+    /// string, then delegates to its `import()` method.
+    #[cfg(feature = "plugin")]
+    pub fn import_data(
+        &self,
+        format: &str,
+        bytes: &[u8],
+    ) -> Result<Vec<HashMap<String, cypherlite_core::types::PropertyValue>>, CypherLiteError> {
+        let serializer = self.find_serializer_by_format(format)?;
+        serializer.import(bytes)
+    }
+
+    /// Check whether a serializer with the given format is registered.
+    #[cfg(feature = "plugin")]
+    fn has_serializer_format(&self, format: &str) -> bool {
+        self.serializers.list().any(|name| {
+            self.serializers
+                .get(name)
+                .is_some_and(|s| s.format() == format)
+        })
+    }
+
+    /// Find a registered serializer by its format identifier.
+    #[cfg(feature = "plugin")]
+    fn find_serializer_by_format(
+        &self,
+        format: &str,
+    ) -> Result<&dyn cypherlite_core::plugin::Serializer, CypherLiteError> {
+        for name in self.serializers.list() {
+            if let Some(s) = self.serializers.get(name) {
+                if s.format() == format {
+                    return Ok(s);
+                }
+            }
+        }
+        Err(CypherLiteError::UnsupportedFormat(format.to_string()))
+    }
+
     /// Begin a transaction (simplified - wraps execute calls).
     pub fn begin(&mut self) -> Transaction<'_> {
         Transaction {
@@ -218,6 +367,30 @@ impl CypherLite {
             committed: false,
         }
     }
+}
+
+/// Convert query rows to property maps, filtering out non-convertible values
+/// (e.g., Node, Edge references that have no PropertyValue representation).
+#[cfg(feature = "plugin")]
+fn rows_to_property_maps(
+    rows: &[Row],
+) -> Vec<HashMap<String, cypherlite_core::types::PropertyValue>> {
+    use cypherlite_core::types::PropertyValue;
+
+    rows.iter()
+        .map(|row| {
+            row.columns()
+                .iter()
+                .filter_map(|col| {
+                    row.get(col).and_then(|v| {
+                        PropertyValue::try_from(v.clone())
+                            .ok()
+                            .map(|pv| (col.clone(), pv))
+                    })
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Extract column names from the first record.
