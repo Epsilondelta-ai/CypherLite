@@ -1,6 +1,6 @@
 # CypherLite - 기술 스택 및 아키텍처
 
-> Rust 1.70+ 기반 고성능 임베디드 그래프 데이터베이스
+> Rust 1.84+ (MSRV) 기반 고성능 임베디드 그래프 데이터베이스
 
 ---
 
@@ -174,7 +174,7 @@ app.cyl-wal 내부 구조:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # 최소 Rust 버전 확인
-rustc --version  # 1.70.0 이상 필요
+rustc --version  # 1.84.0 이상 필요 (MSRV)
 
 # 워크스페이스 도구
 cargo --version
@@ -423,7 +423,7 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 
 ---
 
-### Phase 9 - v0.9: CI/CD Pipeline (현재)
+### Phase 9 - v0.9: CI/CD Pipeline (완료)
 
 **목표**: GitHub Actions 기반 자동 품질 게이트 구축
 
@@ -434,6 +434,23 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 - Dependabot: Cargo + GitHub Actions 의존성 주 1회 자동 확인
 
 **생성 파일**: .github/workflows/ci.yml, .github/dependabot.yml
+
+---
+
+### Phase 10 - v1.0.0: 플러그인 시스템 (완료)
+
+**목표**: 핵심 엔진을 건드리지 않고 기능을 확장할 수 있는 플러그인 아키텍처 구현
+
+**구현 항목**:
+- `Plugin` 베이스 트레이트 (Send + Sync, name + version)
+- 4가지 확장 트레이트: `ScalarFunction`, `IndexPlugin`, `Serializer`, `Trigger`
+- 제네릭 `PluginRegistry<T>`: register / get / get_mut / list / contains
+- `TriggerContext`, `TriggerOperation`, `EntityType` 지원 타입 (trigger_types.rs)
+- cypherlite-query 통합: ScalarFnLookup / TriggerLookup, register_* / list_* API
+- 4개 플러그인 타입별 통합 테스트 (plugin_{function,index,serializer,trigger}_test.rs)
+- 버전 범프 0.9.0 → 1.0.0
+
+**테스트 결과**: 1,309 테스트 통과 (+53 신규)
 
 ---
 
@@ -452,30 +469,21 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 
 ---
 
-## CI/CD 파이프라인 (계획)
+## CI/CD 파이프라인 (구현 완료 - Phase 9)
 
-```yaml
-# .github/workflows/ci.yml (예정)
+`.github/workflows/ci.yml`에 6개 병렬 Job으로 구성:
 
-on: [push, pull_request]
+| Job | 내용 |
+|-----|------|
+| `check` | `cargo clippy --workspace --all-targets --all-features -D warnings` + `cargo fmt --all --check` |
+| `msrv` | Rust 1.84 툴체인으로 `cargo check --workspace --all-features` |
+| `test` | `cargo test --workspace --all-features` |
+| `coverage` | `cargo llvm-cov --workspace --all-features --fail-under-lines 85` (85% 미만 시 실패) |
+| `security` | `cargo audit` (취약점 스캔) |
+| `bench-check` | `cargo bench --no-run` (벤치마크 컴파일 검증) |
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - cargo fmt --check
-      - cargo clippy -- -D warnings
-      - cargo test --release
-      - cargo bench --no-run      # 벤치마크 컴파일 검증
-
-  coverage:
-    runs-on: ubuntu-latest
-    steps:
-      - cargo tarpaulin --out Xml
-      - 커버리지 85% 미만 시 실패
-
-  security:
-    runs-on: ubuntu-latest
-    steps:
-      - cargo audit
-```
+**도구 및 캐싱**:
+- `dtolnay/rust-toolchain`: stable / master 툴체인 관리
+- `Swatinem/rust-cache@v2`: Cargo 빌드 캐시
+- `taiki-e/install-action`: cargo-llvm-cov, cargo-audit 사전 빌드 바이너리 설치
+- `dependabot.yml`: Cargo + GitHub Actions 의존성 주 1회 자동 확인

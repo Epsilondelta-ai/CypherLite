@@ -8,7 +8,7 @@
 
 **CypherLite**는 경량 임베디드 단일 파일 그래프 데이터베이스 라이브러리입니다. SQLite가 관계형 데이터베이스를 민주화한 것처럼, CypherLite는 그래프 데이터베이스를 누구나 쉽게 사용할 수 있도록 설계되었습니다.
 
-- **현재 상태**: 활성 개발 단계 (v0.9.0)
+- **현재 상태**: 활성 개발 단계 (v1.0.0)
 - **주요 언어**: Rust 1.92+ (2024 edition)
 - **파일 확장자**: `.cyl` (CypherLite 고유 형식)
 
@@ -133,9 +133,9 @@
 - 하이퍼엣지 내 시간 참조로 시간 차원 그래프 관계 표현
 
 **플러그인 시스템**
-- 6가지 플러그인 타입: Storage, Index, Query, Serializer, Event, Business Logic
-- HNSW 벡터 인덱스 플러그인 (AI 활용)
-- RDF/OWL, JSON-LD, GraphML 직렬화 플러그인
+- 4가지 플러그인 타입: ScalarFunction, IndexPlugin, Serializer, Trigger
+- 공통 `Plugin` 베이스 트레이트 + 제네릭 `PluginRegistry<T>`
+- `cypherlite-core` 크레이트 내 `plugin/` 모듈로 통합 제공
 
 **FFI 바인딩**
 - C 헤더 자동 생성 (cbindgen)
