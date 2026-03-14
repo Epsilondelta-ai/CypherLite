@@ -36,9 +36,12 @@ pub fn execute_expand(
                     // Filter by rel_type if specified
                     let type_matches = rel_type_id.is_none_or(|tid| he_rec.rel_type_id == tid);
                     if type_matches {
-                        // Emit all source and target participant nodes
-                        for entity in he_rec.sources.iter().chain(he_rec.targets.iter()) {
-                            let target_value = match entity {
+                        // Collect participant target values first for move-last optimisation.
+                        let participants: Vec<Value> = he_rec
+                            .sources
+                            .iter()
+                            .chain(he_rec.targets.iter())
+                            .map(|entity| match entity {
                                 cypherlite_core::GraphEntity::Node(nid) => Value::Node(*nid),
                                 #[cfg(feature = "subgraph")]
                                 cypherlite_core::GraphEntity::Subgraph(sid) => {
@@ -53,14 +56,27 @@ pub fn execute_expand(
                                     // resolved when properties are accessed.
                                     Value::TemporalNode(*nid, *ts)
                                 }
-                            };
-                            let mut new_record = record.clone();
-                            if let Some(rv) = rel_var {
-                                // No physical edge for virtual :INVOLVES, bind Null
-                                new_record.insert(rv.to_string(), Value::Null);
+                            })
+                            .collect();
+
+                        if !participants.is_empty() {
+                            // Clone for all-but-last, move for last (REQ-Q-003).
+                            for target_value in &participants[..participants.len() - 1] {
+                                let mut new_record = record.clone();
+                                if let Some(rv) = rel_var {
+                                    new_record.insert(rv.to_string(), Value::Null);
+                                }
+                                new_record.insert(target_var.to_string(), target_value.clone());
+                                results.push(new_record);
                             }
-                            new_record.insert(target_var.to_string(), target_value);
-                            results.push(new_record);
+                            // Last participant: move the record (no clone).
+                            let last_value = participants.into_iter().last().unwrap();
+                            let mut last_record = record;
+                            if let Some(rv) = rel_var {
+                                last_record.insert(rv.to_string(), Value::Null);
+                            }
+                            last_record.insert(target_var.to_string(), last_value);
+                            results.push(last_record);
                         }
                     }
                 }
@@ -76,16 +92,26 @@ pub fn execute_expand(
                 let is_contains = rel_type_id
                     .is_some_and(|tid| engine.catalog().rel_type_name(tid) == Some("CONTAINS"));
                 if is_contains {
-                    // Virtual :CONTAINS expansion via MembershipIndex
-                    let members = engine.list_members(*sg_id);
-                    for node_id in members {
-                        let mut new_record = record.clone();
-                        if let Some(rv) = rel_var {
-                            // No physical edge for virtual :CONTAINS, bind Null
-                            new_record.insert(rv.to_string(), Value::Null);
+                    // Virtual :CONTAINS expansion via MembershipIndex.
+                    // Collect members first for move-last optimisation (REQ-Q-003).
+                    let members: Vec<NodeId> = engine.list_members(*sg_id);
+                    if !members.is_empty() {
+                        // Clone for all-but-last, move for last.
+                        for &node_id in &members[..members.len() - 1] {
+                            let mut new_record = record.clone();
+                            if let Some(rv) = rel_var {
+                                new_record.insert(rv.to_string(), Value::Null);
+                            }
+                            new_record.insert(target_var.to_string(), Value::Node(node_id));
+                            results.push(new_record);
                         }
-                        new_record.insert(target_var.to_string(), Value::Node(node_id));
-                        results.push(new_record);
+                        let last_node = *members.last().unwrap();
+                        let mut last_record = record;
+                        if let Some(rv) = rel_var {
+                            last_record.insert(rv.to_string(), Value::Null);
+                        }
+                        last_record.insert(target_var.to_string(), Value::Node(last_node));
+                        results.push(last_record);
                     }
                     continue;
                 }
@@ -99,6 +125,9 @@ pub fn execute_expand(
 
         let edges = engine.get_edges_for_node(src_node_id);
 
+        // Collect matching (edge_id, target_node_id) pairs for move-last optimisation
+        // (REQ-Q-003). This avoids cloning the source record for the last match.
+        let mut matched: Vec<(cypherlite_core::EdgeId, NodeId)> = Vec::new();
         for edge in edges {
             // Filter by relationship type if specified
             if let Some(tid) = rel_type_id {
@@ -142,14 +171,30 @@ pub fn execute_expand(
             };
 
             if let Some(target_id) = target_node_id {
-                let mut new_record = record.clone();
-                if let Some(rv) = rel_var {
-                    new_record.insert(rv.to_string(), Value::Edge(edge.edge_id));
-                }
-                new_record.insert(target_var.to_string(), Value::Node(target_id));
-                results.push(new_record);
+                matched.push((edge.edge_id, target_id));
             }
         }
+
+        if matched.is_empty() {
+            continue;
+        }
+
+        // Emit: clone for all-but-last, move for last.
+        for &(edge_id, target_id) in &matched[..matched.len() - 1] {
+            let mut new_record = record.clone();
+            if let Some(rv) = rel_var {
+                new_record.insert(rv.to_string(), Value::Edge(edge_id));
+            }
+            new_record.insert(target_var.to_string(), Value::Node(target_id));
+            results.push(new_record);
+        }
+        let (last_edge_id, last_target_id) = *matched.last().unwrap();
+        let mut last_record = record; // move ownership, no clone
+        if let Some(rv) = rel_var {
+            last_record.insert(rv.to_string(), Value::Edge(last_edge_id));
+        }
+        last_record.insert(target_var.to_string(), Value::Node(last_target_id));
+        results.push(last_record);
     }
 
     results
@@ -304,6 +349,205 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].get("b"), Some(&Value::Node(n1)));
+    }
+
+    // ── M3-1: Record sharing / clone-last optimization tests ───────────
+
+    /// Star graph: one source node with 20 outgoing edges.
+    /// Verifies all 20 results contain correct bindings.
+    #[test]
+    fn test_expand_large_fanout() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let knows_type = engine.get_or_create_rel_type("KNOWS");
+        let center = engine.create_node(vec![], vec![]);
+        let mut targets = Vec::new();
+        for _ in 0..20 {
+            let t = engine.create_node(vec![], vec![]);
+            engine
+                .create_edge(center, t, knows_type, vec![])
+                .expect("edge");
+            targets.push(t);
+        }
+
+        let mut source = Record::new();
+        source.insert("a".to_string(), Value::Node(center));
+        // Add extra binding to verify it survives clone/move
+        source.insert("extra".to_string(), Value::Int64(42));
+
+        let results = execute_expand(
+            vec![source],
+            "a",
+            Some("r"),
+            "b",
+            Some(knows_type),
+            &RelDirection::Outgoing,
+            &engine,
+            None,
+        );
+
+        assert_eq!(results.len(), 20);
+        let mut found_targets: Vec<NodeId> = results
+            .iter()
+            .filter_map(|r| match r.get("b") {
+                Some(Value::Node(nid)) => Some(*nid),
+                _ => None,
+            })
+            .collect();
+        found_targets.sort();
+        targets.sort();
+        assert_eq!(found_targets, targets);
+
+        // Verify extra binding preserved in every result
+        for r in &results {
+            assert_eq!(r.get("extra"), Some(&Value::Int64(42)));
+            assert!(r.contains_key("r"));
+            assert!(r.contains_key("a"));
+        }
+    }
+
+    /// Single edge: the source record should be moved (not cloned).
+    /// Validates the single-match path produces a correct record.
+    #[test]
+    fn test_expand_single_edge_move() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let follows_type = engine.get_or_create_rel_type("FOLLOWS");
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        engine
+            .create_edge(n1, n2, follows_type, vec![])
+            .expect("edge");
+
+        let mut source = Record::new();
+        source.insert("x".to_string(), Value::Node(n1));
+        source.insert("ctx".to_string(), Value::Int64(99));
+
+        let results = execute_expand(
+            vec![source],
+            "x",
+            Some("rel"),
+            "y",
+            Some(follows_type),
+            &RelDirection::Outgoing,
+            &engine,
+            None,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].get("y"), Some(&Value::Node(n2)));
+        assert_eq!(results[0].get("x"), Some(&Value::Node(n1)));
+        assert_eq!(results[0].get("ctx"), Some(&Value::Int64(99)));
+        assert!(results[0].contains_key("rel"));
+    }
+
+    /// Multiple source records, each with different edge counts.
+    /// Verifies the optimization works correctly per-source-record.
+    #[test]
+    fn test_expand_multiple_sources_varied_fanout() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let knows_type = engine.get_or_create_rel_type("KNOWS");
+
+        // Source 1: 3 edges
+        let s1 = engine.create_node(vec![], vec![]);
+        let t1a = engine.create_node(vec![], vec![]);
+        let t1b = engine.create_node(vec![], vec![]);
+        let t1c = engine.create_node(vec![], vec![]);
+        engine.create_edge(s1, t1a, knows_type, vec![]).unwrap();
+        engine.create_edge(s1, t1b, knows_type, vec![]).unwrap();
+        engine.create_edge(s1, t1c, knows_type, vec![]).unwrap();
+
+        // Source 2: 0 edges (no matches)
+        let s2 = engine.create_node(vec![], vec![]);
+
+        // Source 3: 1 edge
+        let s3 = engine.create_node(vec![], vec![]);
+        let t3a = engine.create_node(vec![], vec![]);
+        engine.create_edge(s3, t3a, knows_type, vec![]).unwrap();
+
+        let mut rec1 = Record::new();
+        rec1.insert("n".to_string(), Value::Node(s1));
+        rec1.insert("tag".to_string(), Value::Int64(1));
+
+        let mut rec2 = Record::new();
+        rec2.insert("n".to_string(), Value::Node(s2));
+        rec2.insert("tag".to_string(), Value::Int64(2));
+
+        let mut rec3 = Record::new();
+        rec3.insert("n".to_string(), Value::Node(s3));
+        rec3.insert("tag".to_string(), Value::Int64(3));
+
+        let results = execute_expand(
+            vec![rec1, rec2, rec3],
+            "n",
+            Some("r"),
+            "m",
+            Some(knows_type),
+            &RelDirection::Outgoing,
+            &engine,
+            None,
+        );
+
+        // 3 from s1 + 0 from s2 + 1 from s3 = 4 results
+        assert_eq!(results.len(), 4);
+
+        // First 3 results from s1 have tag=1
+        let s1_results: Vec<_> = results
+            .iter()
+            .filter(|r| r.get("tag") == Some(&Value::Int64(1)))
+            .collect();
+        assert_eq!(s1_results.len(), 3);
+
+        // No results with tag=2 (s2 had no edges)
+        let s2_results: Vec<_> = results
+            .iter()
+            .filter(|r| r.get("tag") == Some(&Value::Int64(2)))
+            .collect();
+        assert_eq!(s2_results.len(), 0);
+
+        // 1 result from s3 with tag=3
+        let s3_results: Vec<_> = results
+            .iter()
+            .filter(|r| r.get("tag") == Some(&Value::Int64(3)))
+            .collect();
+        assert_eq!(s3_results.len(), 1);
+        assert_eq!(s3_results[0].get("m"), Some(&Value::Node(t3a)));
+    }
+
+    /// Zero matching edges: no results should be produced.
+    #[test]
+    fn test_expand_zero_matching_edges_no_results() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let knows_type = engine.get_or_create_rel_type("KNOWS");
+        let likes_type = engine.get_or_create_rel_type("LIKES");
+
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        // Edge is LIKES, but we query for KNOWS
+        engine.create_edge(n1, n2, likes_type, vec![]).unwrap();
+
+        let mut source = Record::new();
+        source.insert("a".to_string(), Value::Node(n1));
+        source.insert("data".to_string(), Value::Int64(7));
+
+        let results = execute_expand(
+            vec![source],
+            "a",
+            Some("r"),
+            "b",
+            Some(knows_type),
+            &RelDirection::Outgoing,
+            &engine,
+            None,
+        );
+
+        assert!(results.is_empty());
     }
 
     // ── Hypergraph :INVOLVES virtual expansion tests ───────────────────

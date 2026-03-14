@@ -44,3 +44,7 @@ required-features = ["hypergraph"]
 [[bench]]
 name = "inline_filter"
 harness = false
+
+[[bench]]
+name = "streaming_bench"
+harness = false
