@@ -2,7 +2,7 @@
 id: SPEC-PERF-001
 title: Performance Optimization
 version: 1.0.0
-status: approved
+status: completed
 created: 2026-03-15
 updated: 2026-03-15
 author: epsilondelta
