@@ -11,6 +11,7 @@ temporal-edge = ["temporal-core", "cypherlite-core/temporal-edge"]
 subgraph = ["temporal-edge", "cypherlite-core/subgraph"]
 hypergraph = ["subgraph", "cypherlite-core/hypergraph"]
 full-temporal = ["hypergraph", "cypherlite-core/full-temporal"]
+plugin = ["cypherlite-core/plugin"]
 
 [dependencies]
 cypherlite-core = { path = "../cypherlite-core" }

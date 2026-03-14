@@ -10,6 +10,10 @@ pub mod traits;
 /// Core graph data types (nodes, edges, properties, identifiers).
 pub mod types;
 
+/// Plugin system: base trait, extension traits, and registry.
+#[cfg(feature = "plugin")]
+pub mod plugin;
+
 pub use config::{DatabaseConfig, SyncMode};
 pub use error::{CypherLiteError, Result};
 pub use traits::{LabelRegistry, TransactionView};

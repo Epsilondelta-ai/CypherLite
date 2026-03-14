@@ -16,6 +16,7 @@ temporal-edge = ["temporal-core"]
 subgraph = ["temporal-edge"]
 hypergraph = ["subgraph"]
 full-temporal = ["hypergraph"]
+plugin = []
 
 [dev-dependencies]
 proptest = "1"
