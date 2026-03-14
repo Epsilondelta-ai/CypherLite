@@ -403,10 +403,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = test_config(dir.path());
 
-        // Write a v2 header manually
-        let mut hdr = DatabaseHeader::new();
-        hdr.version = 2;
-        hdr.feature_flags = 0; // v2 had no feature_flags field
+        // Write a v2 header manually (raw bytes, not via DatabaseHeader)
         let mut file = File::create(&config.path).expect("create");
         // Manually write v2 format (no feature_flags at bytes 44-47)
         let mut page = [0u8; PAGE_SIZE];
