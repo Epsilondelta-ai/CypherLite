@@ -3,7 +3,7 @@
 // REQ-B-003: Measure query performance on large graphs and multi-hop patterns.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use cypherlite_core::{DatabaseConfig, SyncMode};
+use cypherlite_core::{DatabaseConfig, LabelRegistry, NodeId, SyncMode};
 use cypherlite_query::CypherLite;
 use tempfile::tempdir;
 
@@ -31,17 +31,17 @@ fn setup_graph(node_count: u64, edges_per_node: u64) -> (tempfile::TempDir, Cyph
         .expect("create node");
     }
 
-    // Create edges (deterministic pseudo-random targets).
-    for i in 0..node_count {
-        for j in 1..=edges_per_node {
-            let target = (i * 7 + j * 13) % node_count + 1;
-            let source = i + 1;
-            db.execute(&format!(
-                "MATCH (a:Person), (b:Person) \
-                 WHERE id(a) = {source} AND id(b) = {target} \
-                 CREATE (a)-[:KNOWS]->(b)"
-            ))
-            .expect("create edge");
+    // Create edges via storage engine API (faster than Cypher for setup).
+    if edges_per_node > 0 {
+        let knows_type = db.engine_mut().get_or_create_rel_type("KNOWS");
+        for i in 0..node_count {
+            for j in 1..=edges_per_node {
+                let target = (i * 7 + j * 13) % node_count + 1;
+                let source = i + 1;
+                db.engine_mut()
+                    .create_edge(NodeId(source), NodeId(target), knows_type, vec![])
+                    .expect("create edge");
+            }
         }
     }
 
