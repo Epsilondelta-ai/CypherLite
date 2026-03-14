@@ -21,7 +21,11 @@ pub fn eval(
         Expression::Property(inner_expr, prop_name) => {
             // Check for temporal property override (from AT TIME / BETWEEN TIME queries)
             if let Expression::Variable(var_name) = inner_expr.as_ref() {
-                let temporal_key = format!("__temporal_props__{}", var_name);
+                const TEMPORAL_PREFIX: &str = "__temporal_props__";
+                let mut temporal_key =
+                    String::with_capacity(TEMPORAL_PREFIX.len() + var_name.len());
+                temporal_key.push_str(TEMPORAL_PREFIX);
+                temporal_key.push_str(var_name);
                 if let Some(Value::List(props_list)) = record.get(&temporal_key) {
                     return eval_temporal_property_access(props_list, prop_name, engine);
                 }
@@ -30,11 +34,31 @@ pub fn eval(
             eval_property_access(&inner, prop_name, engine)
         }
         Expression::Parameter(name) => Ok(params.get(name).cloned().unwrap_or(Value::Null)),
-        Expression::BinaryOp(op, lhs, rhs) => {
-            let left = eval(lhs, record, engine, params, scalar_fns)?;
-            let right = eval(rhs, record, engine, params, scalar_fns)?;
-            eval_binary_op(*op, &left, &right)
-        }
+        Expression::BinaryOp(op, lhs, rhs) => match op {
+            // Short-circuit evaluation for AND: false AND x => false
+            BinaryOp::And => {
+                let left = eval(lhs, record, engine, params, scalar_fns)?;
+                if let Value::Bool(false) = &left {
+                    return Ok(Value::Bool(false));
+                }
+                let right = eval(rhs, record, engine, params, scalar_fns)?;
+                eval_boolean_op(BinaryOp::And, &left, &right)
+            }
+            // Short-circuit evaluation for OR: true OR x => true
+            BinaryOp::Or => {
+                let left = eval(lhs, record, engine, params, scalar_fns)?;
+                if let Value::Bool(true) = &left {
+                    return Ok(Value::Bool(true));
+                }
+                let right = eval(rhs, record, engine, params, scalar_fns)?;
+                eval_boolean_op(BinaryOp::Or, &left, &right)
+            }
+            _ => {
+                let left = eval(lhs, record, engine, params, scalar_fns)?;
+                let right = eval(rhs, record, engine, params, scalar_fns)?;
+                eval_binary_op(*op, &left, &right)
+            }
+        },
         Expression::UnaryOp(op, inner) => {
             let val = eval(inner, record, engine, params, scalar_fns)?;
             eval_unary_op(*op, &val)
@@ -1898,5 +1922,362 @@ mod tests {
             );
             assert_eq!(result, Ok(Value::Null));
         }
+    }
+
+    // ======================================================================
+    // M2-1: Temporal key allocation optimization -- functional verification
+    // ======================================================================
+
+    #[test]
+    fn test_temporal_property_access_with_optimized_key() {
+        // Verify that temporal property access works correctly after
+        // replacing format!() with pre-allocated String::with_capacity
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let name_key = engine.get_or_create_prop_key("name");
+
+        let mut record = Record::new();
+        // Simulate temporal properties override as injected by temporal operators
+        // Format: Value::List(vec![Value::List(vec![Value::Int64(key_id), value]), ...])
+        record.insert(
+            "__temporal_props__n".to_string(),
+            Value::List(vec![Value::List(vec![
+                Value::Int64(name_key as i64),
+                Value::String("TemporalAlice".into()),
+            ])]),
+        );
+        record.insert("n".to_string(), Value::Null);
+        let params = Params::new();
+
+        // Access n.name should resolve from temporal override, not from storage
+        let result = eval(
+            &Expression::Property(
+                Box::new(Expression::Variable("n".to_string())),
+                "name".to_string(),
+            ),
+            &record,
+            &engine,
+            &params,
+            &(),
+        );
+        assert_eq!(
+            result,
+            Ok(Value::String("TemporalAlice".into())),
+            "Temporal property override should resolve correctly"
+        );
+    }
+
+    #[test]
+    fn test_temporal_property_access_empty_var_name() {
+        // Edge case: empty variable name with temporal prefix
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+
+        let name_key = engine.get_or_create_prop_key("name");
+
+        let mut record = Record::new();
+        record.insert(
+            "__temporal_props__".to_string(),
+            Value::List(vec![Value::List(vec![
+                Value::Int64(name_key as i64),
+                Value::String("Empty".into()),
+            ])]),
+        );
+        record.insert("".to_string(), Value::Null);
+        let params = Params::new();
+
+        let result = eval(
+            &Expression::Property(
+                Box::new(Expression::Variable("".to_string())),
+                "name".to_string(),
+            ),
+            &record,
+            &engine,
+            &params,
+            &(),
+        );
+        assert_eq!(
+            result,
+            Ok(Value::String("Empty".into())),
+            "Empty var name temporal access should work"
+        );
+    }
+
+    // ======================================================================
+    // M2-2: AND/OR short-circuit evaluation
+    // ======================================================================
+
+    /// Helper: expression that divides 1/0 to force an error if evaluated
+    fn div_by_zero_expr() -> Expression {
+        Expression::BinaryOp(
+            BinaryOp::Div,
+            Box::new(Expression::Literal(Literal::Integer(1))),
+            Box::new(Expression::Literal(Literal::Integer(0))),
+        )
+    }
+
+    fn bool_expr(val: bool) -> Expression {
+        Expression::Literal(Literal::Bool(val))
+    }
+
+    fn null_expr() -> Expression {
+        Expression::Literal(Literal::Null)
+    }
+
+    #[test]
+    fn test_and_short_circuit_false() {
+        // AND(false, 1/0) should return false without evaluating right side
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr = Expression::BinaryOp(
+            BinaryOp::And,
+            Box::new(bool_expr(false)),
+            Box::new(div_by_zero_expr()),
+        );
+        let result = eval(&expr, &record, &engine, &params, &());
+        assert_eq!(
+            result,
+            Ok(Value::Bool(false)),
+            "AND(false, error) should short-circuit to false"
+        );
+    }
+
+    #[test]
+    fn test_or_short_circuit_true() {
+        // OR(true, 1/0) should return true without evaluating right side
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr = Expression::BinaryOp(
+            BinaryOp::Or,
+            Box::new(bool_expr(true)),
+            Box::new(div_by_zero_expr()),
+        );
+        let result = eval(&expr, &record, &engine, &params, &());
+        assert_eq!(
+            result,
+            Ok(Value::Bool(true)),
+            "OR(true, error) should short-circuit to true"
+        );
+    }
+
+    #[test]
+    fn test_and_true_evaluates_right() {
+        // AND(true, 1/0) should evaluate right side and produce error
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr = Expression::BinaryOp(
+            BinaryOp::And,
+            Box::new(bool_expr(true)),
+            Box::new(div_by_zero_expr()),
+        );
+        let result = eval(&expr, &record, &engine, &params, &());
+        assert!(
+            result.is_err(),
+            "AND(true, error) should evaluate right side and error"
+        );
+    }
+
+    #[test]
+    fn test_or_false_evaluates_right() {
+        // OR(false, 1/0) should evaluate right side and produce error
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr = Expression::BinaryOp(
+            BinaryOp::Or,
+            Box::new(bool_expr(false)),
+            Box::new(div_by_zero_expr()),
+        );
+        let result = eval(&expr, &record, &engine, &params, &());
+        assert!(
+            result.is_err(),
+            "OR(false, error) should evaluate right side and error"
+        );
+    }
+
+    #[test]
+    fn test_and_null_evaluates_right() {
+        // AND(NULL, false) = false, AND(NULL, true) = NULL (3-valued logic)
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr_null_and_false = Expression::BinaryOp(
+            BinaryOp::And,
+            Box::new(null_expr()),
+            Box::new(bool_expr(false)),
+        );
+        assert_eq!(
+            eval(&expr_null_and_false, &record, &engine, &params, &()),
+            Ok(Value::Bool(false)),
+            "NULL AND false = false"
+        );
+
+        let expr_null_and_true = Expression::BinaryOp(
+            BinaryOp::And,
+            Box::new(null_expr()),
+            Box::new(bool_expr(true)),
+        );
+        assert_eq!(
+            eval(&expr_null_and_true, &record, &engine, &params, &()),
+            Ok(Value::Null),
+            "NULL AND true = NULL"
+        );
+    }
+
+    #[test]
+    fn test_or_null_evaluates_right() {
+        // OR(NULL, true) = true, OR(NULL, false) = NULL (3-valued logic)
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr_null_or_true = Expression::BinaryOp(
+            BinaryOp::Or,
+            Box::new(null_expr()),
+            Box::new(bool_expr(true)),
+        );
+        assert_eq!(
+            eval(&expr_null_or_true, &record, &engine, &params, &()),
+            Ok(Value::Bool(true)),
+            "NULL OR true = true"
+        );
+
+        let expr_null_or_false = Expression::BinaryOp(
+            BinaryOp::Or,
+            Box::new(null_expr()),
+            Box::new(bool_expr(false)),
+        );
+        assert_eq!(
+            eval(&expr_null_or_false, &record, &engine, &params, &()),
+            Ok(Value::Null),
+            "NULL OR false = NULL"
+        );
+    }
+
+    #[test]
+    fn test_nested_short_circuit() {
+        // (false AND (true OR 1/0)) should short-circuit the outer AND
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let inner_or = Expression::BinaryOp(
+            BinaryOp::Or,
+            Box::new(bool_expr(true)),
+            Box::new(div_by_zero_expr()),
+        );
+        let outer_and = Expression::BinaryOp(
+            BinaryOp::And,
+            Box::new(bool_expr(false)),
+            Box::new(inner_or),
+        );
+        assert_eq!(
+            eval(&outer_and, &record, &engine, &params, &()),
+            Ok(Value::Bool(false)),
+            "false AND (...) should short-circuit without evaluating inner"
+        );
+
+        // (true OR (false AND 1/0)) should short-circuit the outer OR
+        let inner_and = Expression::BinaryOp(
+            BinaryOp::And,
+            Box::new(bool_expr(false)),
+            Box::new(div_by_zero_expr()),
+        );
+        let outer_or =
+            Expression::BinaryOp(BinaryOp::Or, Box::new(bool_expr(true)), Box::new(inner_and));
+        assert_eq!(
+            eval(&outer_or, &record, &engine, &params, &()),
+            Ok(Value::Bool(true)),
+            "true OR (...) should short-circuit without evaluating inner"
+        );
+    }
+
+    #[test]
+    fn test_and_error_on_left_propagates() {
+        // AND(1/0, false) should propagate the left-side error
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr = Expression::BinaryOp(
+            BinaryOp::And,
+            Box::new(div_by_zero_expr()),
+            Box::new(bool_expr(false)),
+        );
+        let result = eval(&expr, &record, &engine, &params, &());
+        assert!(
+            result.is_err(),
+            "AND(error, ...) should propagate left-side error"
+        );
+    }
+
+    #[test]
+    fn test_or_error_on_left_propagates() {
+        // OR(1/0, true) should propagate the left-side error
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr = Expression::BinaryOp(
+            BinaryOp::Or,
+            Box::new(div_by_zero_expr()),
+            Box::new(bool_expr(true)),
+        );
+        let result = eval(&expr, &record, &engine, &params, &());
+        assert!(
+            result.is_err(),
+            "OR(error, ...) should propagate left-side error"
+        );
+    }
+
+    #[test]
+    fn test_and_null_null() {
+        // NULL AND NULL = NULL
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr =
+            Expression::BinaryOp(BinaryOp::And, Box::new(null_expr()), Box::new(null_expr()));
+        assert_eq!(
+            eval(&expr, &record, &engine, &params, &()),
+            Ok(Value::Null),
+            "NULL AND NULL = NULL"
+        );
+    }
+
+    #[test]
+    fn test_or_null_null() {
+        // NULL OR NULL = NULL
+        let dir = tempdir().expect("tempdir");
+        let engine = test_engine(dir.path());
+        let record = Record::new();
+        let params = Params::new();
+
+        let expr = Expression::BinaryOp(BinaryOp::Or, Box::new(null_expr()), Box::new(null_expr()));
+        assert_eq!(
+            eval(&expr, &record, &engine, &params, &()),
+            Ok(Value::Null),
+            "NULL OR NULL = NULL"
+        );
     }
 }

@@ -13,6 +13,9 @@ pub struct PageManager {
     file: File,
     header: DatabaseHeader,
     path: PathBuf,
+    /// In-memory hint for the next likely free page ID.
+    /// Avoids scanning already-used FSM bytes from the start on every allocation.
+    next_free_hint: u32,
 }
 
 impl PageManager {
@@ -41,6 +44,7 @@ impl PageManager {
             file,
             header,
             path: config.path.clone(),
+            next_free_hint: super::FIRST_DATA_PAGE,
         })
     }
 
@@ -98,49 +102,79 @@ impl PageManager {
             file,
             header,
             path: config.path.clone(),
+            next_free_hint: super::FIRST_DATA_PAGE,
         })
     }
 
     /// Allocate a new page by finding the first free bit in the FSM.
     /// REQ-PAGE-004: Find first free bit in FSM.
+    /// REQ-S-003: Uses next_free_hint to skip already-used pages.
     pub fn allocate_page(&mut self) -> Result<PageId> {
         let mut fsm_buf = [0u8; PAGE_SIZE];
         self.read_page_raw(FSM_PAGE_ID, &mut fsm_buf)?;
 
-        // Scan bytes for first byte with a free bit
-        for (byte_idx, byte_val) in fsm_buf.iter().enumerate() {
-            if *byte_val != 0xFF {
-                // Found a byte with at least one free bit
-                for bit in 0..8u32 {
-                    if (*byte_val & (1 << bit)) == 0 {
-                        let page_id = (byte_idx as u32) * 8 + bit;
-                        // Mark as used
-                        fsm_buf[byte_idx] |= 1 << bit;
-                        self.write_page_raw(FSM_PAGE_ID, &fsm_buf)?;
+        let start_byte = (self.next_free_hint / 8) as usize;
 
-                        // Update page count if needed
-                        if page_id >= self.header.page_count {
-                            self.header.page_count = page_id + 1;
-                            self.flush_header()?;
-                        }
+        // Phase 1: Scan from hint position
+        if let Some(page_id) = Self::find_free_page(&fsm_buf, start_byte) {
+            return self.complete_allocation(&mut fsm_buf, page_id);
+        }
 
-                        // Ensure the file is large enough
-                        let required_size = (page_id as u64 + 1) * PAGE_SIZE as u64;
-                        let current_size = self.file.seek(SeekFrom::End(0))?;
-                        if current_size < required_size {
-                            // Extend file with zero page
-                            self.file
-                                .seek(SeekFrom::Start(page_id as u64 * PAGE_SIZE as u64))?;
-                            self.file.write_all(&[0u8; PAGE_SIZE])?;
-                        }
-
-                        return Ok(PageId(page_id));
-                    }
-                }
+        // Phase 2: Wrap around - scan from 0 if hint was past the start
+        if start_byte > 0 {
+            if let Some(page_id) = Self::find_free_page(&fsm_buf, 0) {
+                return self.complete_allocation(&mut fsm_buf, page_id);
             }
         }
 
         Err(CypherLiteError::OutOfSpace)
+    }
+
+    /// Scan FSM bitmap from `start_byte` for the first free bit.
+    fn find_free_page(fsm_buf: &[u8; PAGE_SIZE], start_byte: usize) -> Option<u32> {
+        for (offset, byte_val) in fsm_buf[start_byte..].iter().enumerate() {
+            if *byte_val != 0xFF {
+                let byte_idx = start_byte + offset;
+                for bit in 0..8u32 {
+                    if (*byte_val & (1 << bit)) == 0 {
+                        return Some((byte_idx as u32) * 8 + bit);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Mark a page as used in the FSM, update header and file size, advance hint.
+    fn complete_allocation(
+        &mut self,
+        fsm_buf: &mut [u8; PAGE_SIZE],
+        page_id: u32,
+    ) -> Result<PageId> {
+        let byte_idx = page_id as usize / 8;
+        let bit_idx = page_id % 8;
+        fsm_buf[byte_idx] |= 1 << bit_idx;
+        self.write_page_raw(FSM_PAGE_ID, fsm_buf)?;
+
+        // Advance hint to next position
+        self.next_free_hint = page_id + 1;
+
+        // Update page count if needed
+        if page_id >= self.header.page_count {
+            self.header.page_count = page_id + 1;
+            self.flush_header()?;
+        }
+
+        // Ensure the file is large enough
+        let required_size = (page_id as u64 + 1) * PAGE_SIZE as u64;
+        let current_size = self.file.seek(SeekFrom::End(0))?;
+        if current_size < required_size {
+            self.file
+                .seek(SeekFrom::Start(page_id as u64 * PAGE_SIZE as u64))?;
+            self.file.write_all(&[0u8; PAGE_SIZE])?;
+        }
+
+        Ok(PageId(page_id))
     }
 
     /// Deallocate a page by clearing its bit in the FSM.
@@ -154,6 +188,12 @@ impl PageManager {
         fsm_buf[byte_idx] &= !(1 << bit_idx);
 
         self.write_page_raw(FSM_PAGE_ID, &fsm_buf)?;
+
+        // Update hint if freed page is earlier than current hint
+        if page_id.0 < self.next_free_hint {
+            self.next_free_hint = page_id.0;
+        }
+
         Ok(())
     }
 
@@ -459,5 +499,80 @@ mod tests {
         let pm = PageManager::create_database(&config).expect("create");
         assert_eq!(pm.header().version, FORMAT_VERSION);
         assert!(pm.header().feature_flags & DatabaseHeader::FLAG_TEMPORAL_CORE != 0);
+    }
+
+    // REQ-S-003: FSM next-free hint skips already-used pages
+    #[test]
+    fn test_hint_skips_used_pages() {
+        let dir = tempdir().expect("tempdir");
+        let config = test_config(dir.path());
+        let mut pm = PageManager::create_database(&config).expect("create");
+
+        // Allocate 10 pages (pages 2..11)
+        for _ in 0..10 {
+            pm.allocate_page().expect("alloc");
+        }
+
+        // Free page 5
+        pm.deallocate_page(PageId(5)).expect("dealloc");
+
+        // Next allocation should find page 5 (the freed page)
+        let reused = pm.allocate_page().expect("alloc");
+        assert_eq!(reused, PageId(5));
+
+        // Next allocation after that should be page 12 (first truly free page)
+        let next = pm.allocate_page().expect("alloc");
+        assert_eq!(next, PageId(12));
+    }
+
+    // REQ-S-003: Hint updates when earlier page is deallocated
+    #[test]
+    fn test_hint_update_on_dealloc() {
+        let dir = tempdir().expect("tempdir");
+        let config = test_config(dir.path());
+        let mut pm = PageManager::create_database(&config).expect("create");
+
+        // Allocate pages 2, 3, 4, 5
+        for _ in 0..4 {
+            pm.allocate_page().expect("alloc");
+        }
+
+        // Free page 3 - hint should point to 3 (earlier than current hint)
+        pm.deallocate_page(PageId(3)).expect("dealloc");
+
+        // Verify next allocation reuses page 3
+        let reused = pm.allocate_page().expect("alloc");
+        assert_eq!(reused, PageId(3));
+
+        // Now free page 2 and page 4
+        pm.deallocate_page(PageId(2)).expect("dealloc");
+        pm.deallocate_page(PageId(4)).expect("dealloc");
+
+        // Should get page 2 first (earlier), then page 4
+        let first = pm.allocate_page().expect("alloc");
+        assert_eq!(first, PageId(2));
+
+        let second = pm.allocate_page().expect("alloc");
+        assert_eq!(second, PageId(4));
+    }
+
+    // REQ-S-003: Sequential allocation with hint produces correct IDs
+    #[test]
+    fn test_sequential_allocation_with_hint() {
+        let dir = tempdir().expect("tempdir");
+        let config = test_config(dir.path());
+        let mut pm = PageManager::create_database(&config).expect("create");
+
+        // Allocate 50 pages sequentially and verify all IDs
+        for i in 0..50u32 {
+            let page = pm.allocate_page().expect("alloc");
+            assert_eq!(
+                page,
+                PageId(FIRST_DATA_PAGE + i),
+                "Page {} should have ID {}",
+                i,
+                FIRST_DATA_PAGE + i
+            );
+        }
     }
 }
