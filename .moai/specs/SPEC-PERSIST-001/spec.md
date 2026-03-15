@@ -140,7 +140,24 @@ AFTER WAL recovery THEN all node data pages MUST be read and deserialized into N
 **R-PERSIST-032** [Event-Driven]
 AFTER WAL recovery THEN all edge data pages MUST be read and deserialized into EdgeStore BTreeMap.
 
-### 3.5 Verification [R-PERSIST-040 ~ R-PERSIST-044]
+### 3.5 File Locking & Multi-Connection Safety [R-PERSIST-035 ~ R-PERSIST-039]
+
+**R-PERSIST-035** [Ubiquitous]
+WHEN `StorageEngine::open()` is called THEN an exclusive file lock (flock/fcntl LOCK_EX) MUST be acquired on the `.cyl` file. If the lock cannot be acquired, open MUST return an error indicating the database is already in use.
+
+**R-PERSIST-036** [Ubiquitous]
+The file lock MUST be held for the entire lifetime of the StorageEngine and released only when the StorageEngine is dropped.
+
+**R-PERSIST-037** [Event-Driven]
+WHEN `Drop` runs on StorageEngine THEN checkpoint MUST execute because the file lock guarantees this is the ONLY connection. After checkpoint succeeds, WAL file is deleted, then the file lock is released.
+
+**R-PERSIST-038** [Unwanted]
+Two StorageEngine instances MUST NOT open the same `.cyl` file simultaneously within the same process or across processes. The file lock prevents this.
+
+**R-PERSIST-039** [State-Driven]
+IF the file lock is held by another process THEN `StorageEngine::open()` MUST return `CypherLiteError::DatabaseLocked` with a descriptive message including the file path.
+
+### 3.6 Verification [R-PERSIST-040 ~ R-PERSIST-044]
 
 **R-PERSIST-040** [Event-Driven]
 WHEN data is created, the database is closed, and reopened THEN all previously created data MUST be queryable.
@@ -157,7 +174,7 @@ WHEN `cargo run -p cypherlite-query --example basic_crud --all-features` runs, c
 **R-PERSIST-044** [Ubiquitous]
 Test coverage for persistence operations MUST be >= 85%.
 
-### 3.6 Feature Flag Persistence [R-PERSIST-050 ~ R-PERSIST-053]
+### 3.7 Feature Flag Persistence [R-PERSIST-050 ~ R-PERSIST-053]
 
 **R-PERSIST-050** [State-Driven]
 IF `subgraph` feature is enabled THEN SubgraphStore records MUST be persisted using the same page mechanism.
@@ -174,6 +191,14 @@ IF `plugin` feature is enabled THEN plugin-created data MUST be persisted (plugi
 ---
 
 ## 4. Implementation Plan
+
+### Phase 0: File Locking (cypherlite-storage)
+- Add exclusive file lock (flock) on `.cyl` file in `StorageEngine::open()`
+- Add `DatabaseLocked` error variant to `CypherLiteError`
+- Release lock in `Drop` (after checkpoint, after WAL delete)
+- Guarantees single-writer safety: only one connection per file
+- Cross-platform: `flock()` on Unix, `LockFileEx()` on Windows
+- Unit tests: second open fails with `DatabaseLocked`
 
 ### Phase 1: Record Serialization (cypherlite-storage)
 - Implement `NodeRecord::serialize()` / `NodeRecord::deserialize()` into byte arrays
@@ -217,7 +242,7 @@ IF `plugin` feature is enabled THEN plugin-created data MUST be persisted (plugi
 
 | File | Change Type | Description |
 |------|------------|-------------|
-| `crates/cypherlite-core/src/lib.rs` | Modify | Add Serialize/Deserialize for NodeRecord, EdgeRecord |
+| `crates/cypherlite-core/src/lib.rs` | Modify | Add Serialize/Deserialize for NodeRecord, EdgeRecord; add DatabaseLocked error |
 | `crates/cypherlite-storage/src/btree/mod.rs` | Modify | Integrate page backing into BTree |
 | `crates/cypherlite-storage/src/btree/node_store.rs` | Modify | Add page write on create/update/delete |
 | `crates/cypherlite-storage/src/btree/edge_store.rs` | Modify | Same as node_store |
@@ -246,6 +271,7 @@ IF `plugin` feature is enabled THEN plugin-created data MUST be persisted (plugi
 
 ## 7. Definition of Done
 
+- [ ] Exclusive file lock prevents two connections to the same file
 - [ ] `db.close()` → `db.open()` preserves ALL created nodes and edges
 - [ ] WAL crash recovery restores committed data
 - [ ] Catalog persists across restarts (labels, property keys, rel types)
