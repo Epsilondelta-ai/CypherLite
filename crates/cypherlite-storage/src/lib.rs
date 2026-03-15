@@ -791,6 +791,9 @@ impl Drop for StorageEngine {
     fn drop(&mut self) {
         // Flush WAL to main database file on close
         let _ = self.checkpoint();
+        // Remove the WAL file after successful checkpoint
+        let wal_path = self.config.wal_path();
+        let _ = std::fs::remove_file(&wal_path);
     }
 }
 

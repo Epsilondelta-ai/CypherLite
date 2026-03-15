@@ -1,6 +1,6 @@
 [package]
 name = "cypherlite-core"
-version = "1.2.4"
+version = "1.2.5"
 edition = "2021"
 rust-version = "1.84"
 description = "Core types, traits, and error handling for CypherLite graph database"
