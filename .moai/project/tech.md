@@ -46,7 +46,8 @@
 
 | 크레이트 | 역할 | 선택 이유 |
 |---------|------|-----------|
-| `cbindgen` | Rust → C 헤더 자동 생성 | 빌드 스크립트 통합, 안전한 FFI |
+| `cbindgen` | Rust → C 헤더 자동 생성 | 빌드 스크립트 통합, 안전한 FFI (구현 완료) |
+| `libc` | C 타입 및 플랫폼 추상화 | `size_t`, `c_char` 등 플랫폼 이식 가능한 FFI 타입 |
 | `PyO3` | Python 바인딩 (계획됨) | Rust-Python 바인딩 사실상 표준 |
 | `neon` | Node.js 바인딩 (계획됨) | N-API 기반 Node.js 네이티브 모듈 |
 
@@ -451,6 +452,26 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 - 버전 범프 0.9.0 → 1.0.0
 
 **테스트 결과**: 1,309 테스트 통과 (+53 신규)
+
+---
+
+### Phase 12 - v0.12.0: C FFI 바인딩 (완료)
+
+**목표**: C ABI를 통해 CypherLite를 Go, Python, Node.js 등 외부 언어에서 사용 가능하게 노출
+
+**구현 항목**:
+- `cypherlite-ffi` 신규 크레이트 (cdylib + staticlib 출력)
+- `CylDb`, `CylTx`, `CylResult`, `CylRow` 불투명 포인터 타입
+- `CylValue` `#[repr(C)]` 태그 유니언 (13가지 변형, 피처 플래그 조건부 포함)
+- `CylError` `#[repr(i32)]` 에러 코드 체계 (20개 기본 + 피처별 추가)
+- 스레드 로컬 에러 메시지 버퍼 (`cyl_last_error_message()`)
+- cbindgen 기반 C11 헤더 자동 생성 (`include/cypherlite.h`, 557줄)
+- `cyl_version()`, `cyl_features()` 메타 함수
+- 워크스페이스 Cargo.toml에 멤버 추가
+
+**생성 파일**: 9개 신규 파일 (Cargo.toml, cbindgen.toml, src/ 7개 모듈), include/cypherlite.h
+
+**테스트 결과**: 115 TDD 테스트 통과 (워크스페이스 전체 1,450 테스트)
 
 ---
 

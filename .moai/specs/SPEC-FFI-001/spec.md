@@ -343,6 +343,35 @@ The crate shall include a `README.md` with:
 
 ---
 
+## 9. Implementation Notes
+
+### Status
+
+- **Status**: Completed
+- **Implementation Date**: 2026-03-15
+- **Files Created**: 9 new files in `crates/cypherlite-ffi/` (Cargo.toml, cbindgen.toml, src/lib.rs, src/error.rs, src/db.rs, src/query.rs, src/transaction.rs, src/result.rs, src/value.rs)
+- **Files Generated**: `include/cypherlite.h` (557 lines, C11, clang -Wall -Werror clean)
+- **Files Modified**: workspace `Cargo.toml` (added member)
+- **Total New Code**: 3,530 lines
+- **Tests**: 115 TDD tests, all passing
+- **Workspace Total**: 1,450 tests, all passing
+
+### Key Technical Decisions
+
+| Decision | Choice | Rationale |
+| -------- | ------ | --------- |
+| `CylDb` thread safety | `Mutex<CypherLite>` wrapping | Provides simple single-lock semantics for C callers; avoids exposing RwLock complexity across FFI |
+| Transaction state tracking | `AtomicBool` in-transaction flag (Option A) | Prevents re-entrant `cyl_tx_begin` without requiring interior mutability on `CylTx` |
+| Value representation | `#[repr(C)]` tagged union | C11 compatible, zero-cost conversion from `PropertyValue` |
+| Error message storage | Thread-local `RefCell<Option<CString>>` | Each thread maintains independent error context; safe for multi-threaded C callers |
+
+### Deviations from Plan
+
+- **List value items pointer**: `CYL_VALUE_LIST` returns length only; the `items` pointer field is not populated. Full recursive list access is deferred to a future revision.
+- **Transaction rollback at storage level**: `cyl_tx_rollback` is a no-op at the storage layer. The transaction handle is freed and the in-transaction flag is cleared, but no WAL-level undo is performed. This is documented in `cypherlite.h`.
+
+---
+
 ## 8. Traceability
 
 | Requirement      | Plan Milestone | Acceptance Criteria       |

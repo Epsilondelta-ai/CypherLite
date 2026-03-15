@@ -1,0 +1,26 @@
+[package]
+name = "cypherlite-ffi"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.84"
+description = "C ABI FFI bindings for CypherLite embedded graph database"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[features]
+default = ["temporal-core"]
+temporal-core = ["cypherlite-query/temporal-core", "cypherlite-core/temporal-core"]
+temporal-edge = ["temporal-core", "cypherlite-query/temporal-edge", "cypherlite-core/temporal-edge"]
+subgraph = ["temporal-edge", "cypherlite-query/subgraph", "cypherlite-core/subgraph"]
+hypergraph = ["subgraph", "cypherlite-query/hypergraph", "cypherlite-core/hypergraph"]
+full-temporal = ["hypergraph", "cypherlite-query/full-temporal", "cypherlite-core/full-temporal"]
+plugin = ["cypherlite-query/plugin", "cypherlite-core/plugin"]
+
+[dependencies]
+cypherlite-query = { path = "../cypherlite-query" }
+cypherlite-core = { path = "../cypherlite-core" }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

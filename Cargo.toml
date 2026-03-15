@@ -3,5 +3,6 @@ members = [
     "crates/cypherlite-core",
     "crates/cypherlite-storage",
     "crates/cypherlite-query",
+    "crates/cypherlite-ffi",
 ]
 resolver = "2"
