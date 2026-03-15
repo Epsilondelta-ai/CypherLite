@@ -1,6 +1,6 @@
 [package]
 name = "cypherlite-query"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 rust-version = "1.84"
 description = "Cypher query engine with parser, planner, and executor for CypherLite"
@@ -21,8 +21,8 @@ full-temporal = ["hypergraph", "cypherlite-core/full-temporal", "cypherlite-stor
 plugin = ["cypherlite-core/plugin", "cypherlite-storage/plugin"]
 
 [dependencies]
-cypherlite-core    = { version = "2.0.0", path = "../cypherlite-core" }
-cypherlite-storage = { version = "2.0.0", path = "../cypherlite-storage" }
+cypherlite-core    = { version = "2.0.1", path = "../cypherlite-core" }
+cypherlite-storage = { version = "2.0.1", path = "../cypherlite-storage" }
 logos              = "0.14"
 
 [package.metadata.docs.rs]
