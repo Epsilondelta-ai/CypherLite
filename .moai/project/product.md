@@ -8,7 +8,7 @@
 
 **CypherLite**는 경량 임베디드 단일 파일 그래프 데이터베이스 라이브러리입니다. SQLite가 관계형 데이터베이스를 민주화한 것처럼, CypherLite는 그래프 데이터베이스를 누구나 쉽게 사용할 수 있도록 설계되었습니다.
 
-- **현재 상태**: 활성 개발 단계 (v1.0.0)
+- **현재 상태**: 활성 개발 단계 (v1.1.0)
 - **주요 언어**: Rust 1.92+ (2024 edition)
 - **파일 확장자**: `.cyl` (CypherLite 고유 형식)
 
@@ -90,7 +90,8 @@
 
 **CypherLite 솔루션**:
 - 앱 번들에 포함 가능한 단일 라이브러리
-- Python/Node.js/C FFI 바인딩으로 다양한 플랫폼 지원
+- C ABI FFI 바인딩 구현 완료 (cdylib + staticlib)
+- Python/Node.js/Go 바인딩으로 다양한 플랫폼 지원 (계획됨)
 
 ### 5순위: 테스트 및 개발 환경
 
@@ -137,10 +138,17 @@
 - 공통 `Plugin` 베이스 트레이트 + 제네릭 `PluginRegistry<T>`
 - `cypherlite-core` 크레이트 내 `plugin/` 모듈로 통합 제공
 
-**FFI 바인딩**
-- C 헤더 자동 생성 (cbindgen)
-- Python 바인딩 (PyO3)
-- Node.js 바인딩 (neon)
+**FFI 바인딩 (C ABI 구현 완료)**
+- `cypherlite-ffi` 크레이트: C ABI 인터페이스 (cdylib + staticlib)
+- CylDb, CylTx, CylResult, CylRow 불투명 포인터 패턴
+- CylValue `#[repr(C)]` 태그드 유니온 (13개 변이체, feature-gated 포함)
+- CylError 에러 코드 20종 + thread-local 에러 메시지 버퍼
+- cbindgen 자동 C11 헤더 생성 (`include/cypherlite.h`)
+- `cyl_version()`, `cyl_features()` 런타임 인트로스펙션 API
+- 115개 TDD 테스트, 모든 feature 조합 컴파일 검증
+- Python 바인딩 (PyO3, 계획됨)
+- Node.js 바인딩 (napi-rs, 계획됨)
+- Go 바인딩 (CGo via C ABI, 계획됨)
 
 ### 가치 제안
 
@@ -166,7 +174,7 @@
 
 ## 성공 지표
 
-### 성능 목표 (v1.0)
+### 성능 목표 (v1.1)
 
 | 지표 | 목표값 |
 |------|--------|
