@@ -11,5 +11,10 @@
 - Total FFI tests: 115, all passing
 - Total workspace tests: 1,450, all passing (0 regressions)
 - Clippy: 0 warnings, Fmt: clean
-- C header: include/cypherlite.h (553 lines, clang -std=c11 -Wall -Werror clean)
+- C header: include/cypherlite.h (557 lines, clang -std=c11 -Wall -Werror clean)
 - Feature combinations: default, no-default, all-features all compile
+- Phase 3 (Sync) complete: Documentation updated (2026-03-15)
+  - .moai/project/structure.md: cypherlite-ffi crate section updated, dependency graph updated, Phase 12 section added
+  - .moai/project/tech.md: libc added to FFI dependencies, cbindgen marked implemented, Phase 12 section added
+  - .moai/specs/SPEC-FFI-001/spec.md: Implementation Notes section appended
+  - .moai/specs/SPEC-FFI-001/progress.md: Sync phase completion recorded
