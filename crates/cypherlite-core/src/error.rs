@@ -93,6 +93,10 @@ pub enum CypherLiteError {
     #[error("System property is read-only: {0}")]
     SystemPropertyReadOnly(String),
 
+    /// The database file is already locked by another process.
+    #[error("Database is locked: {0}")]
+    DatabaseLocked(String),
+
     /// The database requires features not compiled into this binary.
     #[error("Feature incompatible: database requires flags 0x{db_flags:08X}, compiled with 0x{compiled_flags:08X}")]
     FeatureIncompatible {
@@ -310,6 +314,19 @@ mod tests {
             format!("{err}"),
             "Feature incompatible: database requires flags 0x00000003, compiled with 0x00000001"
         );
+    }
+
+    // R-PERSIST-039: DatabaseLocked error with descriptive message
+    #[test]
+    fn test_database_locked_error() {
+        let err = CypherLiteError::DatabaseLocked("/tmp/test.cyl".to_string());
+        assert_eq!(format!("{err}"), "Database is locked: /tmp/test.cyl");
+    }
+
+    #[test]
+    fn test_database_locked_error_is_not_io_error() {
+        let err = CypherLiteError::DatabaseLocked("/tmp/test.cyl".to_string());
+        assert!(matches!(err, CypherLiteError::DatabaseLocked(_)));
     }
 
     // ======================================================================

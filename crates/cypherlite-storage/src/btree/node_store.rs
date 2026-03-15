@@ -115,6 +115,14 @@ impl NodeStore {
         self.tree.iter().map(|(_, record)| record).collect()
     }
 
+    /// Insert a record loaded from disk without modifying the next_id counter.
+    ///
+    /// Used during database startup to rebuild the in-memory B-tree from
+    /// persisted data pages (R-PERSIST-031).
+    pub fn insert_loaded_record(&mut self, record: NodeRecord) {
+        self.tree.insert(record.node_id.0, record);
+    }
+
     /// Scan nodes that contain the given label.
     pub fn scan_by_label(&self, label_id: u32) -> Vec<&NodeRecord> {
         self.tree

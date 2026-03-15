@@ -196,6 +196,14 @@ impl EdgeStore {
         self.tree.is_empty()
     }
 
+    /// Insert a record loaded from disk without modifying the next_id counter.
+    ///
+    /// Used during database startup to rebuild the in-memory B-tree from
+    /// persisted data pages (R-PERSIST-032).
+    pub fn insert_loaded_record(&mut self, record: RelationshipRecord) {
+        self.tree.insert(record.edge_id.0, record);
+    }
+
     /// Returns an iterator over all edges.
     pub fn iter(&self) -> impl Iterator<Item = (&u64, &RelationshipRecord)> {
         self.tree.iter()

@@ -91,6 +91,27 @@ impl VersionStore {
     pub fn total_versions(&self) -> usize {
         self.versions.len()
     }
+
+    /// Insert a version record loaded from persistent storage.
+    ///
+    /// Updates `next_seq` to ensure new sequence numbers don't collide.
+    pub fn insert_loaded_record(
+        &mut self,
+        entity_id: u64,
+        version_seq: u64,
+        record: VersionRecord,
+    ) {
+        self.versions.insert((entity_id, version_seq), record);
+        let seq = self.next_seq.entry(entity_id).or_insert(1);
+        if version_seq >= *seq {
+            *seq = version_seq + 1;
+        }
+    }
+
+    /// Returns an iterator over all (entity_id, version_seq, record) tuples.
+    pub fn all(&self) -> impl Iterator<Item = (&(u64, u64), &VersionRecord)> {
+        self.versions.iter()
+    }
 }
 
 impl Default for VersionStore {

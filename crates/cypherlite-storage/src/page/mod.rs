@@ -2,6 +2,8 @@
 pub mod buffer_pool;
 /// Page-level I/O and database file management.
 pub mod page_manager;
+/// Record serialization for data page persistence.
+pub mod record_serialization;
 
 /// Page size constant: 4096 bytes.
 pub const PAGE_SIZE: usize = 4096;
@@ -10,14 +12,9 @@ pub const PAGE_SIZE: usize = 4096;
 pub const MAGIC: u32 = 0x4359_4C54;
 
 /// Current database format version.
-#[cfg(feature = "hypergraph")]
-pub const FORMAT_VERSION: u32 = 5;
-/// Current database format version.
-#[cfg(all(feature = "subgraph", not(feature = "hypergraph")))]
-pub const FORMAT_VERSION: u32 = 4;
-/// Current database format version.
-#[cfg(not(feature = "subgraph"))]
-pub const FORMAT_VERSION: u32 = 3;
+/// Version 7: added feature-gated store persistence fields
+/// (subgraph/hyperedge/version data root pages).
+pub const FORMAT_VERSION: u32 = 7;
 
 /// Header page is always at page 0.
 pub const HEADER_PAGE_ID: u32 = 0;
@@ -47,6 +44,20 @@ pub enum PageType {
     Overflow = 4,
     /// General data page.
     Data = 5,
+    /// Node data page for record storage.
+    NodeData = 6,
+    /// Edge data page for record storage.
+    EdgeData = 7,
+    /// Catalog data page for label/property/type registries.
+    CatalogData = 8,
+    /// Subgraph data page for record storage.
+    #[cfg(feature = "subgraph")]
+    SubgraphData = 9,
+    /// Hyperedge data page for record storage.
+    #[cfg(feature = "hypergraph")]
+    HyperEdgeData = 10,
+    /// Version data page for version history storage.
+    VersionData = 11,
 }
 
 /// 32-byte header at the start of each data page.
@@ -154,6 +165,26 @@ pub struct DatabaseHeader {
     /// Added in format version 5, stored at bytes 72-79.
     #[cfg(feature = "hypergraph")]
     pub next_hyperedge_id: u64,
+    /// Root page of the catalog data store (0 = not allocated).
+    /// Added in format version 6, stored at bytes 80-83.
+    pub catalog_page_id: u32,
+    /// Root page of the node data store (0 = not allocated).
+    /// Added in format version 6, stored at bytes 84-87.
+    pub node_data_root_page: u32,
+    /// Root page of the edge data store (0 = not allocated).
+    /// Added in format version 6, stored at bytes 88-91.
+    pub edge_data_root_page: u32,
+    /// Root page of the subgraph data store (0 = not allocated).
+    /// Added in format version 7, stored at bytes 92-95.
+    #[cfg(feature = "subgraph")]
+    pub subgraph_data_root_page: u32,
+    /// Root page of the hyperedge data store (0 = not allocated).
+    /// Added in format version 7, stored at bytes 96-99.
+    #[cfg(feature = "hypergraph")]
+    pub hyperedge_data_root_page: u32,
+    /// Root page of the version data store (0 = not allocated).
+    /// Added in format version 7, stored at bytes 100-103.
+    pub version_data_root_page: u32,
 }
 
 impl DatabaseHeader {
@@ -189,6 +220,14 @@ impl DatabaseHeader {
             hyperedge_root_page: 0,
             #[cfg(feature = "hypergraph")]
             next_hyperedge_id: 1,
+            catalog_page_id: 0,
+            node_data_root_page: 0,
+            edge_data_root_page: 0,
+            #[cfg(feature = "subgraph")]
+            subgraph_data_root_page: 0,
+            #[cfg(feature = "hypergraph")]
+            hyperedge_data_root_page: 0,
+            version_data_root_page: 0,
         }
     }
 
@@ -238,6 +277,20 @@ impl DatabaseHeader {
             page[64..72].copy_from_slice(&self.hyperedge_root_page.to_le_bytes());
             page[72..80].copy_from_slice(&self.next_hyperedge_id.to_le_bytes());
         }
+        // PERSIST-001: catalog_page_id, node_data_root_page, edge_data_root_page at bytes 80-91
+        page[80..84].copy_from_slice(&self.catalog_page_id.to_le_bytes());
+        page[84..88].copy_from_slice(&self.node_data_root_page.to_le_bytes());
+        page[88..92].copy_from_slice(&self.edge_data_root_page.to_le_bytes());
+        // PERSIST-001 Phase 5: feature-gated store data root pages at bytes 92-103
+        #[cfg(feature = "subgraph")]
+        {
+            page[92..96].copy_from_slice(&self.subgraph_data_root_page.to_le_bytes());
+        }
+        #[cfg(feature = "hypergraph")]
+        {
+            page[96..100].copy_from_slice(&self.hyperedge_data_root_page.to_le_bytes());
+        }
+        page[100..104].copy_from_slice(&self.version_data_root_page.to_le_bytes());
         page
     }
 
@@ -301,6 +354,42 @@ impl DatabaseHeader {
             0 // Auto-migrate: pre-v5 databases have no hyperedge IDs
         };
 
+        // PERSIST-001: persist fields at bytes 80-91 (v6+)
+        let catalog_page_id = if version >= 6 {
+            u32::from_le_bytes([page[80], page[81], page[82], page[83]])
+        } else {
+            0
+        };
+        let node_data_root_page = if version >= 6 {
+            u32::from_le_bytes([page[84], page[85], page[86], page[87]])
+        } else {
+            0
+        };
+        let edge_data_root_page = if version >= 6 {
+            u32::from_le_bytes([page[88], page[89], page[90], page[91]])
+        } else {
+            0
+        };
+
+        // PERSIST-001 Phase 5: feature-gated store data root pages at bytes 92-103 (v7+)
+        #[cfg(feature = "subgraph")]
+        let subgraph_data_root_page = if version >= 7 {
+            u32::from_le_bytes([page[92], page[93], page[94], page[95]])
+        } else {
+            0
+        };
+        #[cfg(feature = "hypergraph")]
+        let hyperedge_data_root_page = if version >= 7 {
+            u32::from_le_bytes([page[96], page[97], page[98], page[99]])
+        } else {
+            0
+        };
+        let version_data_root_page = if version >= 7 {
+            u32::from_le_bytes([page[100], page[101], page[102], page[103]])
+        } else {
+            0
+        };
+
         Self {
             magic: u32::from_le_bytes([page[0], page[1], page[2], page[3]]),
             version,
@@ -323,6 +412,14 @@ impl DatabaseHeader {
             hyperedge_root_page,
             #[cfg(feature = "hypergraph")]
             next_hyperedge_id,
+            catalog_page_id,
+            node_data_root_page,
+            edge_data_root_page,
+            #[cfg(feature = "subgraph")]
+            subgraph_data_root_page,
+            #[cfg(feature = "hypergraph")]
+            hyperedge_data_root_page,
+            version_data_root_page,
         }
     }
 }
@@ -456,11 +553,10 @@ mod tests {
         assert_eq!(decoded.version_store_root_page, 0); // auto-migrated to 0
     }
 
-    // AA-T2: FORMAT_VERSION is now 3 (without subgraph feature)
-    #[cfg(not(feature = "subgraph"))]
+    // PERSIST-001 Phase 5: FORMAT_VERSION is 7 for all configurations
     #[test]
-    fn test_format_version_is_3() {
-        assert_eq!(FORMAT_VERSION, 3);
+    fn test_format_version_is_7() {
+        assert_eq!(FORMAT_VERSION, 7);
     }
 
     // AA-T2: feature_flags field in DatabaseHeader
@@ -534,12 +630,6 @@ mod tests {
         use super::*;
 
         // GG-003: FORMAT_VERSION bumped to 4 when subgraph feature is compiled
-        #[cfg(not(feature = "hypergraph"))]
-        #[test]
-        fn test_format_version_is_4() {
-            assert_eq!(FORMAT_VERSION, 4);
-        }
-
         // GG-003: FLAG_SUBGRAPH is bit 2 (0x04)
         #[test]
         fn test_flag_subgraph_constant() {
@@ -656,12 +746,6 @@ mod tests {
     mod hypergraph_header_tests {
         use super::*;
 
-        // HH-005: FORMAT_VERSION bumped to 5 when hypergraph feature is compiled
-        #[test]
-        fn test_format_version_is_5_with_hypergraph() {
-            assert_eq!(FORMAT_VERSION, 5);
-        }
-
         // HH-005: FLAG_HYPERGRAPH is bit 3 (0x08)
         #[test]
         fn test_flag_hypergraph_constant() {
@@ -722,6 +806,7 @@ mod tests {
                 next_subgraph_id: 200,
                 hyperedge_root_page: 25,
                 next_hyperedge_id: 300,
+                ..DatabaseHeader::new()
             };
             let page = hdr.to_page();
             let decoded = DatabaseHeader::from_page(&page);

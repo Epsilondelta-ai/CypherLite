@@ -60,6 +60,8 @@ pub enum CylError {
     CylErrNullPointer = 19,
     /// String is not valid UTF-8.
     CylErrInvalidUtf8 = 20,
+    /// Database file is locked by another process.
+    CylErrDatabaseLocked = 21,
 
     // -- Feature-gated error codes -----------------------------------------
     /// Subgraph not found (requires `subgraph` feature).
@@ -104,6 +106,7 @@ pub fn error_to_code(err: &CypherLiteError) -> CylError {
         CypherLiteError::ConstraintViolation(_) => CylError::CylErrConstraintViolation,
         CypherLiteError::InvalidDateTimeFormat(_) => CylError::CylErrInvalidDateTime,
         CypherLiteError::SystemPropertyReadOnly(_) => CylError::CylErrSystemPropertyReadOnly,
+        CypherLiteError::DatabaseLocked(_) => CylError::CylErrDatabaseLocked,
         CypherLiteError::FeatureIncompatible { .. } => CylError::CylErrFeatureIncompatible,
         #[cfg(feature = "subgraph")]
         CypherLiteError::SubgraphNotFound(_) => CylError::CylErrSubgraphNotFound,
@@ -300,6 +303,7 @@ mod tests {
             CylError::CylErrFeatureIncompatible,
             CylError::CylErrNullPointer,
             CylError::CylErrInvalidUtf8,
+            CylError::CylErrDatabaseLocked,
             CylError::CylErrSubgraphNotFound,
             CylError::CylErrHyperedgeNotFound,
         ];
