@@ -1,0 +1,358 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Publish Rust crates to crates.io (sequential, dependency order)
+  # ---------------------------------------------------------------------------
+  rust-publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish cypherlite-core
+        run: cargo publish -p cypherlite-core --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish cypherlite-storage
+        run: cargo publish -p cypherlite-storage --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish cypherlite-query
+        run: cargo publish -p cypherlite-query --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish cypherlite-ffi
+        run: cargo publish -p cypherlite-ffi --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Build Python wheels (cross-platform matrix) + upload to PyPI
+  # ---------------------------------------------------------------------------
+  python-build:
+    name: Python wheel (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: auto
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            manylinux: auto
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up QEMU (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release -m crates/cypherlite-python/Cargo.toml --out dist
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  python-publish:
+    name: Publish to PyPI
+    needs: python-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: python-wheel-*
+          merge-multiple: true
+          path: dist
+
+      - name: List wheels
+        run: ls -lh dist/
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Upload to PyPI
+        run: maturin upload --skip-existing dist/*
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Build Node.js native addons (cross-platform matrix) + publish to npm
+  # ---------------------------------------------------------------------------
+  node-build:
+    name: Node.js addon (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: node-${{ matrix.target }}
+
+      - name: Install aarch64 cross-compilation tools (Linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Install dependencies
+        working-directory: crates/cypherlite-node
+        run: npm install
+
+      - name: Build native addon
+        working-directory: crates/cypherlite-node
+        run: npx napi build --platform --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
+
+      - name: Upload addon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-addon-${{ matrix.target }}
+          path: crates/cypherlite-node/*.node
+          if-no-files-found: error
+
+  node-publish:
+    name: Publish to npm
+    needs: node-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          registry-url: https://registry.npmjs.org
+
+      - name: Download all addon artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: node-addon-*
+          merge-multiple: true
+          path: crates/cypherlite-node
+
+      - name: List addons
+        run: ls -lh crates/cypherlite-node/*.node
+
+      - name: Publish to npm
+        working-directory: crates/cypherlite-node
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Job 4: Build Go pre-built static libraries (cross-platform matrix)
+  # ---------------------------------------------------------------------------
+  go-libs:
+    name: Go static lib (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            lib_name: libcypherlite_ffi.a
+            archive: cypherlite-linux-x86_64.tar.gz
+            archive_format: tar
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            lib_name: libcypherlite_ffi.a
+            archive: cypherlite-linux-aarch64.tar.gz
+            archive_format: tar
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            lib_name: libcypherlite_ffi.a
+            archive: cypherlite-darwin-x86_64.tar.gz
+            archive_format: tar
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            lib_name: libcypherlite_ffi.a
+            archive: cypherlite-darwin-arm64.tar.gz
+            archive_format: tar
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            lib_name: cypherlite_ffi.lib
+            archive: cypherlite-windows-x86_64.zip
+            archive_format: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: go-${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build static library
+        run: cargo build -p cypherlite-ffi --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
+
+      - name: Prepare archive contents (Unix)
+        if: matrix.archive_format == 'tar'
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/${{ matrix.lib_name }} staging/
+          cp crates/cypherlite-ffi/include/cypherlite.h staging/
+          tar czf ${{ matrix.archive }} -C staging .
+
+      - name: Prepare archive contents (Windows)
+        if: matrix.archive_format == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.lib_name }}" -Destination staging/
+          Copy-Item "crates/cypherlite-ffi/include/cypherlite.h" -Destination staging/
+          Compress-Archive -Path staging/* -DestinationPath ${{ matrix.archive }}
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-lib-${{ matrix.target }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Job 5: Create GitHub Release with Go static library assets
+  # ---------------------------------------------------------------------------
+  github-release:
+    name: GitHub Release
+    needs: [rust-publish, python-publish, node-publish, go-libs]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract CHANGELOG section
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract the section for this version from CHANGELOG.md
+          # Looks for ## [x.y.z] or ## x.y.z header and captures until next ## header
+          NOTES=$(awk -v ver="$VERSION" '
+            /^## / {
+              if (found) exit
+              if (index($0, ver)) { found=1; next }
+            }
+            found { print }
+          ' CHANGELOG.md)
+          # If no CHANGELOG section found, use a default message
+          if [ -z "$NOTES" ]; then
+            NOTES="Release v${VERSION}"
+          fi
+          # Write to file for multi-line support
+          echo "$NOTES" > release_notes.md
+
+      - name: Download Go static library archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: go-lib-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: List release assets
+        run: ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: CypherLite v${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/cypherlite-linux-x86_64.tar.gz
+            release-assets/cypherlite-linux-aarch64.tar.gz
+            release-assets/cypherlite-darwin-x86_64.tar.gz
+            release-assets/cypherlite-darwin-arm64.tar.gz
+            release-assets/cypherlite-windows-x86_64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
