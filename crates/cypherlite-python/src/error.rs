@@ -3,7 +3,11 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-pyo3::create_exception!(cypherlite._cypherlite, CypherLiteError, pyo3::exceptions::PyException);
+pyo3::create_exception!(
+    cypherlite._cypherlite,
+    CypherLiteError,
+    pyo3::exceptions::PyException
+);
 
 /// Convert a Rust CypherLiteError into a Python CypherLiteError exception.
 pub fn to_py_err(e: cypherlite_core::CypherLiteError) -> PyErr {

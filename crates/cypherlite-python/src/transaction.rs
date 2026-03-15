@@ -55,9 +55,7 @@ impl Transaction {
         params: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<PyResult_> {
         if self.finished {
-            return Err(PyRuntimeError::new_err(
-                "transaction is already finished",
-            ));
+            return Err(PyRuntimeError::new_err("transaction is already finished"));
         }
         let rust_params = convert_params(params)?;
         let query_owned = query.to_string();
@@ -82,9 +80,7 @@ impl Transaction {
     /// Commit the transaction.
     fn commit(&mut self) -> PyResult<()> {
         if self.finished {
-            return Err(PyRuntimeError::new_err(
-                "transaction is already finished",
-            ));
+            return Err(PyRuntimeError::new_err("transaction is already finished"));
         }
         self.finish();
         Ok(())
@@ -93,9 +89,7 @@ impl Transaction {
     /// Rollback the transaction (Phase 2: no-op at storage level).
     fn rollback(&mut self) -> PyResult<()> {
         if self.finished {
-            return Err(PyRuntimeError::new_err(
-                "transaction is already finished",
-            ));
+            return Err(PyRuntimeError::new_err("transaction is already finished"));
         }
         self.finish();
         Ok(())
@@ -129,9 +123,7 @@ impl Transaction {
 }
 
 /// Convert an optional Python dict to Rust params HashMap.
-fn convert_params(
-    params: Option<&Bound<'_, PyDict>>,
-) -> PyResult<HashMap<String, Value>> {
+fn convert_params(params: Option<&Bound<'_, PyDict>>) -> PyResult<HashMap<String, Value>> {
     let Some(dict) = params else {
         return Ok(HashMap::new());
     };

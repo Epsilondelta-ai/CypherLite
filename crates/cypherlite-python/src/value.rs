@@ -4,15 +4,20 @@ use crate::types::{EdgeID, NodeID};
 use cypherlite_query::executor::Value;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyFloat, PyInt, PyList, PyString};
 #[cfg(feature = "hypergraph")]
 use pyo3::types::PyDict;
+use pyo3::types::{PyBool, PyBytes, PyFloat, PyInt, PyList, PyString};
 
 /// Convert a Rust Value into a Python object.
 pub fn rust_to_python(py: Python<'_>, val: &Value) -> PyObject {
     match val {
         Value::Null => py.None(),
-        Value::Bool(b) => b.into_pyobject(py).expect("bool").to_owned().into_any().unbind(),
+        Value::Bool(b) => b
+            .into_pyobject(py)
+            .expect("bool")
+            .to_owned()
+            .into_any()
+            .unbind(),
         Value::Int64(i) => i.into_pyobject(py).expect("int").into_any().unbind(),
         Value::Float64(f) => f.into_pyobject(py).expect("float").into_any().unbind(),
         Value::String(s) => s.into_pyobject(py).expect("str").into_any().unbind(),
@@ -45,9 +50,19 @@ pub fn rust_to_python(py: Python<'_>, val: &Value) -> PyObject {
             ms.into_pyobject(py).expect("datetime").into_any().unbind()
         }
         #[cfg(feature = "subgraph")]
-        Value::Subgraph(id) => id.0.into_pyobject(py).expect("subgraph").into_any().unbind(),
+        Value::Subgraph(id) => {
+            id.0.into_pyobject(py)
+                .expect("subgraph")
+                .into_any()
+                .unbind()
+        }
         #[cfg(feature = "hypergraph")]
-        Value::Hyperedge(id) => id.0.into_pyobject(py).expect("hyperedge").into_any().unbind(),
+        Value::Hyperedge(id) => {
+            id.0.into_pyobject(py)
+                .expect("hyperedge")
+                .into_any()
+                .unbind()
+        }
         #[cfg(feature = "hypergraph")]
         Value::TemporalNode(id, ms) => {
             let dict = PyDict::new(py);

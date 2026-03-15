@@ -122,11 +122,7 @@ impl Database {
 /// Module-level function: open a CypherLite database.
 #[pyfunction]
 #[pyo3(signature = (path, page_size = None, cache_capacity = None))]
-pub fn open(
-    path: &str,
-    page_size: Option<u32>,
-    cache_capacity: Option<u32>,
-) -> PyResult<Database> {
+pub fn open(path: &str, page_size: Option<u32>, cache_capacity: Option<u32>) -> PyResult<Database> {
     let config = DatabaseConfig {
         path: std::path::PathBuf::from(path),
         page_size: page_size.unwrap_or(4096),
@@ -141,9 +137,7 @@ pub fn open(
 }
 
 /// Convert an optional Python dict to Rust params HashMap.
-fn convert_params(
-    params: Option<&Bound<'_, PyDict>>,
-) -> PyResult<HashMap<String, Value>> {
+fn convert_params(params: Option<&Bound<'_, PyDict>>) -> PyResult<HashMap<String, Value>> {
     let Some(dict) = params else {
         return Ok(HashMap::new());
     };
