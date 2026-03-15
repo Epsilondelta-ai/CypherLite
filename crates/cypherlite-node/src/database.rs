@@ -34,10 +34,7 @@ pub struct Database {
 pub fn open(path: String, options: Option<OpenOptions>) -> napi::Result<Database> {
     let config = DatabaseConfig {
         path: std::path::PathBuf::from(&path),
-        page_size: options
-            .as_ref()
-            .and_then(|o| o.page_size)
-            .unwrap_or(4096),
+        page_size: options.as_ref().and_then(|o| o.page_size).unwrap_or(4096),
         cache_capacity: options
             .as_ref()
             .and_then(|o| o.cache_capacity)
@@ -112,9 +109,7 @@ impl Database {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            return Err(napi::Error::from_reason(
-                "a transaction is already active",
-            ));
+            return Err(napi::Error::from_reason("a transaction is already active"));
         }
 
         Ok(Transaction {
