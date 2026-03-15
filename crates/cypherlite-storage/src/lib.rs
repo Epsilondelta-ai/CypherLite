@@ -789,11 +789,11 @@ impl LabelRegistry for StorageEngine {
 
 impl Drop for StorageEngine {
     fn drop(&mut self) {
-        // Flush WAL to main database file on close
-        let _ = self.checkpoint();
-        // Remove the WAL file after successful checkpoint
-        let wal_path = self.config.wal_path();
-        let _ = std::fs::remove_file(&wal_path);
+        // Flush WAL to main database file, then delete WAL only if successful.
+        // If checkpoint fails, WAL is preserved for crash recovery on next open.
+        if self.checkpoint().is_ok() {
+            let _ = std::fs::remove_file(self.config.wal_path());
+        }
     }
 }
 

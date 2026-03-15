@@ -1,6 +1,6 @@
 {
   "name": "cypherlite",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Lightweight embedded graph database with Cypher query support",
   "main": "index.js",
   "types": "index.d.ts",
