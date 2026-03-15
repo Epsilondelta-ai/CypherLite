@@ -1,5 +1,7 @@
 """CypherLite: An embedded graph database for Python."""
 
+from importlib.metadata import version as _pkg_version
+
 from cypherlite._cypherlite import (
     CypherLiteError,
     Database,
@@ -12,7 +14,7 @@ from cypherlite._cypherlite import (
     version,
 )
 
-__version__ = version()
+__version__ = _pkg_version("cypherlite")
 
 __all__ = [
     "__version__",
