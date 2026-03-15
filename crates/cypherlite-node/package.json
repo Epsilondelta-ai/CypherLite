@@ -1,9 +1,26 @@
 {
   "name": "cypherlite",
-  "version": "1.2.0",
-  "description": "Node.js bindings for CypherLite embedded graph database",
+  "version": "1.2.1",
+  "description": "Lightweight embedded graph database with Cypher query support",
   "main": "index.js",
   "types": "index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Epsilondelta-ai/CypherLite.git"
+  },
+  "homepage": "https://epsilondelta-ai.github.io/CypherLite/en/",
+  "bugs": {
+    "url": "https://github.com/Epsilondelta-ai/CypherLite/issues"
+  },
+  "keywords": [
+    "graph",
+    "database",
+    "cypher",
+    "embedded",
+    "property-graph",
+    "graph-database",
+    "napi-rs"
+  ],
   "napi": {
     "name": "cypherlite",
     "triples": {}
@@ -17,5 +34,5 @@
     "@napi-rs/cli": "^2.18.0",
     "vitest": "^3.0.0"
   },
-  "license": "MIT"
+  "license": "MIT OR Apache-2.0"
 }

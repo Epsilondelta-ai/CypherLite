@@ -1,6 +1,6 @@
 [package]
 name = "cypherlite-ffi"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 rust-version = "1.84"
 description = "C ABI foreign function interface bindings for CypherLite graph database"
@@ -24,8 +24,8 @@ full-temporal = ["hypergraph", "cypherlite-query/full-temporal", "cypherlite-cor
 plugin = ["cypherlite-query/plugin", "cypherlite-core/plugin"]
 
 [dependencies]
-cypherlite-query = { version = "1.2.0", path = "../cypherlite-query" }
-cypherlite-core = { version = "1.2.0", path = "../cypherlite-core" }
+cypherlite-query = { version = "1.2.1", path = "../cypherlite-query" }
+cypherlite-core = { version = "1.2.1", path = "../cypherlite-core" }
 libc = "0.2"
 
 [package.metadata.docs.rs]

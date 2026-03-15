@@ -1,6 +1,6 @@
 [package]
 name = "cypherlite-node"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 rust-version = "1.84"
 description = "Node.js bindings for CypherLite embedded graph database via napi-rs"
@@ -21,8 +21,8 @@ plugin = ["cypherlite-query/plugin", "cypherlite-core/plugin"]
 [dependencies]
 napi = { version = "2", features = ["napi9"] }
 napi-derive = "2"
-cypherlite-query = { version = "1.2.0", path = "../cypherlite-query" }
-cypherlite-core = { version = "1.2.0", path = "../cypherlite-core" }
+cypherlite-query = { version = "1.2.1", path = "../cypherlite-query" }
+cypherlite-core = { version = "1.2.1", path = "../cypherlite-core" }
 
 [build-dependencies]
 napi-build = "2"
