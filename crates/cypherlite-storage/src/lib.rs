@@ -787,6 +787,13 @@ impl LabelRegistry for StorageEngine {
     }
 }
 
+impl Drop for StorageEngine {
+    fn drop(&mut self) {
+        // Flush WAL to main database file on close
+        let _ = self.checkpoint();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

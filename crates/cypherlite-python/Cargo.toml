@@ -1,6 +1,6 @@
 [package]
 name = "cypherlite-python"
-version = "1.2.2"
+version = "1.2.3"
 edition = "2021"
 rust-version = "1.84"
 description = "Python bindings for CypherLite embedded graph database via PyO3"
@@ -21,8 +21,8 @@ plugin = ["cypherlite-query/plugin", "cypherlite-core/plugin"]
 
 [dependencies]
 pyo3 = { version = "0.24", features = ["abi3-py38", "extension-module"] }
-cypherlite-query = { version = "1.2.2", path = "../cypherlite-query" }
-cypherlite-core = { version = "1.2.2", path = "../cypherlite-core" }
+cypherlite-query = { version = "1.2.3", path = "../cypherlite-query" }
+cypherlite-core = { version = "1.2.3", path = "../cypherlite-core" }
 
 [dev-dependencies]
 tempfile = "3"
