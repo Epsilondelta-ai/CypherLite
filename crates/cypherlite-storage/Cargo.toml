@@ -22,6 +22,7 @@ plugin = ["cypherlite-core/plugin"]
 
 [dependencies]
 cypherlite-core = { version = "1.2.6", path = "../cypherlite-core" }
+fs2 = "0.4"
 parking_lot = "0.12"
 bincode = "1"
 serde = { version = "1", features = ["derive"] }

@@ -81,6 +81,18 @@ impl HyperEdgeStore {
     pub fn all(&self) -> impl Iterator<Item = &HyperEdgeRecord> {
         self.records.values()
     }
+
+    /// Insert a record that was loaded from persistent storage.
+    ///
+    /// Updates `next_id` if the loaded record's ID is >= current next_id,
+    /// ensuring new IDs won't collide with loaded data.
+    pub fn insert_loaded_record(&mut self, record: HyperEdgeRecord) {
+        let id = record.id.0;
+        self.records.insert(id, record);
+        if id >= self.next_id {
+            self.next_id = id + 1;
+        }
+    }
 }
 
 impl Default for HyperEdgeStore {

@@ -22,12 +22,15 @@ pub mod version;
 /// Write-ahead log (WAL) for crash recovery.
 pub mod wal;
 
+use std::collections::HashMap;
+
 use cypherlite_core::{
-    DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId, PropertyValue,
-    RelationshipRecord, Result,
+    CypherLiteError, DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId,
+    PropertyValue, RelationshipRecord, Result,
 };
 #[cfg(feature = "subgraph")]
 use cypherlite_core::{SubgraphId, SubgraphRecord};
+use fs2::FileExt;
 
 use btree::edge_store::EdgeStore;
 use btree::node_store::NodeStore;
@@ -59,6 +62,9 @@ use wal::writer::WalWriter;
 /// WAL, and checkpoint operations.
 #[allow(dead_code)]
 pub struct StorageEngine {
+    /// Exclusive file lock on the .cyl file, held for the engine's lifetime.
+    /// Dropped automatically when StorageEngine is dropped, releasing the lock.
+    lock_file: std::fs::File,
     page_manager: PageManager,
     buffer_pool: BufferPool,
     wal_writer: WalWriter,
@@ -79,15 +85,53 @@ pub struct StorageEngine {
     #[cfg(feature = "hypergraph")]
     hyperedge_reverse_index: HyperEdgeReverseIndex,
     config: DatabaseConfig,
+    /// Maps node_id -> data page ID where its record is stored.
+    node_page_map: HashMap<u64, u32>,
+    /// Maps edge_id -> data page ID where its record is stored.
+    edge_page_map: HashMap<u64, u32>,
+    /// Current node data page with free space: (page_id, page_buffer).
+    current_node_data_page: Option<(u32, [u8; PAGE_SIZE])>,
+    /// Current edge data page with free space: (page_id, page_buffer).
+    current_edge_data_page: Option<(u32, [u8; PAGE_SIZE])>,
+    /// Current subgraph data page with free space.
+    #[cfg(feature = "subgraph")]
+    current_subgraph_data_page: Option<(u32, [u8; PAGE_SIZE])>,
+    /// Current hyperedge data page with free space.
+    #[cfg(feature = "hypergraph")]
+    current_hyperedge_data_page: Option<(u32, [u8; PAGE_SIZE])>,
+    /// Current version data page with free space.
+    current_version_data_page: Option<(u32, [u8; PAGE_SIZE])>,
 }
 
 impl StorageEngine {
     /// Open or create a CypherLite database.
+    ///
+    /// Acquires an exclusive file lock (flock) on the `.cyl` file. If the lock
+    /// cannot be acquired (e.g. another process holds it), returns
+    /// [`CypherLiteError::DatabaseLocked`].
     pub fn open(config: DatabaseConfig) -> Result<Self> {
         let wal_path = config.wal_path();
+        let db_exists = config.path.exists();
+
+        // R-PERSIST-035: Acquire exclusive file lock on .cyl file.
+        // Use a .lock sidecar file so we don't interfere with PageManager's
+        // own file I/O (creating an empty .cyl before PageManager would break
+        // its exists() check).
+        let lock_path = config.path.with_extension("cyl-lock");
+        let lock_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(CypherLiteError::IoError)?;
+
+        lock_file
+            .try_lock_exclusive()
+            .map_err(|_| CypherLiteError::DatabaseLocked(config.path.display().to_string()))?;
 
         // Try to open existing database, or create a new one
-        let mut page_manager = if config.path.exists() {
+        let mut page_manager = if db_exists {
             PageManager::open_database(&config)?
         } else {
             PageManager::create_database(&config)?
@@ -139,7 +183,8 @@ impl StorageEngine {
             HyperEdgeStore::new(1)
         };
 
-        Ok(Self {
+        let mut engine = Self {
+            lock_file,
             page_manager,
             buffer_pool,
             wal_writer,
@@ -160,7 +205,32 @@ impl StorageEngine {
             #[cfg(feature = "hypergraph")]
             hyperedge_reverse_index: HyperEdgeReverseIndex::new(),
             config,
-        })
+            node_page_map: HashMap::new(),
+            edge_page_map: HashMap::new(),
+            current_node_data_page: None,
+            current_edge_data_page: None,
+            #[cfg(feature = "subgraph")]
+            current_subgraph_data_page: None,
+            #[cfg(feature = "hypergraph")]
+            current_hyperedge_data_page: None,
+            current_version_data_page: None,
+        };
+
+        // R-PERSIST-012: Load catalog from persisted pages before node/edge loading
+        // so that label/property/rel-type IDs are available.
+        engine.load_catalog()?;
+
+        // R-PERSIST-031/032: Load persisted data from disk pages into memory.
+        engine.load_nodes_from_pages()?;
+        engine.load_edges_from_pages()?;
+        // R-PERSIST-050/051/052: Load feature-gated store data from disk.
+        #[cfg(feature = "subgraph")]
+        engine.load_subgraphs_from_pages()?;
+        #[cfg(feature = "hypergraph")]
+        engine.load_hyperedges_from_pages()?;
+        engine.load_versions_from_pages()?;
+
+        Ok(engine)
     }
 
     // -- Node CRUD --
@@ -184,6 +254,10 @@ impl StorageEngine {
                 }
             }
         }
+        // R-PERSIST-001: Persist node record to data page via WAL
+        if let Some(record) = self.node_store.get_node(id).cloned() {
+            let _ = self.persist_node(id, &record, false);
+        }
         id
     }
 
@@ -204,7 +278,10 @@ impl StorageEngine {
         // W-002: Pre-update snapshot into VersionStore
         if self.config.version_storage_enabled {
             if let Some(ref old) = old_node {
-                self.version_store.snapshot_node(node_id.0, old.clone());
+                let seq = self.version_store.snapshot_node(node_id.0, old.clone());
+                // R-PERSIST-052: Persist version record to data page via WAL
+                let vr = version::VersionRecord::Node(old.clone());
+                let _ = self.persist_version(node_id.0, seq, &vr);
             }
         }
 
@@ -226,20 +303,24 @@ impl StorageEngine {
                 }
             }
         }
+        // R-PERSIST-003: Persist updated node record to data page via WAL
+        if let Some(updated) = self.node_store.get_node(node_id).cloned() {
+            let _ = self.rewrite_node_on_page(node_id, &updated, false);
+        }
         Ok(())
     }
 
     /// Delete a node and all its connected edges.
     /// REQ-STORE-004: Delete all connected edges first.
     pub fn delete_node(&mut self, node_id: NodeId) -> Result<NodeRecord> {
-        // Capture node data for index removal before deletion
+        // Capture node data for index removal and tombstone before deletion
         let node_data = self.node_store.get_node(node_id).cloned();
         // Delete connected edges first
         self.edge_store
             .delete_edges_for_node(node_id, &mut self.node_store)?;
         let deleted = self.node_store.delete_node(node_id)?;
         // Remove from all applicable indexes
-        if let Some(node) = node_data {
+        if let Some(ref node) = node_data {
             for &label_id in &node.labels {
                 for (prop_key_id, value) in &node.properties {
                     if let Some(idx) = self.index_manager.find_index_mut(label_id, *prop_key_id) {
@@ -247,6 +328,10 @@ impl StorageEngine {
                     }
                 }
             }
+        }
+        // R-PERSIST-004: Write tombstone record to data page via WAL
+        if let Some(ref node) = node_data {
+            let _ = self.rewrite_node_on_page(node_id, node, true);
         }
         Ok(deleted)
     }
@@ -277,6 +362,10 @@ impl StorageEngine {
             {
                 idx.insert(value, id);
             }
+        }
+        // R-PERSIST-002: Persist edge record to data page via WAL
+        if let Some(record) = self.edge_store.get_edge(id).cloned() {
+            let _ = self.persist_edge(id, &record, false);
         }
         Ok(id)
     }
@@ -316,6 +405,10 @@ impl StorageEngine {
                 }
             }
         }
+        // R-PERSIST-003: Persist updated edge record to data page via WAL
+        if let Some(updated) = self.edge_store.get_edge(edge_id).cloned() {
+            let _ = self.rewrite_edge_on_page(edge_id, &updated, false);
+        }
         Ok(())
     }
 
@@ -327,11 +420,11 @@ impl StorageEngine {
 
     /// Delete an edge.
     pub fn delete_edge(&mut self, edge_id: EdgeId) -> Result<RelationshipRecord> {
-        // CC-T5: Capture data for index removal
+        // CC-T5: Capture data for index removal and tombstone
         let edge_data = self.edge_store.get_edge(edge_id).cloned();
         let deleted = self.edge_store.delete_edge(edge_id, &mut self.node_store)?;
         // Remove from edge indexes
-        if let Some(edge) = edge_data {
+        if let Some(ref edge) = edge_data {
             for (prop_key_id, value) in &edge.properties {
                 if let Some(idx) = self
                     .edge_index_manager
@@ -340,6 +433,10 @@ impl StorageEngine {
                     idx.remove(value, edge_id);
                 }
             }
+        }
+        // R-PERSIST-004: Write tombstone record to data page via WAL
+        if let Some(ref edge) = edge_data {
+            let _ = self.rewrite_edge_on_page(edge_id, edge, true);
         }
         Ok(deleted)
     }
@@ -614,6 +711,11 @@ impl StorageEngine {
     ) -> SubgraphId {
         let id = self.subgraph_store.create(properties, temporal_anchor);
         self.page_manager.header_mut().next_subgraph_id = self.subgraph_store.next_id();
+        // R-PERSIST-050: Persist subgraph record to data page via WAL
+        if let Some(record) = self.subgraph_store.get(id).cloned() {
+            let members = self.membership_index.members(id);
+            let _ = self.persist_subgraph(id, &record, &members, false);
+        }
         id
     }
 
@@ -649,6 +751,11 @@ impl StorageEngine {
             return Err(cypherlite_core::CypherLiteError::NodeNotFound(node_id.0));
         }
         self.membership_index.add(subgraph_id, node_id);
+        // R-PERSIST-050: Re-persist subgraph record with updated membership
+        if let Some(record) = self.subgraph_store.get(subgraph_id).cloned() {
+            let members = self.membership_index.members(subgraph_id);
+            let _ = self.persist_subgraph(subgraph_id, &record, &members, false);
+        }
         Ok(())
     }
 
@@ -714,6 +821,10 @@ impl StorageEngine {
             };
             self.hyperedge_reverse_index.add(id.0, raw_id);
         }
+        // R-PERSIST-051: Persist hyperedge record to data page via WAL
+        if let Some(record) = self.hyperedge_store.get(id).cloned() {
+            let _ = self.persist_hyperedge(id, &record, false);
+        }
         id
     }
 
@@ -746,6 +857,854 @@ impl StorageEngine {
     #[cfg(feature = "hypergraph")]
     pub fn hyperedges_for_entity(&self, raw_entity_id: u64) -> Vec<u64> {
         self.hyperedge_reverse_index.hyperedges_for(raw_entity_id)
+    }
+
+    // -- Data page persistence (Phase 2: R-PERSIST-001..004) --
+
+    /// Returns the node data root page ID from the database header.
+    pub fn node_data_root_page(&self) -> u32 {
+        self.page_manager.header().node_data_root_page
+    }
+
+    /// Returns the edge data root page ID from the database header.
+    pub fn edge_data_root_page(&self) -> u32 {
+        self.page_manager.header().edge_data_root_page
+    }
+
+    /// Returns the number of version snapshots for a given entity.
+    pub fn version_count(&self, entity_id: u64) -> u64 {
+        self.version_store.version_count(entity_id)
+    }
+
+    /// Returns the version chain for a given entity (oldest to newest).
+    pub fn version_chain(&self, entity_id: u64) -> Vec<(u64, &version::VersionRecord)> {
+        self.version_store.get_version_chain(entity_id)
+    }
+
+    /// Read a data page by page ID.
+    ///
+    /// Returns the in-memory cached copy if the page is the current active
+    /// data page (which may contain WAL-only writes not yet checkpointed).
+    /// Otherwise reads from the main database file.
+    pub fn read_data_page(&mut self, page_id: u32) -> Result<[u8; PAGE_SIZE]> {
+        // Check cached node data page first
+        if let Some((cached_pid, ref cached_buf)) = self.current_node_data_page {
+            if cached_pid == page_id {
+                return Ok(*cached_buf);
+            }
+        }
+        // Check cached edge data page
+        if let Some((cached_pid, ref cached_buf)) = self.current_edge_data_page {
+            if cached_pid == page_id {
+                return Ok(*cached_buf);
+            }
+        }
+        // Check cached subgraph data page
+        #[cfg(feature = "subgraph")]
+        if let Some((cached_pid, ref cached_buf)) = self.current_subgraph_data_page {
+            if cached_pid == page_id {
+                return Ok(*cached_buf);
+            }
+        }
+        // Check cached hyperedge data page
+        #[cfg(feature = "hypergraph")]
+        if let Some((cached_pid, ref cached_buf)) = self.current_hyperedge_data_page {
+            if cached_pid == page_id {
+                return Ok(*cached_buf);
+            }
+        }
+        // Check cached version data page
+        if let Some((cached_pid, ref cached_buf)) = self.current_version_data_page {
+            if cached_pid == page_id {
+                return Ok(*cached_buf);
+            }
+        }
+        // Fall back to main file (reads checkpointed data)
+        self.page_manager.read_page(PageId(page_id))
+    }
+
+    /// Returns the number of committed WAL frames.
+    pub fn wal_frame_count(&self) -> u64 {
+        self.wal_writer.frame_count()
+    }
+
+    /// Returns the number of node data pages currently allocated.
+    pub fn node_data_page_count(&self) -> usize {
+        let root = self.page_manager.header().node_data_root_page;
+        if root == 0 {
+            return 0;
+        }
+        // Count unique pages referenced in node_page_map + current page
+        let mut pages: std::collections::HashSet<u32> =
+            self.node_page_map.values().copied().collect();
+        if let Some((pid, _)) = &self.current_node_data_page {
+            pages.insert(*pid);
+        }
+        pages.len()
+    }
+
+    /// Load all persisted node records from data pages into the in-memory NodeStore.
+    ///
+    /// Walks the node data page chain starting from `node_data_root_page` in the
+    /// database header. For each page, deserializes all records and inserts
+    /// non-tombstone records into the NodeStore. Also rebuilds `node_page_map`
+    /// and sets `current_node_data_page` to the last page in the chain.
+    ///
+    /// R-PERSIST-031: After WAL recovery, all node data pages MUST be read and
+    /// deserialized into NodeStore.
+    fn load_nodes_from_pages(&mut self) -> Result<()> {
+        use page::record_serialization::{
+            deserialize_node_record, read_records_from_page, DataPageHeader,
+        };
+
+        let root_page = self.page_manager.header().node_data_root_page;
+        if root_page == 0 {
+            return Ok(()); // No node data persisted
+        }
+
+        let mut current_page_id = root_page;
+        loop {
+            let page_buf = self.page_manager.read_page(PageId(current_page_id))?;
+            let header = DataPageHeader::read_from(&page_buf);
+
+            // Read and deserialize all records from this page
+            let entries = read_records_from_page(&page_buf);
+            for (off, len) in &entries {
+                if let Some((record, deleted, _)) =
+                    deserialize_node_record(&page_buf[*off..*off + *len])
+                {
+                    if !deleted {
+                        self.node_page_map.insert(record.node_id.0, current_page_id);
+                        self.node_store.insert_loaded_record(record);
+                    }
+                }
+            }
+
+            // Follow the page chain or stop
+            if header.next_page == 0 {
+                // Last page in chain -- cache it for future appends
+                self.current_node_data_page = Some((current_page_id, page_buf));
+                break;
+            }
+            current_page_id = header.next_page;
+        }
+
+        Ok(())
+    }
+
+    /// Load all persisted edge records from data pages into the in-memory EdgeStore.
+    ///
+    /// Walks the edge data page chain starting from `edge_data_root_page` in the
+    /// database header. For each page, deserializes all records and inserts
+    /// non-tombstone records into the EdgeStore. Also rebuilds `edge_page_map`
+    /// and sets `current_edge_data_page` to the last page in the chain.
+    ///
+    /// R-PERSIST-032: After WAL recovery, all edge data pages MUST be read and
+    /// deserialized into EdgeStore.
+    fn load_edges_from_pages(&mut self) -> Result<()> {
+        use page::record_serialization::{
+            deserialize_edge_record, read_records_from_page, DataPageHeader,
+        };
+
+        let root_page = self.page_manager.header().edge_data_root_page;
+        if root_page == 0 {
+            return Ok(()); // No edge data persisted
+        }
+
+        let mut current_page_id = root_page;
+        loop {
+            let page_buf = self.page_manager.read_page(PageId(current_page_id))?;
+            let header = DataPageHeader::read_from(&page_buf);
+
+            let entries = read_records_from_page(&page_buf);
+            for (off, len) in &entries {
+                if let Some((record, deleted, _)) =
+                    deserialize_edge_record(&page_buf[*off..*off + *len])
+                {
+                    if !deleted {
+                        self.edge_page_map.insert(record.edge_id.0, current_page_id);
+                        self.edge_store.insert_loaded_record(record);
+                    }
+                }
+            }
+
+            if header.next_page == 0 {
+                self.current_edge_data_page = Some((current_page_id, page_buf));
+                break;
+            }
+            current_page_id = header.next_page;
+        }
+
+        Ok(())
+    }
+
+    /// R-PERSIST-010: Save the catalog to one or more CatalogData pages.
+    ///
+    /// Serializes the in-memory `Catalog` via `catalog.save()` (bincode) and
+    /// writes the resulting bytes across chained CatalogData pages.  The first
+    /// page ID is stored in `DatabaseHeader.catalog_page_id`.
+    fn save_catalog(&mut self) -> Result<()> {
+        use page::record_serialization::DataPageHeader;
+        use page::PageType;
+
+        let catalog_bytes = self.catalog.save();
+        if catalog_bytes.is_empty() {
+            return Ok(());
+        }
+
+        let usable_per_page = PAGE_SIZE - DataPageHeader::SIZE;
+        let mut first_page_id: Option<u32> = None;
+        let mut prev_page: Option<(u32, [u8; PAGE_SIZE])> = None;
+
+        for chunk in catalog_bytes.chunks(usable_per_page) {
+            let new_page_id = self.page_manager.allocate_page()?;
+            let mut page_buf = [0u8; PAGE_SIZE];
+            let mut header = DataPageHeader::new(PageType::CatalogData as u8);
+            header.free_offset = (DataPageHeader::SIZE + chunk.len()) as u16;
+            header.record_count = 1; // treat as single blob fragment
+            header.write_to(&mut page_buf);
+
+            // Write chunk data after header
+            page_buf[DataPageHeader::SIZE..DataPageHeader::SIZE + chunk.len()]
+                .copy_from_slice(chunk);
+
+            if first_page_id.is_none() {
+                first_page_id = Some(new_page_id.0);
+            }
+
+            // Chain previous page to this one
+            if let Some((prev_id, ref mut prev_buf)) = prev_page {
+                let mut prev_header = DataPageHeader::read_from(prev_buf);
+                prev_header.next_page = new_page_id.0;
+                prev_header.write_to(prev_buf);
+                // Write previous page through WAL
+                let db_size = self.page_manager.header().page_count;
+                self.wal_writer
+                    .write_frame(PageId(prev_id), db_size, prev_buf)?;
+            }
+
+            prev_page = Some((new_page_id.0, page_buf));
+        }
+
+        // Write the last page
+        if let Some((last_id, ref last_buf)) = prev_page {
+            let db_size = self.page_manager.header().page_count;
+            self.wal_writer
+                .write_frame(PageId(last_id), db_size, last_buf)?;
+            self.wal_writer.commit()?;
+        }
+
+        // Update header with catalog root page
+        if let Some(root_id) = first_page_id {
+            self.page_manager.header_mut().catalog_page_id = root_id;
+        }
+
+        Ok(())
+    }
+
+    /// R-PERSIST-012: Load catalog from CatalogData pages on database open.
+    ///
+    /// Reads the chained CatalogData pages starting from
+    /// `DatabaseHeader.catalog_page_id`, concatenates the data payloads, and
+    /// deserializes via `Catalog::load()`.
+    fn load_catalog(&mut self) -> Result<()> {
+        use page::record_serialization::DataPageHeader;
+
+        let root_page = self.page_manager.header().catalog_page_id;
+        if root_page == 0 {
+            return Ok(()); // No catalog data persisted — use default
+        }
+
+        let mut catalog_bytes = Vec::new();
+        let mut current_page_id = root_page;
+
+        loop {
+            let page_buf = self.page_manager.read_page(PageId(current_page_id))?;
+            let header = DataPageHeader::read_from(&page_buf);
+
+            // Extract payload between header and free_offset
+            let data_start = DataPageHeader::SIZE;
+            let data_end = header.free_offset as usize;
+            if data_end > data_start && data_end <= PAGE_SIZE {
+                catalog_bytes.extend_from_slice(&page_buf[data_start..data_end]);
+            }
+
+            if header.next_page == 0 {
+                break;
+            }
+            current_page_id = header.next_page;
+        }
+
+        self.catalog = catalog::Catalog::load(&catalog_bytes)?;
+        Ok(())
+    }
+
+    /// Persist a node record to a data page and write through WAL.
+    fn persist_node(&mut self, node_id: NodeId, record: &NodeRecord, deleted: bool) -> Result<()> {
+        use page::record_serialization::{
+            pack_record_into_page, serialize_node_record, DataPageHeader,
+        };
+        use page::PageType;
+
+        let record_bytes = serialize_node_record(record, deleted);
+
+        // Try to pack into current node data page
+        if let Some((page_id, ref mut page_buf)) = self.current_node_data_page {
+            if pack_record_into_page(page_buf, &record_bytes) {
+                // Write the page through WAL
+                let db_size = self.page_manager.header().page_count;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer.commit()?;
+                self.node_page_map.insert(node_id.0, page_id);
+                return Ok(());
+            }
+        }
+
+        // Current page is full or doesn't exist -- allocate a new one
+        let new_page_id = self.page_manager.allocate_page()?;
+        let mut new_page = [0u8; PAGE_SIZE];
+        let header = DataPageHeader::new(PageType::NodeData as u8);
+        header.write_to(&mut new_page);
+
+        // Chain the new page to the previous one
+        if let Some((old_page_id, ref mut old_buf)) = self.current_node_data_page {
+            // Update old page's next_page pointer
+            let mut old_header = DataPageHeader::read_from(old_buf);
+            old_header.next_page = new_page_id.0;
+            old_header.write_to(old_buf);
+            // Write old page with updated chain pointer
+            let db_size = self.page_manager.header().page_count;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer.commit()?;
+        }
+
+        // Pack record into new page
+        let packed = pack_record_into_page(&mut new_page, &record_bytes);
+        debug_assert!(packed, "fresh page should always have space for a record");
+
+        // Write new page through WAL
+        let db_size = self.page_manager.header().page_count;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer.commit()?;
+
+        // Update header if this is the first node data page
+        if self.page_manager.header().node_data_root_page == 0 {
+            self.page_manager.header_mut().node_data_root_page = new_page_id.0;
+            self.page_manager.flush_header()?;
+        }
+
+        self.node_page_map.insert(node_id.0, new_page_id.0);
+        self.current_node_data_page = Some((new_page_id.0, new_page));
+
+        Ok(())
+    }
+
+    /// Persist an edge record to a data page and write through WAL.
+    fn persist_edge(
+        &mut self,
+        edge_id: EdgeId,
+        record: &RelationshipRecord,
+        deleted: bool,
+    ) -> Result<()> {
+        use page::record_serialization::{
+            pack_record_into_page, serialize_edge_record, DataPageHeader,
+        };
+        use page::PageType;
+
+        let record_bytes = serialize_edge_record(record, deleted);
+
+        // Try to pack into current edge data page
+        if let Some((page_id, ref mut page_buf)) = self.current_edge_data_page {
+            if pack_record_into_page(page_buf, &record_bytes) {
+                let db_size = self.page_manager.header().page_count;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer.commit()?;
+                self.edge_page_map.insert(edge_id.0, page_id);
+                return Ok(());
+            }
+        }
+
+        // Allocate new edge data page
+        let new_page_id = self.page_manager.allocate_page()?;
+        let mut new_page = [0u8; PAGE_SIZE];
+        let header = DataPageHeader::new(PageType::EdgeData as u8);
+        header.write_to(&mut new_page);
+
+        // Chain to previous page
+        if let Some((old_page_id, ref mut old_buf)) = self.current_edge_data_page {
+            let mut old_header = DataPageHeader::read_from(old_buf);
+            old_header.next_page = new_page_id.0;
+            old_header.write_to(old_buf);
+            let db_size = self.page_manager.header().page_count;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer.commit()?;
+        }
+
+        let packed = pack_record_into_page(&mut new_page, &record_bytes);
+        debug_assert!(packed, "fresh page should always have space for a record");
+
+        let db_size = self.page_manager.header().page_count;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer.commit()?;
+
+        if self.page_manager.header().edge_data_root_page == 0 {
+            self.page_manager.header_mut().edge_data_root_page = new_page_id.0;
+            self.page_manager.flush_header()?;
+        }
+
+        self.edge_page_map.insert(edge_id.0, new_page_id.0);
+        self.current_edge_data_page = Some((new_page_id.0, new_page));
+
+        Ok(())
+    }
+
+    /// Rewrite a node record on its existing data page (for update/delete).
+    /// This rewrites the entire page with the updated record replacing the old one.
+    fn rewrite_node_on_page(
+        &mut self,
+        node_id: NodeId,
+        record: &NodeRecord,
+        deleted: bool,
+    ) -> Result<()> {
+        use page::record_serialization::{
+            deserialize_node_record, pack_record_into_page, read_records_from_page,
+            serialize_node_record, DataPageHeader,
+        };
+
+        let page_id = match self.node_page_map.get(&node_id.0) {
+            Some(&pid) => pid,
+            None => {
+                // Node was never persisted; write as new record
+                return self.persist_node(node_id, record, deleted);
+            }
+        };
+
+        // Read the current page (from cache or main file)
+        let old_page = self.read_data_page(page_id)?;
+        let old_header = DataPageHeader::read_from(&old_page);
+
+        // Rebuild the page: copy all records except the one being updated
+        let mut new_page = [0u8; PAGE_SIZE];
+        let mut new_header = DataPageHeader::new(old_header.page_type);
+        new_header.next_page = old_header.next_page;
+        new_header.write_to(&mut new_page);
+
+        let entries = read_records_from_page(&old_page);
+        for (off, len) in &entries {
+            let slice = &old_page[*off..*off + *len];
+            if let Some((rec, _del, _)) = deserialize_node_record(slice) {
+                if rec.node_id == node_id {
+                    // Replace with updated record
+                    let updated_bytes = serialize_node_record(record, deleted);
+                    pack_record_into_page(&mut new_page, &updated_bytes);
+                } else {
+                    // Copy existing record as-is
+                    pack_record_into_page(&mut new_page, slice);
+                }
+            }
+        }
+
+        // Write updated page through WAL
+        let db_size = self.page_manager.header().page_count;
+        self.wal_writer
+            .write_frame(PageId(page_id), db_size, &new_page)?;
+        self.wal_writer.commit()?;
+
+        // Update cached page if it matches
+        if let Some((cached_pid, ref mut cached_buf)) = self.current_node_data_page {
+            if cached_pid == page_id {
+                *cached_buf = new_page;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Rewrite an edge record on its existing data page (for update/delete).
+    fn rewrite_edge_on_page(
+        &mut self,
+        edge_id: EdgeId,
+        record: &RelationshipRecord,
+        deleted: bool,
+    ) -> Result<()> {
+        use page::record_serialization::{
+            deserialize_edge_record, pack_record_into_page, read_records_from_page,
+            serialize_edge_record, DataPageHeader,
+        };
+
+        let page_id = match self.edge_page_map.get(&edge_id.0) {
+            Some(&pid) => pid,
+            None => {
+                return self.persist_edge(edge_id, record, deleted);
+            }
+        };
+
+        // Read the current page (from cache or main file)
+        let old_page = self.read_data_page(page_id)?;
+        let old_header = DataPageHeader::read_from(&old_page);
+
+        let mut new_page = [0u8; PAGE_SIZE];
+        let mut new_header = DataPageHeader::new(old_header.page_type);
+        new_header.next_page = old_header.next_page;
+        new_header.write_to(&mut new_page);
+
+        let entries = read_records_from_page(&old_page);
+        for (off, len) in &entries {
+            let slice = &old_page[*off..*off + *len];
+            if let Some((rec, _del, _)) = deserialize_edge_record(slice) {
+                if rec.edge_id == edge_id {
+                    let updated_bytes = serialize_edge_record(record, deleted);
+                    pack_record_into_page(&mut new_page, &updated_bytes);
+                } else {
+                    pack_record_into_page(&mut new_page, slice);
+                }
+            }
+        }
+
+        let db_size = self.page_manager.header().page_count;
+        self.wal_writer
+            .write_frame(PageId(page_id), db_size, &new_page)?;
+        self.wal_writer.commit()?;
+
+        if let Some((cached_pid, ref mut cached_buf)) = self.current_edge_data_page {
+            if cached_pid == page_id {
+                *cached_buf = new_page;
+            }
+        }
+
+        Ok(())
+    }
+
+    // ================================================================
+    // PERSIST-001 Phase 5: SubgraphStore persistence
+    // ================================================================
+
+    /// Load all persisted subgraph records from data pages into the in-memory
+    /// SubgraphStore and MembershipIndex.
+    #[cfg(feature = "subgraph")]
+    fn load_subgraphs_from_pages(&mut self) -> Result<()> {
+        use page::record_serialization::{
+            deserialize_subgraph_record, read_records_from_page, DataPageHeader,
+        };
+
+        let root_page = self.page_manager.header().subgraph_data_root_page;
+        if root_page == 0 {
+            return Ok(());
+        }
+
+        let mut current_page_id = root_page;
+        loop {
+            let page_buf = self.page_manager.read_page(PageId(current_page_id))?;
+            let header = DataPageHeader::read_from(&page_buf);
+
+            let entries = read_records_from_page(&page_buf);
+            for (off, len) in &entries {
+                if let Some((record, members, deleted, _)) =
+                    deserialize_subgraph_record(&page_buf[*off..*off + *len])
+                {
+                    if !deleted {
+                        let sg_id = record.subgraph_id;
+                        self.subgraph_store.insert_loaded_record(record);
+                        // Rebuild membership index from persisted member lists
+                        for node_id in members {
+                            self.membership_index.add(sg_id, node_id);
+                        }
+                    }
+                }
+            }
+
+            if header.next_page == 0 {
+                self.current_subgraph_data_page = Some((current_page_id, page_buf));
+                break;
+            }
+            current_page_id = header.next_page;
+        }
+
+        Ok(())
+    }
+
+    /// Persist a subgraph record (with membership data) to a data page via WAL.
+    #[cfg(feature = "subgraph")]
+    fn persist_subgraph(
+        &mut self,
+        _id: SubgraphId,
+        record: &SubgraphRecord,
+        members: &[NodeId],
+        deleted: bool,
+    ) -> Result<()> {
+        use page::record_serialization::{
+            pack_record_into_page, serialize_subgraph_record, DataPageHeader,
+        };
+        use page::PageType;
+
+        let record_bytes = serialize_subgraph_record(record, members, deleted);
+
+        // Try to pack into current subgraph data page
+        if let Some((page_id, ref mut page_buf)) = self.current_subgraph_data_page {
+            if pack_record_into_page(page_buf, &record_bytes) {
+                let db_size = self.page_manager.header().page_count;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer.commit()?;
+                return Ok(());
+            }
+        }
+
+        // Allocate new subgraph data page
+        let new_page_id = self.page_manager.allocate_page()?;
+        let mut new_page = [0u8; PAGE_SIZE];
+        let header = DataPageHeader::new(PageType::SubgraphData as u8);
+        header.write_to(&mut new_page);
+
+        // Chain to previous page
+        if let Some((old_page_id, ref mut old_buf)) = self.current_subgraph_data_page {
+            let mut old_header = DataPageHeader::read_from(old_buf);
+            old_header.next_page = new_page_id.0;
+            old_header.write_to(old_buf);
+            let db_size = self.page_manager.header().page_count;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer.commit()?;
+        }
+
+        let packed = pack_record_into_page(&mut new_page, &record_bytes);
+        debug_assert!(packed, "fresh page should always have space for a record");
+
+        let db_size = self.page_manager.header().page_count;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer.commit()?;
+
+        if self.page_manager.header().subgraph_data_root_page == 0 {
+            self.page_manager.header_mut().subgraph_data_root_page = new_page_id.0;
+            self.page_manager.flush_header()?;
+        }
+
+        self.current_subgraph_data_page = Some((new_page_id.0, new_page));
+
+        Ok(())
+    }
+
+    // ================================================================
+    // PERSIST-001 Phase 5: HyperEdgeStore persistence
+    // ================================================================
+
+    /// Load all persisted hyperedge records from data pages into the in-memory
+    /// HyperEdgeStore and HyperEdgeReverseIndex.
+    #[cfg(feature = "hypergraph")]
+    fn load_hyperedges_from_pages(&mut self) -> Result<()> {
+        use page::record_serialization::{
+            deserialize_hyperedge_record, read_records_from_page, DataPageHeader,
+        };
+
+        let root_page = self.page_manager.header().hyperedge_data_root_page;
+        if root_page == 0 {
+            return Ok(());
+        }
+
+        let mut current_page_id = root_page;
+        loop {
+            let page_buf = self.page_manager.read_page(PageId(current_page_id))?;
+            let header = DataPageHeader::read_from(&page_buf);
+
+            let entries = read_records_from_page(&page_buf);
+            for (off, len) in &entries {
+                if let Some((record, deleted, _)) =
+                    deserialize_hyperedge_record(&page_buf[*off..*off + *len])
+                {
+                    if !deleted {
+                        let he_id = record.id;
+                        // Rebuild reverse index
+                        for entity in record.sources.iter().chain(record.targets.iter()) {
+                            let raw_id = match entity {
+                                cypherlite_core::GraphEntity::Node(nid) => nid.0,
+                                cypherlite_core::GraphEntity::Subgraph(sid) => sid.0,
+                                cypherlite_core::GraphEntity::HyperEdge(hid) => hid.0,
+                                cypherlite_core::GraphEntity::TemporalRef(nid, _) => nid.0,
+                            };
+                            self.hyperedge_reverse_index.add(he_id.0, raw_id);
+                        }
+                        self.hyperedge_store.insert_loaded_record(record);
+                    }
+                }
+            }
+
+            if header.next_page == 0 {
+                self.current_hyperedge_data_page = Some((current_page_id, page_buf));
+                break;
+            }
+            current_page_id = header.next_page;
+        }
+
+        Ok(())
+    }
+
+    /// Persist a hyperedge record to a data page via WAL.
+    #[cfg(feature = "hypergraph")]
+    fn persist_hyperedge(
+        &mut self,
+        _id: HyperEdgeId,
+        record: &HyperEdgeRecord,
+        deleted: bool,
+    ) -> Result<()> {
+        use page::record_serialization::{
+            pack_record_into_page, serialize_hyperedge_record, DataPageHeader,
+        };
+        use page::PageType;
+
+        let record_bytes = serialize_hyperedge_record(record, deleted);
+
+        // Try to pack into current hyperedge data page
+        if let Some((page_id, ref mut page_buf)) = self.current_hyperedge_data_page {
+            if pack_record_into_page(page_buf, &record_bytes) {
+                let db_size = self.page_manager.header().page_count;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer.commit()?;
+                return Ok(());
+            }
+        }
+
+        // Allocate new hyperedge data page
+        let new_page_id = self.page_manager.allocate_page()?;
+        let mut new_page = [0u8; PAGE_SIZE];
+        let header = DataPageHeader::new(PageType::HyperEdgeData as u8);
+        header.write_to(&mut new_page);
+
+        // Chain to previous page
+        if let Some((old_page_id, ref mut old_buf)) = self.current_hyperedge_data_page {
+            let mut old_header = DataPageHeader::read_from(old_buf);
+            old_header.next_page = new_page_id.0;
+            old_header.write_to(old_buf);
+            let db_size = self.page_manager.header().page_count;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer.commit()?;
+        }
+
+        let packed = pack_record_into_page(&mut new_page, &record_bytes);
+        debug_assert!(packed, "fresh page should always have space for a record");
+
+        let db_size = self.page_manager.header().page_count;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer.commit()?;
+
+        if self.page_manager.header().hyperedge_data_root_page == 0 {
+            self.page_manager.header_mut().hyperedge_data_root_page = new_page_id.0;
+            self.page_manager.flush_header()?;
+        }
+
+        self.current_hyperedge_data_page = Some((new_page_id.0, new_page));
+
+        Ok(())
+    }
+
+    // ================================================================
+    // PERSIST-001 Phase 5: VersionStore persistence
+    // ================================================================
+
+    /// Load all persisted version records from data pages into the in-memory
+    /// VersionStore.
+    fn load_versions_from_pages(&mut self) -> Result<()> {
+        use page::record_serialization::{
+            deserialize_version_record, read_records_from_page, DataPageHeader,
+        };
+
+        let root_page = self.page_manager.header().version_data_root_page;
+        if root_page == 0 {
+            return Ok(());
+        }
+
+        let mut current_page_id = root_page;
+        loop {
+            let page_buf = self.page_manager.read_page(PageId(current_page_id))?;
+            let header = DataPageHeader::read_from(&page_buf);
+
+            let entries = read_records_from_page(&page_buf);
+            for (off, len) in &entries {
+                if let Some((entity_id, version_seq, record, _)) =
+                    deserialize_version_record(&page_buf[*off..*off + *len])
+                {
+                    self.version_store
+                        .insert_loaded_record(entity_id, version_seq, record);
+                }
+            }
+
+            if header.next_page == 0 {
+                self.current_version_data_page = Some((current_page_id, page_buf));
+                break;
+            }
+            current_page_id = header.next_page;
+        }
+
+        Ok(())
+    }
+
+    /// Persist a version record to a data page via WAL.
+    fn persist_version(
+        &mut self,
+        entity_id: u64,
+        version_seq: u64,
+        record: &version::VersionRecord,
+    ) -> Result<()> {
+        use page::record_serialization::{
+            pack_record_into_page, serialize_version_record, DataPageHeader,
+        };
+        use page::PageType;
+
+        let record_bytes = serialize_version_record(entity_id, version_seq, record);
+
+        // Try to pack into current version data page
+        if let Some((page_id, ref mut page_buf)) = self.current_version_data_page {
+            if pack_record_into_page(page_buf, &record_bytes) {
+                let db_size = self.page_manager.header().page_count;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer.commit()?;
+                return Ok(());
+            }
+        }
+
+        // Allocate new version data page
+        let new_page_id = self.page_manager.allocate_page()?;
+        let mut new_page = [0u8; PAGE_SIZE];
+        let header = DataPageHeader::new(PageType::VersionData as u8);
+        header.write_to(&mut new_page);
+
+        // Chain to previous page
+        if let Some((old_page_id, ref mut old_buf)) = self.current_version_data_page {
+            let mut old_header = DataPageHeader::read_from(old_buf);
+            old_header.next_page = new_page_id.0;
+            old_header.write_to(old_buf);
+            let db_size = self.page_manager.header().page_count;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer.commit()?;
+        }
+
+        let packed = pack_record_into_page(&mut new_page, &record_bytes);
+        debug_assert!(packed, "fresh page should always have space for a record");
+
+        let db_size = self.page_manager.header().page_count;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer.commit()?;
+
+        if self.page_manager.header().version_data_root_page == 0 {
+            self.page_manager.header_mut().version_data_root_page = new_page_id.0;
+            self.page_manager.flush_header()?;
+        }
+
+        self.current_version_data_page = Some((new_page_id.0, new_page));
+
+        Ok(())
     }
 }
 
@@ -789,11 +1748,19 @@ impl LabelRegistry for StorageEngine {
 
 impl Drop for StorageEngine {
     fn drop(&mut self) {
+        // R-PERSIST-010: Persist catalog before closing.
+        let _ = self.save_catalog();
+        // R-PERSIST-037: On Drop, checkpoint executes, WAL deleted, then file lock released.
+        // R-PERSIST-005: Flush header to persist next_node_id/next_edge_id before checkpoint.
+        let _ = self.page_manager.flush_header();
         // Flush WAL to main database file, then delete WAL only if successful.
         // If checkpoint fails, WAL is preserved for crash recovery on next open.
         if self.checkpoint().is_ok() {
             let _ = std::fs::remove_file(self.config.wal_path());
         }
+        // Lock file is released automatically when self.lock_file is dropped.
+        // Clean up the .cyl-lock sidecar file.
+        let _ = std::fs::remove_file(self.config.path.with_extension("cyl-lock"));
     }
 }
 
@@ -962,15 +1929,18 @@ mod tests {
         {
             let mut engine = StorageEngine::open(config.clone()).expect("open");
             engine.create_node(vec![1], vec![(1, PropertyValue::String("Alice".into()))]);
-            engine.flush_header().expect("flush");
         }
 
-        // Reopen - header should preserve next_node_id
+        // Reopen - data pages loaded back into memory (R-PERSIST-005)
         {
             let engine = StorageEngine::open(config).expect("reopen");
-            // Node data is in-memory B-tree, so it won't persist across restarts
-            // without serialization. But header data (next_id) should persist.
-            assert_eq!(engine.node_count(), 0); // in-memory only for Phase 1
+            assert_eq!(engine.node_count(), 1);
+            let node = engine.get_node(NodeId(1)).expect("node should be loaded");
+            assert_eq!(node.labels, vec![1]);
+            assert_eq!(
+                node.properties[0],
+                (1, PropertyValue::String("Alice".into()))
+            );
         }
     }
 
@@ -1765,6 +2735,899 @@ mod tests {
             engine.create_hyperedge(2, vec![], vec![], vec![]);
             // After creating 2 hyperedges, next_hyperedge_id should be 3
             assert_eq!(engine.page_manager.header().next_hyperedge_id, 3);
+        }
+    }
+
+    // ======================================================================
+    // R-PERSIST-035..039: File locking tests
+    // ======================================================================
+
+    // R-PERSIST-038: Two StorageEngine instances MUST NOT open same .cyl file simultaneously
+    #[test]
+    fn test_second_open_returns_database_locked() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("lock_test.cyl");
+        let config1 = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+        let _engine1 = StorageEngine::open(config1).expect("first open should succeed");
+
+        let config2 = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+        let result = StorageEngine::open(config2);
+        match result {
+            Err(CypherLiteError::DatabaseLocked(ref msg)) => {
+                assert!(
+                    msg.contains("lock_test.cyl"),
+                    "error should contain file path: {msg}"
+                );
+            }
+            Err(other) => panic!("expected DatabaseLocked, got: {other}"),
+            Ok(_) => panic!("expected DatabaseLocked error, but open succeeded"),
+        }
+    }
+
+    // R-PERSIST-036: File lock held for entire StorageEngine lifetime, released only on Drop
+    // R-PERSIST-037: On Drop, file lock released
+    #[test]
+    fn test_drop_releases_lock_then_reopen_succeeds() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("drop_test.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Open and immediately drop
+        {
+            let _engine = StorageEngine::open(config.clone()).expect("first open");
+        }
+        // Should succeed after drop
+        let _engine2 = StorageEngine::open(config).expect("reopen after drop should succeed");
+    }
+
+    // ======================================================================
+    // TASK-019/020: R-PERSIST-001 create_node writes to WAL via data pages
+    // ======================================================================
+
+    #[test]
+    fn test_create_node_sets_node_data_root_page() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        // Before any node creation, root page should be 0
+        assert_eq!(engine.node_data_root_page(), 0);
+        engine.create_node(vec![1], vec![(1, PropertyValue::String("Alice".into()))]);
+        // After creation, a node data page should have been allocated
+        assert_ne!(engine.node_data_root_page(), 0);
+    }
+
+    #[test]
+    fn test_create_node_data_page_contains_record() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let id = engine.create_node(vec![1, 2], vec![(1, PropertyValue::String("Alice".into()))]);
+        // Read back the data page and verify the node is in it
+        let page_id = engine.node_data_root_page();
+        assert_ne!(page_id, 0);
+        let page = engine.read_data_page(page_id).expect("read page");
+        let entries = page::record_serialization::read_records_from_page(&page);
+        assert_eq!(entries.len(), 1);
+        // Deserialize and verify
+        let (off, len) = entries[0];
+        let (record, deleted, _) =
+            page::record_serialization::deserialize_node_record(&page[off..off + len])
+                .expect("deserialize");
+        assert_eq!(record.node_id, id);
+        assert_eq!(record.labels, vec![1, 2]);
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn test_create_multiple_nodes_all_persisted() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let mut ids = vec![];
+        for i in 0..5u64 {
+            let id = engine.create_node(vec![1], vec![(1, PropertyValue::Int64(i as i64))]);
+            ids.push(id);
+        }
+        // All nodes should be in data pages
+        let page_id = engine.node_data_root_page();
+        let page = engine.read_data_page(page_id).expect("read page");
+        let entries = page::record_serialization::read_records_from_page(&page);
+        assert_eq!(entries.len(), 5);
+    }
+
+    // ======================================================================
+    // TASK-021/022: R-PERSIST-002 create_edge writes to WAL via data pages
+    // ======================================================================
+
+    #[test]
+    fn test_create_edge_sets_edge_data_root_page() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        assert_eq!(engine.edge_data_root_page(), 0);
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        engine.create_edge(n1, n2, 1, vec![]).expect("edge");
+        assert_ne!(engine.edge_data_root_page(), 0);
+    }
+
+    #[test]
+    fn test_create_edge_data_page_contains_record() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let eid = engine
+            .create_edge(n1, n2, 5, vec![(1, PropertyValue::Int64(42))])
+            .expect("edge");
+        let page_id = engine.edge_data_root_page();
+        let page = engine.read_data_page(page_id).expect("read page");
+        let entries = page::record_serialization::read_records_from_page(&page);
+        assert_eq!(entries.len(), 1);
+        let (off, len) = entries[0];
+        let (record, deleted, _) =
+            page::record_serialization::deserialize_edge_record(&page[off..off + len])
+                .expect("deserialize");
+        assert_eq!(record.edge_id, eid);
+        assert_eq!(record.start_node, n1);
+        assert_eq!(record.end_node, n2);
+        assert_eq!(record.rel_type_id, 5);
+        assert!(!deleted);
+    }
+
+    // ======================================================================
+    // TASK-023/024: R-PERSIST-003 update_node writes to WAL
+    // ======================================================================
+
+    #[test]
+    fn test_update_node_rewrites_data_page() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let id = engine.create_node(vec![1], vec![(1, PropertyValue::Int64(10))]);
+        engine
+            .update_node(id, vec![(1, PropertyValue::Int64(20))])
+            .expect("update");
+        // Find the node in data pages -- should have the updated value
+        let page_id = engine.node_data_root_page();
+        let page = engine.read_data_page(page_id).expect("read page");
+        let entries = page::record_serialization::read_records_from_page(&page);
+        // Find the entry for this node (may be the latest non-deleted version)
+        let mut found = false;
+        for (off, len) in &entries {
+            let (record, deleted, _) =
+                page::record_serialization::deserialize_node_record(&page[*off..*off + *len])
+                    .expect("deserialize");
+            if record.node_id == id && !deleted {
+                assert_eq!(record.properties[0].1, PropertyValue::Int64(20));
+                found = true;
+            }
+        }
+        assert!(found, "updated node record should be in data page");
+    }
+
+    // ======================================================================
+    // TASK-025/026: R-PERSIST-004 delete_node/edge writes tombstone
+    // ======================================================================
+
+    #[test]
+    fn test_delete_node_writes_tombstone() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let id = engine.create_node(vec![1], vec![]);
+        engine.delete_node(id).expect("delete");
+        // Check that data page contains a tombstone record
+        let page_id = engine.node_data_root_page();
+        let page = engine.read_data_page(page_id).expect("read page");
+        let entries = page::record_serialization::read_records_from_page(&page);
+        let mut tombstone_found = false;
+        for (off, len) in &entries {
+            let (record, deleted, _) =
+                page::record_serialization::deserialize_node_record(&page[*off..*off + *len])
+                    .expect("deserialize");
+            if record.node_id == id && deleted {
+                tombstone_found = true;
+            }
+        }
+        assert!(
+            tombstone_found,
+            "deleted node should have a tombstone record"
+        );
+    }
+
+    #[test]
+    fn test_delete_edge_writes_tombstone() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        let n1 = engine.create_node(vec![], vec![]);
+        let n2 = engine.create_node(vec![], vec![]);
+        let eid = engine.create_edge(n1, n2, 1, vec![]).expect("edge");
+        engine.delete_edge(eid).expect("delete");
+        let page_id = engine.edge_data_root_page();
+        let page = engine.read_data_page(page_id).expect("read page");
+        let entries = page::record_serialization::read_records_from_page(&page);
+        let mut tombstone_found = false;
+        for (off, len) in &entries {
+            let (record, deleted, _) =
+                page::record_serialization::deserialize_edge_record(&page[*off..*off + *len])
+                    .expect("deserialize");
+            if record.edge_id == eid && deleted {
+                tombstone_found = true;
+            }
+        }
+        assert!(
+            tombstone_found,
+            "deleted edge should have a tombstone record"
+        );
+    }
+
+    // ======================================================================
+    // TASK-029: WAL commit verification
+    // ======================================================================
+
+    #[test]
+    fn test_create_node_wal_has_committed_frames() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        engine.create_node(vec![1], vec![(1, PropertyValue::Int64(42))]);
+        // WAL should have at least 1 committed frame (the data page write)
+        assert!(
+            engine.wal_frame_count() > 0,
+            "WAL should have committed frames"
+        );
+    }
+
+    #[test]
+    fn test_page_overflow_allocates_new_page() {
+        let dir = tempdir().expect("tempdir");
+        let mut engine = test_engine(dir.path());
+        // Create many nodes with large properties to fill a page
+        for i in 0..200u64 {
+            let big_str = "x".repeat(100);
+            engine.create_node(
+                vec![1, 2, 3],
+                vec![
+                    (1, PropertyValue::String(big_str)),
+                    (2, PropertyValue::Int64(i as i64)),
+                ],
+            );
+        }
+        // Should have allocated more than one data page
+        assert!(
+            engine.node_data_page_count() > 1,
+            "should use multiple data pages"
+        );
+    }
+
+    // ======================================================================
+    // TASK-030/031: R-PERSIST-005 close/reopen preserves nodes
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_preserves_nodes() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_nodes.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Create nodes, then close (drop triggers checkpoint)
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            engine.create_node(vec![1, 2], vec![(1, PropertyValue::String("Alice".into()))]);
+            engine.create_node(vec![3], vec![(2, PropertyValue::Int64(42))]);
+            engine.create_node(
+                vec![1],
+                vec![
+                    (1, PropertyValue::String("Charlie".into())),
+                    (3, PropertyValue::Bool(true)),
+                ],
+            );
+            assert_eq!(engine.node_count(), 3);
+            // Drop: checkpoint flushes WAL -> main file
+        }
+
+        // Phase 2: Reopen and verify all nodes are present
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            assert_eq!(
+                engine.node_count(),
+                3,
+                "all nodes should be loaded from disk"
+            );
+
+            // Verify node 1 (NodeId(1))
+            let n1 = engine.get_node(NodeId(1)).expect("node 1 should exist");
+            assert_eq!(n1.labels, vec![1, 2]);
+            assert_eq!(n1.properties.len(), 1);
+            assert_eq!(n1.properties[0], (1, PropertyValue::String("Alice".into())));
+
+            // Verify node 2 (NodeId(2))
+            let n2 = engine.get_node(NodeId(2)).expect("node 2 should exist");
+            assert_eq!(n2.labels, vec![3]);
+            assert_eq!(n2.properties[0], (2, PropertyValue::Int64(42)));
+
+            // Verify node 3 (NodeId(3))
+            let n3 = engine.get_node(NodeId(3)).expect("node 3 should exist");
+            assert_eq!(n3.labels, vec![1]);
+            assert_eq!(n3.properties.len(), 2);
+        }
+    }
+
+    // ======================================================================
+    // TASK-032/033: R-PERSIST-005 close/reopen preserves edges
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_preserves_edges() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_edges.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Create nodes and edges
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            let n1 = engine.create_node(vec![1], vec![]);
+            let n2 = engine.create_node(vec![2], vec![]);
+            let n3 = engine.create_node(vec![3], vec![]);
+            engine
+                .create_edge(n1, n2, 10, vec![(1, PropertyValue::String("since".into()))])
+                .expect("edge1");
+            engine.create_edge(n2, n3, 20, vec![]).expect("edge2");
+            assert_eq!(engine.node_count(), 3);
+            assert_eq!(engine.edge_count(), 2);
+        }
+
+        // Phase 2: Reopen and verify
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            assert_eq!(engine.node_count(), 3, "nodes should persist");
+            assert_eq!(engine.edge_count(), 2, "edges should persist");
+
+            // Verify edge 1
+            let e1 = engine.get_edge(EdgeId(1)).expect("edge 1 should exist");
+            assert_eq!(e1.start_node, NodeId(1));
+            assert_eq!(e1.end_node, NodeId(2));
+            assert_eq!(e1.rel_type_id, 10);
+            assert_eq!(e1.properties.len(), 1);
+            assert_eq!(e1.properties[0], (1, PropertyValue::String("since".into())));
+
+            // Verify edge 2
+            let e2 = engine.get_edge(EdgeId(2)).expect("edge 2 should exist");
+            assert_eq!(e2.start_node, NodeId(2));
+            assert_eq!(e2.end_node, NodeId(3));
+            assert_eq!(e2.rel_type_id, 20);
+            assert!(e2.properties.is_empty());
+        }
+    }
+
+    // ======================================================================
+    // TASK-034/035: Large dataset close/reopen
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_large_dataset() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_large.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        let node_count = 1000;
+        let edge_count = 500;
+
+        // Phase 1: Create large dataset
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            for i in 0..node_count {
+                engine.create_node(
+                    vec![(i % 5) as u32],
+                    vec![(1, PropertyValue::Int64(i as i64))],
+                );
+            }
+            // Create edges between consecutive nodes
+            for i in 0..edge_count {
+                let src = NodeId((i + 1) as u64);
+                let dst = NodeId((i + 2) as u64);
+                engine
+                    .create_edge(src, dst, 1, vec![(1, PropertyValue::Int64(i as i64))])
+                    .expect("edge");
+            }
+            assert_eq!(engine.node_count(), node_count);
+            assert_eq!(engine.edge_count(), edge_count);
+        }
+
+        // Phase 2: Reopen and verify all data
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            assert_eq!(
+                engine.node_count(),
+                node_count,
+                "all {} nodes should be loaded",
+                node_count
+            );
+            assert_eq!(
+                engine.edge_count(),
+                edge_count,
+                "all {} edges should be loaded",
+                edge_count
+            );
+
+            // Spot-check some nodes
+            let first = engine.get_node(NodeId(1)).expect("first node");
+            assert_eq!(first.properties[0], (1, PropertyValue::Int64(0)));
+            let last = engine
+                .get_node(NodeId(node_count as u64))
+                .expect("last node");
+            assert_eq!(
+                last.properties[0],
+                (1, PropertyValue::Int64((node_count - 1) as i64))
+            );
+
+            // Spot-check some edges
+            let first_edge = engine.get_edge(EdgeId(1)).expect("first edge");
+            assert_eq!(first_edge.start_node, NodeId(1));
+            assert_eq!(first_edge.end_node, NodeId(2));
+        }
+    }
+
+    // ======================================================================
+    // TASK-036: Close/reopen empty database
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_empty_database() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_empty.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Open empty, close
+        {
+            let _engine = StorageEngine::open(config.clone()).expect("open");
+        }
+
+        // Phase 2: Reopen empty database - should not crash
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            assert_eq!(engine.node_count(), 0);
+            assert_eq!(engine.edge_count(), 0);
+        }
+    }
+
+    // ======================================================================
+    // TASK-036: New node IDs continue from where they left off
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_id_continuity() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_ids.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Create 3 nodes
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            engine.create_node(vec![], vec![]);
+            engine.create_node(vec![], vec![]);
+            engine.create_node(vec![], vec![]);
+        }
+
+        // Phase 2: Reopen, create another node - should get NodeId(4)
+        {
+            let mut engine = StorageEngine::open(config).expect("reopen");
+            assert_eq!(engine.node_count(), 3);
+            let new_id = engine.create_node(vec![99], vec![]);
+            assert_eq!(new_id, NodeId(4), "new node should get next sequential ID");
+            assert_eq!(engine.node_count(), 4);
+        }
+    }
+
+    // ======================================================================
+    // TASK-037: R-PERSIST-010 close/reopen preserves catalog labels
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_preserves_catalog_labels() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_catalog.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Register labels and create a node using them
+        let person_id;
+        let company_id;
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            person_id = engine.get_or_create_label("Person");
+            company_id = engine.get_or_create_label("Company");
+            // Create a node so there is something to persist
+            engine.create_node(vec![person_id], vec![]);
+        }
+
+        // Phase 2: Reopen and verify catalog labels survived
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            assert_eq!(
+                engine.label_id("Person"),
+                Some(person_id),
+                "Person label should persist across close/reopen"
+            );
+            assert_eq!(
+                engine.label_id("Company"),
+                Some(company_id),
+                "Company label should persist across close/reopen"
+            );
+            assert_eq!(
+                engine.label_name(person_id),
+                Some("Person"),
+                "Reverse lookup should work after reopen"
+            );
+        }
+    }
+
+    // ======================================================================
+    // TASK-039: R-PERSIST-010 close/reopen preserves all catalog entries
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_preserves_all_catalog_entries() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_catalog_all.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Register labels, property keys, and relationship types
+        let label_person;
+        let label_company;
+        let prop_name;
+        let prop_age;
+        let rel_knows;
+        let rel_works_at;
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            label_person = engine.get_or_create_label("Person");
+            label_company = engine.get_or_create_label("Company");
+            prop_name = engine.get_or_create_prop_key("name");
+            prop_age = engine.get_or_create_prop_key("age");
+            rel_knows = engine.get_or_create_rel_type("KNOWS");
+            rel_works_at = engine.get_or_create_rel_type("WORKS_AT");
+            // Create some data so engine has something to persist
+            let n1 = engine.create_node(
+                vec![label_person],
+                vec![(prop_name, PropertyValue::String("Alice".into()))],
+            );
+            let n2 = engine.create_node(
+                vec![label_company],
+                vec![(prop_name, PropertyValue::String("Acme".into()))],
+            );
+            engine
+                .create_edge(n1, n2, rel_works_at, vec![])
+                .expect("edge");
+        }
+
+        // Phase 2: Reopen and verify ALL catalog entries survived
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+
+            // Labels
+            assert_eq!(engine.label_id("Person"), Some(label_person));
+            assert_eq!(engine.label_id("Company"), Some(label_company));
+            assert_eq!(engine.label_name(label_person), Some("Person"));
+            assert_eq!(engine.label_name(label_company), Some("Company"));
+
+            // Property keys
+            assert_eq!(engine.prop_key_id("name"), Some(prop_name));
+            assert_eq!(engine.prop_key_id("age"), Some(prop_age));
+            assert_eq!(engine.prop_key_name(prop_name), Some("name"));
+            assert_eq!(engine.prop_key_name(prop_age), Some("age"));
+
+            // Relationship types
+            assert_eq!(engine.rel_type_id("KNOWS"), Some(rel_knows));
+            assert_eq!(engine.rel_type_id("WORKS_AT"), Some(rel_works_at));
+            assert_eq!(engine.rel_type_name(rel_knows), Some("KNOWS"));
+            assert_eq!(engine.rel_type_name(rel_works_at), Some("WORKS_AT"));
+        }
+    }
+
+    // ======================================================================
+    // TASK-039b: Catalog ID sequence continues after reopen
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_catalog_id_continuity() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_catalog_ids.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Register 2 labels (ids 0, 1)
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            engine.get_or_create_label("Person"); // id=0
+            engine.get_or_create_label("Company"); // id=1
+        }
+
+        // Phase 2: Reopen and register a new label - should get id=2
+        {
+            let mut engine = StorageEngine::open(config).expect("reopen");
+            let new_id = engine.get_or_create_label("City");
+            assert_eq!(
+                new_id, 2,
+                "new label after reopen should continue ID sequence"
+            );
+            // Existing labels still accessible
+            assert_eq!(engine.label_id("Person"), Some(0));
+            assert_eq!(engine.label_id("Company"), Some(1));
+            assert_eq!(engine.label_id("City"), Some(2));
+        }
+    }
+
+    // ======================================================================
+    // TASK-039c: Empty catalog persistence (no labels registered)
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_empty_catalog() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_catalog_empty.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Open and close without registering any catalog entries
+        {
+            let _engine = StorageEngine::open(config.clone()).expect("open");
+        }
+
+        // Phase 2: Reopen - should not crash
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            assert_eq!(engine.label_id("anything"), None);
+            assert_eq!(engine.node_count(), 0);
+        }
+    }
+
+    // ======================================================================
+    // TASK-042/043: R-PERSIST-050 SubgraphStore persistence
+    // ======================================================================
+
+    #[cfg(feature = "subgraph")]
+    #[test]
+    fn test_close_reopen_preserves_subgraphs() {
+        use cypherlite_core::SubgraphId;
+
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_subgraphs.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Create subgraphs, then close
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            // Create subgraph with properties and temporal anchor
+            let sg1 = engine.create_subgraph(
+                vec![(1, PropertyValue::String("graph-A".into()))],
+                Some(1_700_000_000_000),
+            );
+            // Create empty subgraph
+            let sg2 = engine.create_subgraph(vec![], None);
+            // Create subgraph with multiple properties
+            let sg3 = engine.create_subgraph(
+                vec![
+                    (2, PropertyValue::Int64(42)),
+                    (3, PropertyValue::Bool(true)),
+                ],
+                Some(1_700_000_001_000),
+            );
+            assert_eq!(sg1, SubgraphId(1));
+            assert_eq!(sg2, SubgraphId(2));
+            assert_eq!(sg3, SubgraphId(3));
+        }
+
+        // Phase 2: Reopen and verify all subgraphs are present
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            // Verify subgraph 1
+            let s1 = engine.get_subgraph(SubgraphId(1)).expect("subgraph 1");
+            assert_eq!(s1.subgraph_id, SubgraphId(1));
+            assert_eq!(
+                s1.properties,
+                vec![(1, PropertyValue::String("graph-A".into()))]
+            );
+            assert_eq!(s1.temporal_anchor, Some(1_700_000_000_000));
+
+            // Verify subgraph 2
+            let s2 = engine.get_subgraph(SubgraphId(2)).expect("subgraph 2");
+            assert!(s2.properties.is_empty());
+            assert_eq!(s2.temporal_anchor, None);
+
+            // Verify subgraph 3
+            let s3 = engine.get_subgraph(SubgraphId(3)).expect("subgraph 3");
+            assert_eq!(s3.properties.len(), 2);
+            assert_eq!(s3.temporal_anchor, Some(1_700_000_001_000));
+
+            // Verify next_subgraph_id is preserved (should be 4)
+            let sg4 = engine.get_subgraph(SubgraphId(4));
+            assert!(sg4.is_none());
+        }
+    }
+
+    #[cfg(feature = "subgraph")]
+    #[test]
+    fn test_close_reopen_preserves_memberships() {
+        use cypherlite_core::SubgraphId;
+
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_memberships.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Create subgraph with members
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            let sg = engine.create_subgraph(vec![], None);
+            let n1 = engine.create_node(vec![1], vec![]);
+            let n2 = engine.create_node(vec![2], vec![]);
+            engine.add_member(sg, n1).expect("add n1");
+            engine.add_member(sg, n2).expect("add n2");
+            assert_eq!(engine.list_members(sg).len(), 2);
+        }
+
+        // Phase 2: Reopen and verify memberships
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            let members = engine.list_members(SubgraphId(1));
+            assert_eq!(members.len(), 2);
+            assert!(members.contains(&NodeId(1)));
+            assert!(members.contains(&NodeId(2)));
+        }
+    }
+
+    // ======================================================================
+    // TASK-044/045: R-PERSIST-051 HyperEdgeStore persistence
+    // ======================================================================
+
+    #[cfg(feature = "hypergraph")]
+    #[test]
+    fn test_close_reopen_preserves_hyperedges() {
+        use cypherlite_core::{GraphEntity, HyperEdgeId};
+
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_hyperedges.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            ..Default::default()
+        };
+
+        // Phase 1: Create hyperedges, then close
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            let n1 = engine.create_node(vec![1], vec![]);
+            let n2 = engine.create_node(vec![2], vec![]);
+            let n3 = engine.create_node(vec![3], vec![]);
+
+            // Create hyperedge with properties
+            let he1 = engine.create_hyperedge(
+                10,
+                vec![GraphEntity::Node(n1)],
+                vec![GraphEntity::Node(n2), GraphEntity::Node(n3)],
+                vec![(1, PropertyValue::String("rel-A".into()))],
+            );
+            // Create empty hyperedge
+            let he2 = engine.create_hyperedge(20, vec![], vec![], vec![]);
+            assert_eq!(he1, HyperEdgeId(1));
+            assert_eq!(he2, HyperEdgeId(2));
+        }
+
+        // Phase 2: Reopen and verify all hyperedges are present
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            // Verify hyperedge 1
+            let h1 = engine.get_hyperedge(HyperEdgeId(1)).expect("hyperedge 1");
+            assert_eq!(h1.id, HyperEdgeId(1));
+            assert_eq!(h1.rel_type_id, 10);
+            assert_eq!(h1.sources.len(), 1);
+            assert_eq!(h1.targets.len(), 2);
+            assert_eq!(
+                h1.properties,
+                vec![(1, PropertyValue::String("rel-A".into()))]
+            );
+
+            // Verify hyperedge 2
+            let h2 = engine.get_hyperedge(HyperEdgeId(2)).expect("hyperedge 2");
+            assert_eq!(h2.id, HyperEdgeId(2));
+            assert_eq!(h2.rel_type_id, 20);
+            assert!(h2.sources.is_empty());
+            assert!(h2.targets.is_empty());
+            assert!(h2.properties.is_empty());
+
+            // Verify nodes also persisted
+            assert_eq!(engine.node_count(), 3);
+        }
+    }
+
+    // ======================================================================
+    // TASK-046/047: R-PERSIST-052 VersionStore persistence
+    // ======================================================================
+
+    #[test]
+    fn test_close_reopen_preserves_version_store() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("persist_versions.cyl");
+        let config = DatabaseConfig {
+            path: db_path.clone(),
+            wal_sync_mode: SyncMode::Normal,
+            version_storage_enabled: true,
+            ..Default::default()
+        };
+
+        // Phase 1: Create nodes, update them to create version snapshots
+        {
+            let mut engine = StorageEngine::open(config.clone()).expect("open");
+            let n1 =
+                engine.create_node(vec![1], vec![(1, PropertyValue::String("Alice-v1".into()))]);
+            // Update node to create a version snapshot
+            engine
+                .update_node(n1, vec![(1, PropertyValue::String("Alice-v2".into()))])
+                .expect("update n1");
+            // Verify version was created before close
+            assert_eq!(engine.version_count(n1.0), 1);
+        }
+
+        // Phase 2: Reopen and verify version history is present
+        {
+            let engine = StorageEngine::open(config).expect("reopen");
+            // Node should be present with latest state
+            let n = engine.get_node(NodeId(1)).expect("node 1");
+            assert_eq!(
+                n.properties[0],
+                (1, PropertyValue::String("Alice-v2".into()))
+            );
+            // Version history should be preserved
+            assert_eq!(engine.version_count(1), 1);
+            let chain = engine.version_chain(1);
+            assert_eq!(chain.len(), 1);
         }
     }
 }
