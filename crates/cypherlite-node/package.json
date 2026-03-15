@@ -2,8 +2,8 @@
   "name": "cypherlite",
   "version": "2.0.1",
   "description": "Lightweight embedded graph database with Cypher query support",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "main": "lib.js",
+  "types": "lib.d.ts",
   "repository": {
     "type": "git",
     "url": "https://github.com/Epsilondelta-ai/CypherLite.git"
@@ -22,6 +22,8 @@
     "napi-rs"
   ],
   "files": [
+    "lib.js",
+    "lib.d.ts",
     "index.js",
     "index.d.ts",
     "README.md",

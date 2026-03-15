@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-// The native module is loaded from the build output.
+// The native module is loaded through the lib.js wrapper (package entry point).
 import {
   version,
   features,
@@ -17,7 +17,7 @@ import {
   Database,
   CylResult,
   Transaction,
-} from '../index.js';
+} from '../lib.js';
 
 // Helper: create a temporary directory for each test.
 async function createTempDir() {
@@ -371,6 +371,88 @@ describe('value types', () => {
     );
     expect(result.length).toBe(1);
     db.close();
+  });
+});
+
+// ============================================================
+// M7: Iterator Protocol (Symbol.iterator)
+// ============================================================
+
+describe('iterator protocol', () => {
+  it('should iterate rows with for...of', async () => {
+    const db = await openTempDb();
+    db.execute("CREATE (n:Person {name: 'Alice', age: 30})");
+    db.execute("CREATE (n:Person {name: 'Bob', age: 25})");
+    const result = db.execute("MATCH (n:Person) RETURN n.name, n.age");
+    const rows = [];
+    for (const row of result) {
+      rows.push(row);
+    }
+    expect(rows.length).toBe(2);
+    const names = rows.map(r => r['n.name']).sort();
+    expect(names).toEqual(['Alice', 'Bob']);
+    db.close();
+  });
+
+  it('should support spread operator', async () => {
+    const db = await openTempDb();
+    db.execute("CREATE (n:Person {name: 'Alice'})");
+    db.execute("CREATE (n:Person {name: 'Bob'})");
+    const result = db.execute("MATCH (n:Person) RETURN n.name");
+    const rows = [...result];
+    expect(rows.length).toBe(2);
+    db.close();
+  });
+
+  it('should support Array.from', async () => {
+    const db = await openTempDb();
+    db.execute("CREATE (n:Person {name: 'Alice'})");
+    const result = db.execute("MATCH (n:Person) RETURN n.name");
+    const rows = Array.from(result);
+    expect(rows.length).toBe(1);
+    expect(rows[0]['n.name']).toBe('Alice');
+    db.close();
+  });
+
+  it('should support destructuring assignment', async () => {
+    const db = await openTempDb();
+    db.execute("CREATE (n:Person {name: 'Alice', age: 30})");
+    const result = db.execute("MATCH (n:Person) RETURN n.name, n.age");
+    const [first] = result;
+    expect(first['n.name']).toBe('Alice');
+    expect(first['n.age']).toBe(30);
+    db.close();
+  });
+
+  it('should yield nothing for empty result', async () => {
+    const db = await openTempDb();
+    const result = db.execute("MATCH (n:Ghost) RETURN n");
+    const rows = [...result];
+    expect(rows.length).toBe(0);
+    db.close();
+  });
+
+  it('should be re-iterable', async () => {
+    const db = await openTempDb();
+    db.execute("CREATE (n:Person {name: 'Alice'})");
+    const result = db.execute("MATCH (n:Person) RETURN n.name");
+    const first = [...result];
+    const second = [...result];
+    expect(first.length).toBe(1);
+    expect(second.length).toBe(1);
+    expect(first[0]['n.name']).toBe(second[0]['n.name']);
+    db.close();
+  });
+
+  it('should iterate after database is closed (data is cached in Rust memory)', async () => {
+    const db = await openTempDb();
+    db.execute("CREATE (n:Person {name: 'Alice'})");
+    const result = db.execute("MATCH (n:Person) RETURN n.name");
+    db.close();
+    // Result rows are materialized in Rust Vec and survive db.close().
+    const rows = [...result];
+    expect(rows.length).toBe(1);
+    expect(rows[0]['n.name']).toBe('Alice');
   });
 });
 
