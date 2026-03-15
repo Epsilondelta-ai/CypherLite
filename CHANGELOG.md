@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-03-16
+
+### Added
+
+- **Node.js Iterator Protocol**: `CylResult` now implements `Symbol.iterator`, enabling `for...of` loops, spread operator (`[...result]`), `Array.from()`, and destructuring on query results
+- `lib.js` wrapper for runtime patching of napi-rs auto-generated bindings
+- `lib.d.ts` with module augmentation declaring `Iterable<Record<string, any>>` on `CylResult` (survives `napi build` regeneration)
+- 7 new iterator test cases (42 total)
+
 ## [2.0.1] - 2026-03-16
 
 ### Changed

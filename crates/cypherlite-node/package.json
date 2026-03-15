@@ -1,6 +1,6 @@
 {
   "name": "cypherlite",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Lightweight embedded graph database with Cypher query support",
   "main": "lib.js",
   "types": "lib.d.ts",
