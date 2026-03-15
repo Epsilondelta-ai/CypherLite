@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-03-16
+
+### SPEC Reference
+
+- **SPEC-PERSIST-001**: Data Persistence Layer
+
+### Added
+
+- **Data Persistence Layer (SPEC-PERSIST-001)**: WAL-based durable storage for all graph data. close/reopen now preserves nodes, edges, properties, catalog, and feature-gated stores.
+- Exclusive file locking (fs2) prevents concurrent database access
+- Record serialization for NodeRecord, EdgeRecord, SubgraphRecord, HyperEdgeRecord, VersionRecord
+- DatabaseHeader extended with root page pointers (FORMAT_VERSION 7)
+- FFI error code CylErrDatabaseLocked
+
 ## [1.2.0] - 2026-03-15
 
 ### SPEC Reference
