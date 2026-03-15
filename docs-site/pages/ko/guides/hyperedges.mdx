@@ -1,0 +1,143 @@
+---
+title: 하이퍼엣지
+description: CypherLite 하이퍼엣지를 사용하여 임의 수의 노드를 연결하는 N:M 관계를 모델링합니다.
+---
+
+import { Callout } from 'nextra/components'
+
+# 하이퍼엣지
+
+표준 그래프 엣지는 정확히 두 개의 노드(소스와 타겟)를 연결합니다. CypherLite의 하이퍼엣지는 이를 확장하여 단일 관계에서 **임의 수의 노드**를 연결할 수 있게 하며, N:M 관계 모델링을 가능하게 합니다.
+
+<Callout type="info">
+하이퍼엣지는 `hypergraph` 기능 플래그가 필요하며, `subgraph` 플래그도 함께 필요합니다:
+```toml
+cypherlite-query = { version = "1.2", features = ["hypergraph"] }
+```
+</Callout>
+
+## 개요
+
+하이퍼엣지는 임의의 노드 집합을 연결하는 관계입니다. 단일 소스와 타겟 대신, 하이퍼엣지는 참여 노드로 구성된 **멤버 집합**을 갖습니다.
+
+주요 개념:
+
+- 2개 이상의 노드를 연결하는 **N:M 관계**
+- 생성과 쿼리를 위한 **HYPEREDGE 구문**
+- 각 멤버의 **TemporalRef** 메타데이터
+- 일반 엣지와 동일한 하이퍼엣지 프로퍼티
+
+## 하이퍼엣지 생성
+
+`CREATE HYPEREDGE` 구문을 사용합니다:
+
+```cypher
+CREATE HYPEREDGE :MEETING CONNECTING
+  (a:Person {name: 'Alice'}),
+  (b:Person {name: 'Bob'}),
+  (c:Person {name: 'Charlie'})
+SET _.date = '2024-03-15', _.topic = 'Q1 Review'
+```
+
+세 개의 `Person` 노드를 연결하는 단일 `MEETING` 하이퍼엣지를 생성합니다.
+
+### 하이퍼엣지 프로퍼티
+
+하이퍼엣지는 일반 엣지와 동일한 프로퍼티 타입을 지원합니다:
+
+```cypher
+CREATE HYPEREDGE :COLLABORATION CONNECTING
+  (a:Researcher {name: 'Dr. Smith'}),
+  (b:Researcher {name: 'Dr. Jones'}),
+  (c:Institution {name: 'MIT'})
+SET _.paper = 'Graph Theory', _.year = 2024
+```
+
+## 하이퍼엣지 쿼리
+
+하이퍼엣지로 연결된 노드를 매칭합니다:
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE h.topic = 'Q1 Review'
+RETURN p.name, h.date
+```
+
+### 멤버 수로 필터링
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE size(members(h)) >= 3
+RETURN h.topic, count(p) AS attendees
+```
+
+## 사용 사례
+
+### 그룹 이벤트
+
+여러 참가자가 관련된 이벤트를 모델링합니다:
+
+```cypher
+CREATE HYPEREDGE :TRANSACTION CONNECTING
+  (buyer:Account {id: 'A001'}),
+  (seller:Account {id: 'A002'}),
+  (broker:Account {id: 'A003'})
+SET _.amount = 50000, _.currency = 'USD'
+```
+
+### 공동 저자
+
+다중 저자 논문을 모델링합니다:
+
+```cypher
+CREATE HYPEREDGE :AUTHORED CONNECTING
+  (a1:Author {name: 'Alice'}),
+  (a2:Author {name: 'Bob'}),
+  (p:Paper {title: 'Graph Databases'})
+SET _.role_a1 = 'lead', _.role_a2 = 'contributor'
+```
+
+### 공급망
+
+다자간 공급망 관계를 모델링합니다:
+
+```cypher
+CREATE HYPEREDGE :SHIPMENT CONNECTING
+  (supplier:Company {name: 'SupplyCo'}),
+  (carrier:Company {name: 'LogiCorp'}),
+  (warehouse:Location {name: 'Warehouse A'}),
+  (customer:Company {name: 'RetailInc'})
+SET _.tracking_id = 'SH-2024-001'
+```
+
+## TemporalRef
+
+하이퍼엣지의 각 멤버는 해당 하이퍼엣지에 가입하거나 탈퇴한 시점의 메타데이터를 담은 `TemporalRef`를 가집니다:
+
+| 필드 | 설명 |
+|-------|-------------|
+| `node_id` | 참여 노드의 ID |
+| `joined_at` | 노드가 하이퍼엣지에 추가된 타임스탬프 |
+| `left_at` | 노드가 제거된 타임스탬프 (활성 상태이면 null) |
+
+하이퍼엣지 멤버십에 대한 시간 여행 쿼리가 가능합니다:
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE p._joined_at > '2024-01-01'
+RETURN h.topic, p.name
+```
+
+## 하이퍼엣지 vs 일반 엣지
+
+| 특성 | 일반 엣지 | 하이퍼엣지 |
+|---------|-------------|-----------|
+| 멤버 | 정확히 2개 (소스, 타겟) | 2개 이상 (N:M) |
+| 방향 | 방향성 (소스 -> 타겟) | 무방향 (멤버 집합) |
+| 구문 | `CREATE (a)-[:TYPE]->(b)` | `CREATE HYPEREDGE :TYPE CONNECTING (a), (b), (c)` |
+| 시간 여행 | 엣지 수준 타임스탬프 | 멤버별 TemporalRef |
+| 기능 플래그 | 없음 (항상 사용 가능) | `hypergraph` (`subgraph` 필요) |
+
+<Callout type="warning">
+하이퍼엣지는 각 멤버가 자체 TemporalRef 메타데이터를 가지므로 일반 엣지보다 스토리지 오버헤드가 증가합니다. 이진 관계로 충분할 때는 일반 엣지를 사용하세요.
+</Callout>

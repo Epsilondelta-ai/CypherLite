@@ -1,0 +1,142 @@
+---
+title: Rust 快速入门
+description: 使用 Cargo 安装并使用 CypherLite Rust crate。
+---
+
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+# Rust 快速入门
+
+CypherLite 是一个原生 Rust 库。通过 Cargo 将其添加到您的项目中，几分钟内即可开始处理图数据。
+
+## 安装
+
+<Steps>
+
+### 添加依赖
+
+将 `cypherlite-query` 添加到您的 `Cargo.toml`：
+
+```toml
+[dependencies]
+cypherlite-query = "1.2"
+```
+
+启用可选功能：
+
+```toml
+[dependencies]
+cypherlite-query = { version = "1.2", features = ["temporal-edge", "plugin"] }
+```
+
+### 可用功能标志
+
+| 标志 | 描述 |
+|------|-------------|
+| `temporal-core` | 时态图支持（默认启用） |
+| `temporal-edge` | 时态边属性 |
+| `subgraph` | 子图提取 |
+| `hypergraph` | 超图支持（依赖 `subgraph`） |
+| `full-temporal` | 所有时态功能 |
+| `plugin` | 插件系统 |
+
+### 构建项目
+
+```bash
+cargo build
+```
+
+</Steps>
+
+## 基本用法
+
+### 打开数据库
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Open or create a database file
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    // Use the database...
+
+    Ok(())
+}
+```
+
+<Callout type="info">
+CypherLite 在数据库文件不存在时会自动创建。按照约定，文件使用 `.cyl` 扩展名。
+</Callout>
+
+### 创建节点和关系
+
+```rust
+// Create nodes with labels and properties
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+
+// Create a relationship between nodes
+db.execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+     CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+)?;
+```
+
+### 查询数据
+
+```rust
+let result = db.execute(
+    "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age ORDER BY p.age DESC"
+)?;
+
+for row in result {
+    let row = row?;
+    let name = row.get("p.name").unwrap();
+    let age = row.get("p.age").unwrap();
+    println!("{}: {}", name, age);
+}
+```
+
+### 更新属性
+
+```rust
+db.execute(
+    "MATCH (p:Person {name: 'Alice'}) SET p.age = 31"
+)?;
+```
+
+### 删除节点和关系
+
+```rust
+// Delete a relationship
+db.execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'}) DELETE r"
+)?;
+
+// Delete a node (must have no relationships)
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p")?;
+```
+
+## 支持的 Cypher 操作
+
+CypherLite 支持 openCypher 子集：
+
+- `MATCH` - 节点和关系的模式匹配
+- `CREATE` - 创建节点和关系
+- `MERGE` - 不存在则创建，存在则匹配
+- `SET` - 更新属性
+- `DELETE` - 删除节点和关系
+- `RETURN` - 指定输出列
+- `WHERE` - 过滤条件
+- `WITH` - 链接查询部分
+- `ORDER BY` - 排序结果
+
+## API 文档
+
+完整的 Rust API 文档可在 [docs.rs](https://docs.rs/cypherlite-query) 上查阅。
+
+## 系统要求
+
+- **Rust**：1.84+（MSRV）
+- **平台**：Linux、macOS、Windows

@@ -1,0 +1,115 @@
+---
+title: Node.js 快速入门
+description: 通过 napi-rs 安装并使用 CypherLite Node.js 绑定。
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Node.js 快速入门
+
+CypherLite 提供基于 [napi-rs](https://napi.rs) 构建的 Node.js 绑定，提供原生 N-API 插件以实现高性能图数据库操作。
+
+## 安装
+
+<Steps>
+
+### 通过 npm 安装
+
+```bash
+npm install cypherlite
+```
+
+### 验证安装
+
+```js
+const { open } = require("cypherlite");
+console.log("CypherLite loaded successfully");
+```
+
+</Steps>
+
+<Callout type="info">
+预编译的原生插件适用于 Linux、macOS 和 Windows。如果没有可用的预编译二进制文件，npm 将尝试从源代码构建（需要 Rust 工具链）。
+</Callout>
+
+## 基本用法
+
+### 打开数据库
+
+```js
+const { open } = require("cypherlite");
+
+const db = open("my_graph.cyl");
+```
+
+### 创建节点和关系
+
+```js
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})");
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})");
+db.execute(
+  "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) " +
+  "CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+);
+```
+
+### 查询数据
+
+```js
+const result = db.execute("MATCH (n:Person) RETURN n.name, n.age");
+for (const row of result) {
+  console.log(`${row["n.name"]} (age: ${row["n.age"]})`);
+}
+```
+
+### 更新和删除
+
+```js
+// Update properties
+db.execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 31");
+
+// Delete a relationship
+db.execute(
+  "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b) DELETE r"
+);
+
+// Delete a node
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p");
+```
+
+### 关闭数据库
+
+```js
+db.close();
+```
+
+<Callout type="warning">
+使用完毕后请务必调用 `db.close()` 以确保所有数据已刷新到磁盘并释放原生资源。
+</Callout>
+
+## ES 模块支持
+
+CypherLite 也支持 ES 模块：
+
+```js
+import { open } from "cypherlite";
+
+const db = open("my_graph.cyl");
+// ... use the database
+db.close();
+```
+
+## 从源代码构建
+
+如果您需要从源代码构建原生插件：
+
+```bash
+cd crates/cypherlite-node
+npx napi build --release
+```
+
+## 系统要求
+
+- **Node.js**：18+（N-API v9）
+- **平台**：Linux、macOS、Windows
+- **从源代码构建**：需要 Rust 1.84+ 工具链

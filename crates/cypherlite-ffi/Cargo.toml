@@ -1,9 +1,15 @@
 [package]
 name = "cypherlite-ffi"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.84"
-description = "C ABI FFI bindings for CypherLite embedded graph database"
+description = "C ABI foreign function interface bindings for CypherLite graph database"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Epsilondelta-ai/CypherLite"
+homepage = "https://github.com/Epsilondelta-ai/CypherLite"
+keywords = ["ffi", "c-abi", "bindings", "graph-database", "embedded"]
+categories = ["database-implementations", "data-structures"]
+readme = "../../README.md"
 
 [lib]
 crate-type = ["cdylib", "staticlib"]
@@ -18,9 +24,13 @@ full-temporal = ["hypergraph", "cypherlite-query/full-temporal", "cypherlite-cor
 plugin = ["cypherlite-query/plugin", "cypherlite-core/plugin"]
 
 [dependencies]
-cypherlite-query = { path = "../cypherlite-query" }
-cypherlite-core = { path = "../cypherlite-core" }
+cypherlite-query = { version = "1.2.0", path = "../cypherlite-query" }
+cypherlite-core = { version = "1.2.0", path = "../cypherlite-core" }
 libc = "0.2"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 tempfile = "3"

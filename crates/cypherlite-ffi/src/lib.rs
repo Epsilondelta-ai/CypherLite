@@ -1,15 +1,22 @@
-// CypherLite FFI: C ABI bindings for the CypherLite embedded graph database.
-//
-// This crate provides a C-compatible interface wrapping the cypherlite-query
-// public API. All functions use `extern "C"` calling convention and follow
-// null-safe, error-out patterns suitable for consumption by C, Go, Python,
-// and Node.js callers.
+#![warn(missing_docs)]
+//! C ABI bindings for the CypherLite embedded graph database.
+//!
+//! This crate provides a C-compatible interface wrapping the `cypherlite-query`
+//! public API. All functions use `extern "C"` calling convention and follow
+//! null-safe, error-out patterns suitable for consumption by C, Go, Python,
+//! and Node.js callers.
 
+/// Database lifecycle: open, close, and configuration.
 pub mod db;
+/// Error codes, thread-local error strings, and helper utilities.
 pub mod error;
+/// Direct query execution against a database handle.
 pub mod query;
+/// Query result iteration: columns, rows, and cell access.
 pub mod result;
+/// Transaction begin, execute, commit, and rollback.
 pub mod transaction;
+/// Value type conversions between C (`CylValue`) and Rust (`Value`).
 pub mod value;
 
 /// Library version string (null-terminated).

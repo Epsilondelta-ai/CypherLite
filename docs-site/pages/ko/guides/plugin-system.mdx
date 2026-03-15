@@ -1,0 +1,200 @@
+---
+title: 플러그인 시스템
+description: 사용자 정의 함수, 인덱스, 시리얼라이저, 트리거로 CypherLite를 확장합니다.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# 플러그인 시스템
+
+CypherLite의 플러그인 시스템으로 데이터베이스 엔진에 커스텀 기능을 추가할 수 있습니다. 네 가지 플러그인 타입이 제공되며, 각각 다른 확장 지점을 담당합니다.
+
+<Callout type="info">
+플러그인 시스템은 `plugin` 기능 플래그가 필요합니다. cfg 게이트로 제어되며 비활성화 시 오버헤드가 없습니다.
+</Callout>
+
+## 플러그인 타입
+
+| 타입 | 용도 | 사용 사례 |
+|------|---------|-----------------|
+| **ScalarFunction** | Cypher 표현식에서 호출 가능한 커스텀 쿼리 함수 | 문자열 조작, 수학 함수, 해시 계산 |
+| **IndexPlugin** | 플러그 가능한 커스텀 인덱스 구현 | HNSW 벡터 인덱스, 전문 검색, 공간 인덱스 |
+| **Serializer** | 커스텀 임포트/익스포트 형식 플러그인 | JSON-LD 익스포트, GraphML 임포트, CSV 벌크 로더 |
+| **Trigger** | CREATE, DELETE, SET 작업의 전후 훅 | 감사 로깅, 유효성 검사, 캐스케이드 작업 |
+
+## ScalarFunction
+
+Cypher 쿼리에서 호출할 수 있는 커스텀 함수를 등록합니다:
+
+```rust
+use cypherlite_core::plugin::{Plugin, ScalarFunction};
+use cypherlite_core::Value;
+
+struct UpperCase;
+
+impl Plugin for UpperCase {
+    fn name(&self) -> &str { "upper" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Converts a string to uppercase" }
+}
+
+impl ScalarFunction for UpperCase {
+    fn execute(&self, args: &[Value]) -> Result<Value, String> {
+        match &args[0] {
+            Value::String(s) => Ok(Value::String(s.to_uppercase())),
+            _ => Err("Expected a string argument".into()),
+        }
+    }
+}
+```
+
+등록 후 쿼리에서 사용할 수 있습니다:
+
+```cypher
+MATCH (p:Person)
+RETURN upper(p.name) AS upper_name
+```
+
+## IndexPlugin
+
+특정 쿼리 패턴을 위한 커스텀 인덱스를 구현합니다:
+
+```rust
+use cypherlite_core::plugin::{Plugin, IndexPlugin};
+
+struct HnswIndex { /* ... */ }
+
+impl Plugin for HnswIndex {
+    fn name(&self) -> &str { "hnsw_vector" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "HNSW approximate nearest neighbor index" }
+}
+
+impl IndexPlugin for HnswIndex {
+    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<(), String> {
+        // Add vector to HNSW graph
+        Ok(())
+    }
+
+    fn search(&self, query: &[u8], limit: usize) -> Result<Vec<Vec<u8>>, String> {
+        // Find approximate nearest neighbors
+        Ok(vec![])
+    }
+}
+```
+
+## Serializer
+
+커스텀 임포트/익스포트 형식을 만듭니다:
+
+```rust
+use cypherlite_core::plugin::{Plugin, Serializer};
+
+struct JsonLdExporter;
+
+impl Plugin for JsonLdExporter {
+    fn name(&self) -> &str { "jsonld" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Export graph data as JSON-LD" }
+}
+
+impl Serializer for JsonLdExporter {
+    fn serialize(&self, graph: &GraphData) -> Result<Vec<u8>, String> {
+        // Convert graph to JSON-LD format
+        Ok(vec![])
+    }
+
+    fn deserialize(&self, data: &[u8]) -> Result<GraphData, String> {
+        // Parse JSON-LD into graph data
+        Ok(GraphData::default())
+    }
+}
+```
+
+## Trigger
+
+데이터 수정 작업에 대한 전후 훅을 추가합니다:
+
+```rust
+use cypherlite_core::plugin::{Plugin, Trigger, TriggerEvent, TriggerTiming};
+
+struct AuditLogger;
+
+impl Plugin for AuditLogger {
+    fn name(&self) -> &str { "audit_log" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Logs all data modifications" }
+}
+
+impl Trigger for AuditLogger {
+    fn timing(&self) -> TriggerTiming {
+        TriggerTiming::After
+    }
+
+    fn events(&self) -> &[TriggerEvent] {
+        &[TriggerEvent::Create, TriggerEvent::Delete, TriggerEvent::Set]
+    }
+
+    fn execute(&self, event: &TriggerEvent, context: &TriggerContext) -> Result<(), String> {
+        println!("[AUDIT] {:?} on {:?}", event, context.target());
+        Ok(())
+    }
+}
+```
+
+<Callout type="warning">
+Before-trigger는 `Err`를 반환하여 작업을 중단할 수 있으며, 이 경우 현재 트랜잭션의 롤백이 트리거됩니다. 유효성 검사 로직에 활용하세요.
+</Callout>
+
+## 플러그인 레지스트리
+
+모든 플러그인은 제네릭 `PluginRegistry<T>`를 통해 관리됩니다:
+
+```rust
+use cypherlite_core::plugin::PluginRegistry;
+
+let mut registry = PluginRegistry::new();
+registry.register(Box::new(UpperCase));
+registry.register(Box::new(AuditLogger));
+
+// Look up a plugin by name
+if let Some(plugin) = registry.get("upper") {
+    println!("Found: {}", plugin.description());
+}
+```
+
+레지스트리는 스레드 안전하며 (`Send + Sync`), 내부적으로 `HashMap`을 사용하여 이름으로 O(1) 조회를 제공합니다.
+
+## Trigger 조회
+
+Trigger의 경우 전용 `TriggerLookup` trait으로 이벤트 타입별 효율적 조회가 가능합니다:
+
+```rust
+// Find all triggers for CREATE events
+let triggers = registry.triggers_for(TriggerEvent::Create);
+for trigger in triggers {
+    trigger.execute(&event, &context)?;
+}
+```
+
+## 모범 사례
+
+<Steps>
+
+### 플러그인의 단일 책임 유지
+
+각 플러그인은 한 가지 일을 잘 수행해야 합니다. 하나의 큰 플러그인보다 여러 개의 작은 플러그인을 선호하세요.
+
+### 에러 처리를 우아하게
+
+항상 의미 있는 에러 메시지를 반환하세요. 플러그인 에러는 호출자에게 전파됩니다.
+
+### 플러그인을 독립적으로 테스트
+
+각 플러그인에 대한 유닛 테스트를 작성하세요. 플러그인 trait은 전체 데이터베이스 인스턴스 없이도 쉽게 테스트할 수 있도록 설계되었습니다.
+
+### 기능 플래그 활용
+
+`plugin` 기능 플래그는 플러그인이 필요하지 않을 때 제로 오버헤드를 보장합니다. 플러그인 지원이 필요한 빌드에서만 활성화하세요.
+
+</Steps>

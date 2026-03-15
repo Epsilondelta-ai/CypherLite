@@ -35,7 +35,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a RETURN clause (TASK-029, TASK-030).
     ///
-    /// Grammar: RETURN [DISTINCT] items [ORDER BY order_items] [SKIP expr] [LIMIT expr]
+    /// Grammar: `RETURN [DISTINCT] items [ORDER BY order_items] [SKIP expr] [LIMIT expr]`
     pub fn parse_return_clause(&mut self) -> Result<ReturnClause, ParseError> {
         self.expect(&Token::Return)?;
 
@@ -127,7 +127,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a WITH clause (P2 syntax -- parsed but execution returns UnsupportedSyntax).
     ///
-    /// Grammar: WITH [DISTINCT] items [WHERE expression]
+    /// Grammar: `WITH [DISTINCT] items [WHERE expression]`
     pub fn parse_with_clause(&mut self) -> Result<WithClause, ParseError> {
         self.expect(&Token::With)?;
 
@@ -208,7 +208,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a CREATE INDEX clause (TASK-098).
     ///
-    /// Grammar: CREATE INDEX [name] ON :Label(property)
+    /// Grammar: `CREATE INDEX [name] ON :Label(property)`
     /// The parser has already consumed CREATE and is positioned at INDEX.
     pub fn parse_create_index_clause(&mut self) -> Result<CreateIndexClause, ParseError> {
         self.expect(&Token::Index)?;
@@ -236,7 +236,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a CREATE EDGE INDEX clause (CC-T3).
     ///
-    /// Grammar: CREATE EDGE INDEX [name] ON :RelType(property)
+    /// Grammar: `CREATE EDGE INDEX [name] ON :RelType(property)`
     /// The parser has already consumed CREATE and is positioned at EDGE.
     pub fn parse_create_edge_index_clause(&mut self) -> Result<CreateIndexClause, ParseError> {
         self.expect(&Token::Edge)?;

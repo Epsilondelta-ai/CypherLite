@@ -1,0 +1,163 @@
+---
+title: 架构
+description: CypherLite 内部架构、crate 结构和查询执行流水线。
+---
+
+import { Callout } from 'nextra/components'
+
+# 架构
+
+CypherLite 采用分层架构组织，由四个 Rust crate 组成，每个 crate 负责不同的关注点。
+
+## 五层架构
+
+```
++--------------------------------------------------+
+|              应用层                                |
+|   Rust API  |  Python  |  Go  |  Node.js  |  C   |
++--------------------------------------------------+
+|              FFI 层 (cypherlite-ffi)               |
+|   C ABI  |  PyO3  |  CGo  |  napi-rs              |
++--------------------------------------------------+
+|           查询引擎 (cypherlite-query)              |
+|   Parser  |  Analyzer  |  Optimizer  |  Executor   |
++--------------------------------------------------+
+|            核心层 (cypherlite-core)                 |
+|   图模型  |  时态  |  插件系统                      |
++--------------------------------------------------+
+|         存储引擎 (cypherlite-storage)              |
+|   B+Tree  |  WAL  |  BufferPool  |  PageManager    |
++--------------------------------------------------+
+```
+
+## Crate 依赖图
+
+```
+cypherlite-ffi
+    |
+    v
+cypherlite-query
+    |
+    v
+cypherlite-core
+    |
+    v
+cypherlite-storage
+```
+
+每个 crate 仅依赖其直接下层，确保清晰的关注点分离：
+
+| Crate | 职责 |
+|-------|---------------|
+| **cypherlite-storage** | 磁盘 I/O、页面管理、B+Tree 索引、WAL、缓冲池、崩溃恢复 |
+| **cypherlite-core** | 图数据模型、属性类型、时态版本控制、子图、超边、插件 trait |
+| **cypherlite-query** | Cypher 解析器、语义分析、基于代价的优化器、volcano 执行器 |
+| **cypherlite-ffi** | C ABI 导出、PyO3 绑定、CGo 桥接、napi-rs 插件 |
+
+## 存储引擎
+
+存储引擎负责所有图数据的持久化存储。
+
+### B+Tree 索引
+
+- 节点和边的 O(log n) 查找
+- 无索引邻接用于关系遍历
+- 支持有序属性访问的范围扫描
+
+### 预写日志（WAL）
+
+- 所有变更在应用到数据页之前先写入 WAL
+- 启动时崩溃恢复重放未提交的 WAL 帧
+- 单写入器/多读取器并发模型
+
+### 缓冲池
+
+- LRU 页面缓存位于查询引擎和磁盘之间
+- 脏页追踪与批量回写
+- 可配置缓存大小，平衡内存与 I/O
+
+### 页面管理器
+
+- 固定大小的页面分配和释放
+- 空闲列表管理用于空间重用
+- 基于 `parking_lot` 的页级锁
+
+## 查询执行流水线
+
+一条 Cypher 查询在产生结果前经过四个阶段：
+
+```
+Cypher 字符串
+    |
+    v
++-------------------+
+|   1. 解析器       |  递归下降解析，Pratt 表达式解析
++-------------------+  输出：抽象语法树（AST）
+    |
+    v
++-------------------+
+|   2. 分析器       |  变量作用域验证，标签/类型解析
++-------------------+  输出：带语义信息的验证 AST
+    |
+    v
++-------------------+
+|   3. 优化器       |  逻辑到物理计划，谓词下推
++-------------------+  输出：物理执行计划
+    |
+    v
++-------------------+
+|   4. 执行器       |  Volcano 迭代器模型，12 个算子
++-------------------+  输出：结果行（流式）
+```
+
+### 解析器
+
+- 手写递归下降解析器（非解析器生成器）
+- Pratt 解析处理表达式优先级
+- 支持 28+ 个 Cypher 关键字
+- 内联属性过滤：`MATCH (n:Label {key: value})`
+
+### 语义分析器
+
+- 跨 `WITH` 边界的变量作用域验证
+- 标签和关系类型解析
+- 属性比较的类型检查
+
+### 基于代价的优化器
+
+- 逻辑到物理计划转换
+- 谓词下推以减少中间元组
+- 基于可用 B+Tree 索引的索引选择
+- 多模式 MATCH 的连接顺序优化
+
+### Volcano 执行器
+
+- 基于迭代器的拉取模型（惰性求值）
+- 12 个物理算子：Scan、IndexScan、Filter、Project、Sort、Limit、Join、Create、Delete、Set、Merge、Aggregate
+- 按照 openCypher 规范的三值逻辑 NULL 传播
+
+## 并发模型
+
+CypherLite 使用受 SQLite 启发的**单写入器/多读取器**模型：
+
+- 同一时间只有一个写事务（通过互斥锁序列化）
+- 多个并发读事务
+- 基于 WAL 的快照隔离确保读取器看到一致的视图
+- 写入期间不阻塞读取（读取器使用 WAL 帧索引）
+
+<Callout type="info">
+此并发模型适用于数据库从单个进程访问的嵌入式使用场景。对于多进程访问，请使用文件锁（操作系统级别）。
+</Callout>
+
+## 功能标志
+
+CypherLite 使用 Cargo 功能标志在编译时启用可选功能：
+
+| 标志 | 默认 | Crate | 描述 |
+|------|---------|-------|-------------|
+| `temporal-core` | 是 | core | 时态图支持 |
+| `temporal-edge` | 否 | core | 时态边属性 |
+| `subgraph` | 否 | core | 命名子图实体 |
+| `hypergraph` | 否 | core | N:M 超边关系（依赖 `subgraph`） |
+| `full-temporal` | 否 | core | 所有时态功能 |
+| `plugin` | 否 | core | 插件系统（ScalarFunction、IndexPlugin、Serializer、Trigger） |

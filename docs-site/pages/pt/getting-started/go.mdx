@@ -1,0 +1,107 @@
+---
+title: Getting Started with Go
+description: Install and use CypherLite Go bindings via CGo.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started with Go
+
+CypherLite provides Go bindings via CGo, wrapping the C ABI static library for use in Go applications.
+
+## Installation
+
+<Steps>
+
+### Install with go get
+
+```bash
+go get github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite
+```
+
+### Prerequisites
+
+- Go 1.21 or later
+- Rust toolchain (to build the C static library)
+- A C compiler for CGo (gcc or clang)
+
+</Steps>
+
+<Callout type="info">
+The Go bindings use CGo to link against the CypherLite C static library. The library is built automatically during `go get` if a pre-built binary is not available for your platform.
+</Callout>
+
+## Basic Usage
+
+### Open a Database
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite"
+)
+
+func main() {
+    db, err := cypherlite.Open("my_graph.cyl")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+}
+```
+
+### Create Nodes and Relationships
+
+```go
+db.Execute("CREATE (a:Person {name: 'Alice', age: 30})")
+db.Execute("CREATE (b:Person {name: 'Bob', age: 25})")
+db.Execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) " +
+    "CREATE (a)-[:KNOWS {since: 2023}]->(b)",
+)
+```
+
+### Query Data
+
+```go
+result, err := db.Execute("MATCH (n:Person) RETURN n.name, n.age")
+if err != nil {
+    log.Fatal(err)
+}
+
+for result.Next() {
+    row := result.Row()
+    name, _ := row.GetString("n.name")
+    age, _ := row.GetInt64("n.age")
+    fmt.Printf("%s (age: %d)\n", name, age)
+}
+```
+
+### Update and Delete
+
+```go
+// Update properties
+db.Execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 31")
+
+// Delete a relationship
+db.Execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b) DELETE r",
+)
+
+// Delete a node
+db.Execute("MATCH (p:Person {name: 'Bob'}) DELETE p")
+```
+
+<Callout type="warning">
+Always call `defer db.Close()` to ensure resources are properly released and data is flushed to disk.
+</Callout>
+
+## Requirements
+
+- **Go**: 1.21+
+- **Build**: Rust 1.84+ toolchain and C compiler (for CGo)
+- **Platform**: Linux, macOS, Windows

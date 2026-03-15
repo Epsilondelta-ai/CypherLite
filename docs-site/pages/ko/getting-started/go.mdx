@@ -1,0 +1,107 @@
+---
+title: Go 시작하기
+description: CGo를 통해 CypherLite Go 바인딩을 설치하고 사용합니다.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Go 시작하기
+
+CypherLite는 CGo를 통해 Go 바인딩을 제공하며, Go 애플리케이션에서 사용할 수 있도록 C ABI 정적 라이브러리를 래핑합니다.
+
+## 설치
+
+<Steps>
+
+### go get으로 설치
+
+```bash
+go get github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite
+```
+
+### 사전 요구사항
+
+- Go 1.21 이상
+- Rust 툴체인 (C 정적 라이브러리 빌드용)
+- CGo용 C 컴파일러 (gcc 또는 clang)
+
+</Steps>
+
+<Callout type="info">
+Go 바인딩은 CGo를 사용하여 CypherLite C 정적 라이브러리를 링크합니다. 플랫폼에 맞는 사전 빌드 바이너리가 없는 경우, `go get` 과정에서 라이브러리가 자동으로 빌드됩니다.
+</Callout>
+
+## 기본 사용법
+
+### 데이터베이스 열기
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite"
+)
+
+func main() {
+    db, err := cypherlite.Open("my_graph.cyl")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+}
+```
+
+### 노드와 관계 생성
+
+```go
+db.Execute("CREATE (a:Person {name: 'Alice', age: 30})")
+db.Execute("CREATE (b:Person {name: 'Bob', age: 25})")
+db.Execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) " +
+    "CREATE (a)-[:KNOWS {since: 2023}]->(b)",
+)
+```
+
+### 데이터 조회
+
+```go
+result, err := db.Execute("MATCH (n:Person) RETURN n.name, n.age")
+if err != nil {
+    log.Fatal(err)
+}
+
+for result.Next() {
+    row := result.Row()
+    name, _ := row.GetString("n.name")
+    age, _ := row.GetInt64("n.age")
+    fmt.Printf("%s (age: %d)\n", name, age)
+}
+```
+
+### 업데이트 및 삭제
+
+```go
+// Update properties
+db.Execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 31")
+
+// Delete a relationship
+db.Execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b) DELETE r",
+)
+
+// Delete a node
+db.Execute("MATCH (p:Person {name: 'Bob'}) DELETE p")
+```
+
+<Callout type="warning">
+리소스가 올바르게 해제되고 데이터가 디스크에 기록되도록 반드시 `defer db.Close()`를 사용하세요.
+</Callout>
+
+## 시스템 요구사항
+
+- **Go**: 1.21+
+- **빌드**: Rust 1.84+ 툴체인 및 C 컴파일러 (CGo용)
+- **플랫폼**: Linux, macOS, Windows

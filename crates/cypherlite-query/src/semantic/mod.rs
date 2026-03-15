@@ -7,12 +7,14 @@ use crate::parser::ast::{
 };
 use cypherlite_core::LabelRegistry;
 
+/// Variable scope tracking for semantic analysis.
 pub mod symbol_table;
 use symbol_table::{SymbolTable, VariableKind};
 
 /// Semantic errors found during analysis.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticError {
+    /// Human-readable error description.
     pub message: String,
 }
 

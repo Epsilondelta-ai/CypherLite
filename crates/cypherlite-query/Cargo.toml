@@ -1,8 +1,15 @@
 [package]
 name = "cypherlite-query"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.84"
+description = "Cypher query engine with parser, planner, and executor for CypherLite"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Epsilondelta-ai/CypherLite"
+homepage = "https://github.com/Epsilondelta-ai/CypherLite"
+keywords = ["cypher", "query-engine", "graph-database", "parser", "planner"]
+categories = ["database-implementations", "data-structures"]
+readme = "../../README.md"
 
 [features]
 default = ["temporal-core"]
@@ -14,9 +21,13 @@ full-temporal = ["hypergraph", "cypherlite-core/full-temporal", "cypherlite-stor
 plugin = ["cypherlite-core/plugin", "cypherlite-storage/plugin"]
 
 [dependencies]
-cypherlite-core    = { path = "../cypherlite-core" }
-cypherlite-storage = { path = "../cypherlite-storage" }
+cypherlite-core    = { version = "1.2.0", path = "../cypherlite-core" }
+cypherlite-storage = { version = "1.2.0", path = "../cypherlite-storage" }
 logos              = "0.14"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 tempfile = "3"

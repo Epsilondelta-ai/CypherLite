@@ -1,0 +1,138 @@
+---
+title: CypherLite - Simplicidad tipo SQLite para bases de datos de grafos
+description: Un motor de base de datos de grafos ligero, embebido y de archivo unico escrito en Rust con despliegue sin configuracion y cumplimiento total de ACID.
+---
+
+import { Cards, Callout, Steps } from 'nextra/components'
+
+<div style={{ textAlign: 'center', padding: '4rem 0 2rem' }}>
+
+<h1 className="hero-title">CypherLite</h1>
+
+<p className="hero-subtitle">
+Simplicidad tipo SQLite para bases de datos de grafos
+</p>
+
+<p style={{ marginTop: '1.5rem' }}>
+Un motor de base de datos de grafos ligero, embebido y de archivo unico escrito en Rust.
+Despliegue sin configuracion, cumplimiento total de ACID y soporte nativo de grafos de propiedades.
+</p>
+
+<div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+  <a
+    href="/es/getting-started/rust"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      backgroundColor: 'var(--nextra-primary-hue)',
+      color: 'white',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    Primeros Pasos
+  </a>
+  <a
+    href="https://github.com/Epsilondelta-ai/CypherLite"
+    target="_blank"
+    rel="noreferrer"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      border: '1px solid currentColor',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    GitHub
+  </a>
+</div>
+
+</div>
+
+---
+
+## ¿Por que CypherLite?
+
+<div className="feature-grid">
+
+<div className="feature-card">
+### Sin Configuracion
+Abra un archivo y comience a consultar. Sin proceso de servidor, sin instalacion, sin archivos de configuracion. Solo un archivo `.cyl`.
+</div>
+
+<div className="feature-card">
+### Base de Datos de Archivo Unico
+Todos los datos del grafo viven en un archivo portatil. Copie, respalde o comparta toda su base de datos de grafos con una sola operacion de archivo.
+</div>
+
+<div className="feature-card">
+### Compatible con ACID
+Seguridad transaccional completa con Write-Ahead Logging, aislamiento de instantaneas y recuperacion ante fallos. Sus datos siempre son consistentes.
+</div>
+
+<div className="feature-card">
+### Biblioteca Embebida
+Vincule CypherLite directamente en su aplicacion. Disponible como crate de Rust, paquete de Python, modulo de Go, addon de Node.js y biblioteca de C.
+</div>
+
+<div className="feature-card">
+### Sistema de Plugins Extensible
+Cuatro tipos de plugins (ScalarFunction, IndexPlugin, Serializer, Trigger) le permiten extender CypherLite segun sus necesidades.
+</div>
+
+<div className="feature-card">
+### Consultas Temporales
+Consulte su grafo en cualquier punto en el tiempo. El versionado integrado rastrea cada cambio en nodos, aristas y propiedades.
+</div>
+
+</div>
+
+## Ejemplo Rapido
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+    db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+    db.execute(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+         CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+    )?;
+
+    let result = db.execute(
+        "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age"
+    )?;
+    for row in result {
+        let row = row?;
+        println!("{}: {}", row.get("p.name").unwrap(), row.get("p.age").unwrap());
+    }
+    Ok(())
+}
+```
+
+## Bindings Disponibles
+
+<Cards>
+  <Cards.Card title="Rust" href="/es/getting-started/rust" />
+  <Cards.Card title="Python" href="/es/getting-started/python" />
+  <Cards.Card title="Go" href="/es/getting-started/go" />
+  <Cards.Card title="Node.js" href="/es/getting-started/nodejs" />
+</Cards>
+
+## Caracteristicas Destacadas
+
+| Caracteristica | Descripcion |
+|---------|-------------|
+| **Property Graph** | Nodes and edges with typed properties (Null, Bool, Int64, Float64, String, Bytes, Array) |
+| **Cypher Queries** | openCypher subset with MATCH, CREATE, MERGE, SET, DELETE, RETURN, WHERE |
+| **Temporal Versioning** | AT TIME queries, version store, temporal edge versioning |
+| **Subgraphs** | Named subgraphs as first-class entities with CREATE/MATCH SNAPSHOT |
+| **Hyperedges** | N:M relationships connecting arbitrary numbers of nodes |
+| **Plugin System** | ScalarFunction, IndexPlugin, Serializer, Trigger plugin types |
+| **FFI Bindings** | C ABI, Python (PyO3), Go (CGo), Node.js (napi-rs) |

@@ -1,0 +1,143 @@
+---
+title: 超边
+description: 使用 CypherLite 超边建模连接任意数量节点的 N:M 关系。
+---
+
+import { Callout } from 'nextra/components'
+
+# 超边
+
+标准图的边精确连接两个节点（源和目标）。CypherLite 的超边将此扩展为在单个关系中连接**任意数量的节点**，实现 N:M 关系建模。
+
+<Callout type="info">
+超边需要 `hypergraph` 功能标志，该标志同时依赖 `subgraph` 标志：
+```toml
+cypherlite-query = { version = "1.2", features = ["hypergraph"] }
+```
+</Callout>
+
+## 概述
+
+超边是连接任意节点集合的关系。与单一的源和目标不同，超边拥有一个由参与节点组成的**成员集合**。
+
+关键概念：
+
+- **N:M 关系**连接 2 个或更多节点
+- **HYPEREDGE 语法**用于创建和查询
+- 每个成员上的 **TemporalRef** 元数据
+- 超边上的属性，与常规边相同
+
+## 创建超边
+
+使用 `CREATE HYPEREDGE` 语法：
+
+```cypher
+CREATE HYPEREDGE :MEETING CONNECTING
+  (a:Person {name: 'Alice'}),
+  (b:Person {name: 'Bob'}),
+  (c:Person {name: 'Charlie'})
+SET _.date = '2024-03-15', _.topic = 'Q1 Review'
+```
+
+此操作创建一个连接三个 `Person` 节点的 `MEETING` 超边。
+
+### 超边属性
+
+超边支持与常规边相同的属性类型：
+
+```cypher
+CREATE HYPEREDGE :COLLABORATION CONNECTING
+  (a:Researcher {name: 'Dr. Smith'}),
+  (b:Researcher {name: 'Dr. Jones'}),
+  (c:Institution {name: 'MIT'})
+SET _.paper = 'Graph Theory', _.year = 2024
+```
+
+## 查询超边
+
+匹配通过超边连接的节点：
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE h.topic = 'Q1 Review'
+RETURN p.name, h.date
+```
+
+### 按成员数量过滤
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE size(members(h)) >= 3
+RETURN h.topic, count(p) AS attendees
+```
+
+## 使用场景
+
+### 群组事件
+
+建模涉及多个参与者的事件：
+
+```cypher
+CREATE HYPEREDGE :TRANSACTION CONNECTING
+  (buyer:Account {id: 'A001'}),
+  (seller:Account {id: 'A002'}),
+  (broker:Account {id: 'A003'})
+SET _.amount = 50000, _.currency = 'USD'
+```
+
+### 共同作者
+
+建模多作者论文：
+
+```cypher
+CREATE HYPEREDGE :AUTHORED CONNECTING
+  (a1:Author {name: 'Alice'}),
+  (a2:Author {name: 'Bob'}),
+  (p:Paper {title: 'Graph Databases'})
+SET _.role_a1 = 'lead', _.role_a2 = 'contributor'
+```
+
+### 供应链
+
+建模多方供应链关系：
+
+```cypher
+CREATE HYPEREDGE :SHIPMENT CONNECTING
+  (supplier:Company {name: 'SupplyCo'}),
+  (carrier:Company {name: 'LogiCorp'}),
+  (warehouse:Location {name: 'Warehouse A'}),
+  (customer:Company {name: 'RetailInc'})
+SET _.tracking_id = 'SH-2024-001'
+```
+
+## TemporalRef
+
+超边的每个成员携带一个 `TemporalRef`，包含其加入或离开超边的元数据：
+
+| 字段 | 描述 |
+|-------|-------------|
+| `node_id` | 参与节点的 ID |
+| `joined_at` | 节点加入超边的时间戳 |
+| `left_at` | 节点被移除的时间戳（仍活跃时为 null） |
+
+这使得可以对超边成员关系进行时态查询：
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE p._joined_at > '2024-01-01'
+RETURN h.topic, p.name
+```
+
+## 超边与常规边对比
+
+| 特性 | 常规边 | 超边 |
+|---------|-------------|-----------|
+| 成员 | 精确 2 个（源、目标） | 2 个或更多（N:M） |
+| 方向 | 有向（源 -> 目标） | 无向（成员集合） |
+| 语法 | `CREATE (a)-[:TYPE]->(b)` | `CREATE HYPEREDGE :TYPE CONNECTING (a), (b), (c)` |
+| 时态 | 边级时间戳 | 每个成员 TemporalRef |
+| 功能标志 | 无（始终可用） | `hypergraph`（依赖 `subgraph`） |
+
+<Callout type="warning">
+超边比常规边增加存储开销，因为每个成员都有自己的 TemporalRef 元数据。当二元关系足够时，请使用常规边。
+</Callout>

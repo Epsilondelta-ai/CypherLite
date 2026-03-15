@@ -1,0 +1,93 @@
+---
+title: 贡献指南
+description: 如何为 CypherLite 项目做贡献。
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# 贡献指南
+
+感谢您对 CypherLite 贡献的兴趣。本页面提供贡献指南的概要。完整指南请参阅 GitHub 上的 [CONTRIBUTING.md](https://github.com/Epsilondelta-ai/CypherLite/blob/main/CONTRIBUTING.md)。
+
+## 报告 Bug
+
+请使用 [GitHub Issues](https://github.com/Epsilondelta-ai/CypherLite/issues) 报告 bug。请包含：
+
+- 问题的清晰描述
+- 复现步骤
+- 预期行为与实际行为
+- 您的 Rust 版本（`rustc --version`）和操作系统
+
+## 提交变更
+
+<Steps>
+
+### Fork 仓库
+
+Fork [CypherLite](https://github.com/Epsilondelta-ai/CypherLite) 并从 `main` 创建分支。
+
+### 命名分支
+
+使用描述性的分支名称：`feat/my-feature` 或 `fix/issue-123`。
+
+### 进行修改
+
+遵循以下代码风格和测试指南。
+
+### 创建 Pull Request
+
+针对 `main` 创建 PR，附上变更的清晰描述。
+
+</Steps>
+
+<Callout type="info">
+对于重大变更，请先创建 issue 讨论方案，再投入时间实现。
+</Callout>
+
+## 开发环境设置
+
+**要求：**
+
+- Rust 1.84 或更高版本（MSRV）
+- 通过 [rustup](https://rustup.rs/) 安装的标准 Rust 工具链
+
+**设置：**
+
+```bash
+git clone https://github.com/Epsilondelta-ai/CypherLite.git
+cd CypherLite
+cargo build --workspace
+cargo test --workspace --all-features
+```
+
+## 功能标志
+
+| 标志 | 描述 |
+|------|-------------|
+| `temporal-core` | 时态图支持（默认） |
+| `temporal-edge` | 时态边属性 |
+| `subgraph` | 子图提取 |
+| `hypergraph` | 超图支持（依赖 `subgraph`） |
+| `full-temporal` | 所有时态功能 |
+| `plugin` | 插件系统 |
+
+## 代码风格
+
+- 提交前运行 `cargo fmt`
+- 运行 `cargo clippy --all-features` 并修复所有警告
+- 为所有新功能编写测试
+- 每个包至少维持 85% 的测试覆盖率
+- 使用 `cargo test --workspace --all-features` 验证
+
+## 提交消息
+
+遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
+
+- `feat(core): add temporal aggregation support`
+- `fix(storage): resolve WAL replay edge case`
+- `docs: update architecture diagram`
+- `test(query): add parser edge case tests`
+
+## 许可证
+
+通过贡献，您同意您的贡献将按照 MIT 或 Apache-2.0 双重许可证进行许可。

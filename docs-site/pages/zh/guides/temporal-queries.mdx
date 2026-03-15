@@ -1,0 +1,116 @@
+---
+title: 时态查询
+description: 使用 CypherLite 的时态版本系统查询图在任意时间点的状态。
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# 时态查询
+
+CypherLite 追踪节点、边和属性随时间的每一次变更。您可以使用时态查询语法查询图在过去任意时间点的状态。
+
+## 概述
+
+时态系统为每次属性变更维护一条不可变的版本链。当您更新属性时，旧值会连同时间戳一起保存在版本存储中。这使得以下操作成为可能：
+
+- 使用 `AT TIME` 的**时间点查询**
+- 使用 `BETWEEN TIME` 的**范围查询**
+- 带有创建/删除时间戳的**时态边版本控制**
+- 对版本化数据的**时态聚合**
+
+<Callout type="info">
+时态功能需要 `temporal-core` 功能标志（默认启用）。如需时态边属性，还需启用 `temporal-edge`。
+</Callout>
+
+## AT TIME 查询
+
+检索图在特定时间点的状态：
+
+```cypher
+MATCH (p:Person {name: 'Alice'})
+AT TIME '2024-01-01T00:00:00Z'
+RETURN p.name, p.age
+```
+
+无论之后进行了何种修改，此查询都会返回 Alice 在 2024 年 1 月 1 日的属性。
+
+### 工作原理
+
+1. 查询引擎识别目标时间戳
+2. 对每个匹配的节点/边，遍历版本链
+3. 找到在请求时间处于活跃状态的版本
+4. 从该版本解析属性
+
+## BETWEEN TIME 查询
+
+查询一个时间范围内的属性变更：
+
+```cypher
+MATCH (p:Person {name: 'Alice'})
+BETWEEN TIME '2024-01-01T00:00:00Z' AND '2024-12-31T23:59:59Z'
+RETURN p.name, p.age, p._version_timestamp
+```
+
+此查询返回 2024 年期间 Alice 属性的所有版本。
+
+## 时态边版本控制
+
+<Callout type="warning">
+时态边版本控制需要 `temporal-edge` 功能标志。
+</Callout>
+
+边也携带时态元数据。您可以查询关系的创建或删除时间：
+
+```cypher
+MATCH (a:Person)-[r:KNOWS]->(b:Person)
+WHERE r._created_at > '2024-06-01T00:00:00Z'
+RETURN a.name, b.name, r._created_at
+```
+
+### 边时态属性
+
+| 属性 | 描述 |
+|----------|-------------|
+| `r._created_at` | 关系创建时的时间戳 |
+| `r._deleted_at` | 关系删除时的时间戳（活跃时为 null） |
+
+## 时态聚合
+
+将时态查询与聚合函数结合使用：
+
+```cypher
+MATCH (p:Person)
+BETWEEN TIME '2024-01-01' AND '2024-12-31'
+RETURN count(p) AS person_count, avg(p.age) AS avg_age
+```
+
+## 版本存储架构
+
+版本存储以每个属性的不可变链实现：
+
+```
+当前值 --> 版本 N --> 版本 N-1 --> ... --> 版本 1
+         (时间戳)    (时间戳)            (时间戳)
+```
+
+- 每个版本记录属性值和变更时间戳
+- 链是只追加的（之前的版本不会被修改）
+- 存储开销与变更次数成正比，而非与总数据量成正比
+
+## 最佳实践
+
+<Steps>
+
+### 使用 ISO 8601 格式的时间戳
+
+CypherLite 解析 ISO 8601 格式的时间戳。请始终包含时区信息以避免歧义。
+
+### 仅启用所需的时态功能
+
+`temporal-core`（默认）提供节点级版本控制。仅在需要边创建/删除时间戳时启用 `temporal-edge`，因为它会增加每条边的存储开销。
+
+### 考虑存储增长
+
+每次属性变更都会创建新的版本条目。对于写入密集的工作负载，请监控数据库文件大小，并在需要时规划定期压缩。
+
+</Steps>

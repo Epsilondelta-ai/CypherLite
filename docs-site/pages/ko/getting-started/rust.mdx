@@ -1,0 +1,142 @@
+---
+title: Rust 시작하기
+description: Cargo를 사용하여 CypherLite Rust crate를 설치하고 사용합니다.
+---
+
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+# Rust 시작하기
+
+CypherLite는 네이티브 Rust 라이브러리입니다. Cargo로 프로젝트에 추가하면 몇 분 안에 그래프 데이터 작업을 시작할 수 있습니다.
+
+## 설치
+
+<Steps>
+
+### 의존성 추가
+
+`Cargo.toml`에 `cypherlite-query`를 추가합니다:
+
+```toml
+[dependencies]
+cypherlite-query = "1.2"
+```
+
+선택적 기능을 활성화하려면:
+
+```toml
+[dependencies]
+cypherlite-query = { version = "1.2", features = ["temporal-edge", "plugin"] }
+```
+
+### 사용 가능한 기능 플래그
+
+| 플래그 | 설명 |
+|------|-------------|
+| `temporal-core` | 시간 여행 그래프 지원 (기본 활성화) |
+| `temporal-edge` | 시간 여행 엣지 속성 |
+| `subgraph` | 서브그래프 추출 |
+| `hypergraph` | 하이퍼그래프 지원 (`subgraph` 필요) |
+| `full-temporal` | 모든 시간 여행 기능 |
+| `plugin` | 플러그인 시스템 |
+
+### 프로젝트 빌드
+
+```bash
+cargo build
+```
+
+</Steps>
+
+## 기본 사용법
+
+### 데이터베이스 열기
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Open or create a database file
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    // Use the database...
+
+    Ok(())
+}
+```
+
+<Callout type="info">
+CypherLite는 데이터베이스 파일이 존재하지 않으면 자동으로 생성합니다. 관례적으로 `.cyl` 확장자를 사용합니다.
+</Callout>
+
+### 노드와 관계 생성
+
+```rust
+// Create nodes with labels and properties
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+
+// Create a relationship between nodes
+db.execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+     CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+)?;
+```
+
+### 데이터 조회
+
+```rust
+let result = db.execute(
+    "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age ORDER BY p.age DESC"
+)?;
+
+for row in result {
+    let row = row?;
+    let name = row.get("p.name").unwrap();
+    let age = row.get("p.age").unwrap();
+    println!("{}: {}", name, age);
+}
+```
+
+### 프로퍼티 업데이트
+
+```rust
+db.execute(
+    "MATCH (p:Person {name: 'Alice'}) SET p.age = 31"
+)?;
+```
+
+### 노드와 관계 삭제
+
+```rust
+// Delete a relationship
+db.execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'}) DELETE r"
+)?;
+
+// Delete a node (must have no relationships)
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p")?;
+```
+
+## 지원되는 Cypher 연산
+
+CypherLite는 openCypher 서브셋을 지원합니다:
+
+- `MATCH` - 노드와 관계에 대한 패턴 매칭
+- `CREATE` - 노드와 관계 생성
+- `MERGE` - 없으면 생성, 있으면 매칭
+- `SET` - 프로퍼티 업데이트
+- `DELETE` - 노드와 관계 삭제
+- `RETURN` - 출력 컬럼 지정
+- `WHERE` - 필터 조건
+- `WITH` - 쿼리 파트 연결
+- `ORDER BY` - 결과 정렬
+
+## API 문서
+
+전체 Rust API 문서는 [docs.rs](https://docs.rs/cypherlite-query)에서 확인할 수 있습니다.
+
+## 시스템 요구사항
+
+- **Rust**: 1.84+ (MSRV)
+- **플랫폼**: Linux, macOS, Windows

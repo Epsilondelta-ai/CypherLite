@@ -1,0 +1,134 @@
+---
+title: API 레퍼런스
+description: CypherLite Rust, Python, Go, Node.js, C 바인딩 API 레퍼런스.
+---
+
+import { Cards, Card, Callout } from 'nextra/components'
+
+# API 레퍼런스
+
+CypherLite는 여러 언어에 걸쳐 API를 제공합니다. 각 바인딩은 동일한 핵심 기능을 노출합니다: 데이터베이스 열기, Cypher 쿼리 실행, 결과 순회.
+
+## Rust API (주요 인터페이스)
+
+Rust API는 주요 인터페이스이며 가장 완전한 기능 세트를 제공합니다.
+
+<Callout type="info">
+모든 타입 시그니처와 예제가 포함된 전체 Rust API 문서는 [docs.rs/cypherlite-query](https://docs.rs/cypherlite-query)에서 확인할 수 있습니다.
+</Callout>
+
+### 핵심 타입
+
+| 타입 | 설명 |
+|------|-------------|
+| `CypherLite` | 메인 데이터베이스 핸들. 열기, 쿼리 실행, 데이터베이스 수명주기 관리. |
+| `QueryResult` | `execute()`가 반환하는 결과 행 이터레이터. |
+| `Row` | `get(name)`으로 컬럼에 접근하는 단일 결과 행. |
+| `Value` | 타입화된 프로퍼티 값: `Null`, `Bool`, `Int64`, `Float64`, `String`, `Bytes`, `Array`. |
+| `CypherLiteError` | 모든 데이터베이스 작업의 에러 타입. |
+
+### 핵심 메서드
+
+```rust
+// Open or create a database
+let db = CypherLite::open("path/to/db.cyl")?;
+
+// Execute a Cypher query
+let result = db.execute("MATCH (n) RETURN n")?;
+
+// Iterate over results
+for row in result {
+    let row = row?;
+    let value = row.get("column_name");
+}
+```
+
+### Crate 계층 구조
+
+| Crate | 용도 |
+|-------|---------|
+| `cypherlite-query` | 고수준 쿼리 인터페이스 (권장 진입점) |
+| `cypherlite-core` | 핵심 데이터 구조, trait, 플러그인 시스템 |
+| `cypherlite-storage` | 스토리지 엔진, B+Tree, WAL, 버퍼 풀 |
+| `cypherlite-ffi` | C ABI 외부 함수 인터페이스 |
+
+## FFI 바인딩 API
+
+모든 FFI 바인딩은 일관된 패턴을 따릅니다:
+
+1. 파일 경로에서 데이터베이스 **열기**
+2. 문자열로 Cypher 쿼리 **실행**
+3. 결과 행 **순회**
+4. 데이터베이스 핸들 **닫기**
+
+### Python API
+
+```python
+import cypherlite
+
+db = cypherlite.open("db.cyl")         # Open database
+result = db.execute("MATCH (n) ...")    # Execute query
+for row in result:                       # Iterate rows
+    print(row["column"])                 # Access columns
+db.close()                               # Close database
+```
+
+자세한 내용은 [Python 시작하기](/getting-started/python) 가이드를 참조하세요.
+
+### Go API
+
+```go
+db, err := cypherlite.Open("db.cyl")    // Open database
+result, err := db.Execute("MATCH ...")   // Execute query
+for result.Next() {                       // Iterate rows
+    row := result.Row()
+    val, _ := row.GetString("column")    // Access columns
+}
+db.Close()                                // Close database
+```
+
+자세한 내용은 [Go 시작하기](/getting-started/go) 가이드를 참조하세요.
+
+### Node.js API
+
+```js
+const { open } = require("cypherlite");
+const db = open("db.cyl");              // Open database
+const result = db.execute("MATCH ..."); // Execute query
+for (const row of result) {              // Iterate rows
+  console.log(row["column"]);            // Access columns
+}
+db.close();                              // Close database
+```
+
+자세한 내용은 [Node.js 시작하기](/getting-started/nodejs) 가이드를 참조하세요.
+
+### C API
+
+```c
+#include "cypherlite.h"
+
+CylDb *db = cyl_open("db.cyl");                // Open database
+CylResult *res = cyl_execute(db, "MATCH ..."); // Execute query
+while (cyl_result_next(res)) {                  // Iterate rows
+    const char *val = cyl_row_get_string(res, "column");
+}
+cyl_result_free(res);                           // Free result
+cyl_close(db);                                  // Close database
+```
+
+C 헤더(`cypherlite.h`)와 정적 라이브러리(`libcypherlite_ffi.a`)는 `cypherlite-ffi` crate를 빌드하면 생성됩니다.
+
+## 프로퍼티 타입
+
+모든 바인딩은 동일한 프로퍼티 값 타입 집합을 지원합니다:
+
+| 타입 | Rust | Python | Go | Node.js | C |
+|------|------|--------|----|---------|---|
+| Null | `Value::Null` | `None` | `nil` | `null` | `CYL_NULL` |
+| Boolean | `Value::Bool` | `bool` | `bool` | `boolean` | `cyl_bool` |
+| Integer | `Value::Int64` | `int` | `int64` | `number` | `int64_t` |
+| Float | `Value::Float64` | `float` | `float64` | `number` | `double` |
+| String | `Value::String` | `str` | `string` | `string` | `const char*` |
+| Bytes | `Value::Bytes` | `bytes` | `[]byte` | `Buffer` | `uint8_t*` |
+| Array | `Value::Array` | `list` | `[]any` | `Array` | `CylArray*` |

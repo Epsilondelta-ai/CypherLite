@@ -1,0 +1,123 @@
+---
+title: Subgraphs
+description: Create, query, and manage named subgraphs as first-class entities in CypherLite.
+---
+
+import { Callout } from 'nextra/components'
+
+# Subgraphs
+
+CypherLite treats subgraphs as first-class entities. You can capture a snapshot of part of your graph, give it a name, and query it later. This is useful for versioning, analysis, and isolating graph regions.
+
+<Callout type="info">
+Subgraphs require the `subgraph` feature flag.
+</Callout>
+
+## Overview
+
+A subgraph is a named collection of nodes and edges stored alongside the main graph. Subgraphs are created from the current state of the graph using a snapshot mechanism.
+
+Key concepts:
+
+- **SubgraphStore** manages named subgraphs as first-class entities
+- **CREATE SNAPSHOT** captures the current state of matched nodes and edges
+- **MATCH SNAPSHOT** queries a previously saved subgraph
+- Subgraphs are immutable once created
+
+## Creating a Subgraph
+
+Use `CREATE SNAPSHOT` to capture a subgraph:
+
+```cypher
+MATCH (p:Person)-[r:KNOWS]->(friend:Person)
+WHERE p.name = 'Alice'
+CREATE SNAPSHOT 'alice_network'
+```
+
+This captures all nodes and edges matching the pattern into a named subgraph called `alice_network`.
+
+### What Gets Captured
+
+- All nodes matching the pattern
+- All relationships matching the pattern
+- All properties on those nodes and relationships at the time of capture
+- The snapshot is a point-in-time copy; later changes to the original nodes do not affect the snapshot
+
+## Querying a Subgraph
+
+Use `MATCH SNAPSHOT` to query a saved subgraph:
+
+```cypher
+MATCH SNAPSHOT 'alice_network'
+(p:Person)-[r:KNOWS]->(friend:Person)
+RETURN p.name, friend.name, r.since
+```
+
+This runs the pattern match against only the nodes and edges in the `alice_network` subgraph, not the full graph.
+
+## Use Cases
+
+### Graph Versioning
+
+Capture snapshots at key milestones to preserve the graph state:
+
+```cypher
+-- Before a batch import
+MATCH (n) CREATE SNAPSHOT 'pre_import_2024'
+
+-- After the import, compare
+MATCH SNAPSHOT 'pre_import_2024' (n:Person)
+RETURN count(n) AS before_count
+```
+
+### Analysis Isolation
+
+Isolate a region of the graph for focused analysis:
+
+```cypher
+-- Capture the fraud-suspect subgraph
+MATCH (a:Account)-[t:TRANSFERRED]->(b:Account)
+WHERE t.amount > 10000
+CREATE SNAPSHOT 'high_value_transfers'
+
+-- Analyze the isolated subgraph
+MATCH SNAPSHOT 'high_value_transfers'
+(a:Account)-[t:TRANSFERRED]->(b:Account)
+RETURN a.id, b.id, sum(t.amount) AS total
+```
+
+### Comparison
+
+Compare two snapshots of the same region at different times:
+
+```cypher
+-- Snapshot from January
+MATCH SNAPSHOT 'network_jan' (p:Person)
+RETURN count(p) AS jan_count
+
+-- Snapshot from June
+MATCH SNAPSHOT 'network_jun' (p:Person)
+RETURN count(p) AS jun_count
+```
+
+## Storage
+
+Subgraphs are stored in the `SubgraphStore`, which lives alongside the main node and edge storage. Each subgraph entry contains:
+
+| Field | Description |
+|-------|-------------|
+| Name | Unique identifier for the subgraph |
+| Node IDs | Set of node IDs included in the snapshot |
+| Edge IDs | Set of edge IDs included in the snapshot |
+| Properties | Snapshotted property values at capture time |
+| Created At | Timestamp of snapshot creation |
+
+<Callout type="warning">
+Subgraphs consume additional storage proportional to the number of captured nodes and edges. For very large snapshots, monitor database file size.
+</Callout>
+
+## Limitations
+
+- Subgraphs are immutable; you cannot add or remove nodes from an existing snapshot
+- Deleting a subgraph removes only the snapshot metadata, not the original nodes/edges
+- Subgraph names must be unique within a database
