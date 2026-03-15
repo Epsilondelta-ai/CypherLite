@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **SPEC-PERSIST-001**: Data Persistence Layer
 
+### Breaking Changes
+
+- **Node.js FFI**: Module now uses named exports instead of default export.
+  Existing code using `const cypherlite = require('cypherlite')` continues to work for property access (`cypherlite.Database`), but destructured imports are now the recommended pattern:
+  ```js
+  // Recommended (v2.0)
+  const { Database, open, version } = require('cypherlite')
+
+  // Still works
+  const cypherlite = require('cypherlite')
+  const db = new cypherlite.Database(path)
+  ```
+
 ### Added
 
 - **Data Persistence Layer (SPEC-PERSIST-001)**: WAL-based durable storage for all graph data. close/reopen now preserves nodes, edges, properties, catalog, and feature-gated stores.
@@ -20,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Record serialization for NodeRecord, EdgeRecord, SubgraphRecord, HyperEdgeRecord, VersionRecord
 - DatabaseHeader extended with root page pointers (FORMAT_VERSION 7)
 - FFI error code CylErrDatabaseLocked
+
+### Fixed
+
+- **Node.js native module loading**: Added `files` field to `package.json` so `.node` binaries are included in npm packages. Replaced single-file loader with napi-rs auto-generated platform resolver supporting darwin, linux, win32, android, and freebsd across multiple architectures.
 
 ## [1.2.0] - 2026-03-15
 
@@ -419,7 +436,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/Epsilondelta-ai/CypherLite/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Epsilondelta-ai/CypherLite/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Epsilondelta-ai/CypherLite/compare/v1.2.0...v2.0.0
 [1.2.0]: https://github.com/Epsilondelta-ai/CypherLite/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Epsilondelta-ai/CypherLite/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Epsilondelta-ai/CypherLite/compare/v0.9.0...v1.0.0
