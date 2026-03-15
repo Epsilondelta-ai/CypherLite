@@ -1,0 +1,20 @@
+language = "C"
+include_guard = "CYPHERLITE_H"
+cpp_compat = true
+documentation = true
+style = "Both"
+
+[export]
+# Rust types already have "Cyl" prefix; no additional prefix needed.
+prefix = ""
+
+[enum]
+rename_variants = "ScreamingSnakeCase"
+
+[defines]
+"feature = temporal-core" = "CYL_FEATURE_TEMPORAL_CORE"
+"feature = temporal-edge" = "CYL_FEATURE_TEMPORAL_EDGE"
+"feature = subgraph" = "CYL_FEATURE_SUBGRAPH"
+"feature = hypergraph" = "CYL_FEATURE_HYPERGRAPH"
+"feature = full-temporal" = "CYL_FEATURE_FULL_TEMPORAL"
+"feature = plugin" = "CYL_FEATURE_PLUGIN"
