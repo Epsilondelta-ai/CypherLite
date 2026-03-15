@@ -12,7 +12,10 @@ from cypherlite._cypherlite import (
     version,
 )
 
+__version__ = version()
+
 __all__ = [
+    "__version__",
     "open",
     "version",
     "features",

@@ -1,6 +1,6 @@
 [package]
 name = "cypherlite-storage"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 rust-version = "1.84"
 description = "Storage engine with WAL, B+Tree indexing, and ACID transactions for CypherLite"
@@ -21,7 +21,7 @@ full-temporal = ["hypergraph", "cypherlite-core/full-temporal"]
 plugin = ["cypherlite-core/plugin"]
 
 [dependencies]
-cypherlite-core = { version = "1.2.1", path = "../cypherlite-core" }
+cypherlite-core = { version = "1.2.2", path = "../cypherlite-core" }
 parking_lot = "0.12"
 bincode = "1"
 serde = { version = "1", features = ["derive"] }
