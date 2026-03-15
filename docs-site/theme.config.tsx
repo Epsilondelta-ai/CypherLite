@@ -2,8 +2,9 @@ import type { DocsThemeConfig } from 'nextra-theme-docs'
 
 const config: DocsThemeConfig = {
   logo: (
-    <span style={{ fontWeight: 800, fontSize: '1.2em' }}>
-      CypherLite
+    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5em' }}>
+      <img src="/CypherLite/logo.png" alt="CypherLite" width={32} height={32} style={{ borderRadius: '4px' }} />
+      <span style={{ fontWeight: 800, fontSize: '1.2em' }}>CypherLite</span>
     </span>
   ),
   project: {
@@ -38,7 +39,7 @@ const config: DocsThemeConfig = {
         property="og:description"
         content="A lightweight, embedded, single-file graph database engine written in Rust"
       />
-      <meta property="og:image" content="/og-image.png" />
+      <meta property="og:image" content="/CypherLite/og-image.png" />
       <meta property="og:type" content="website" />
       <link rel="icon" href="/favicon.ico" />
     </>

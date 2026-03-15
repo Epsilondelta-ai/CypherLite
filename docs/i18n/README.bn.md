@@ -4,13 +4,30 @@
 <!-- Last Synced Commit: HEAD -->
 <!-- Last Updated: 2026-03-15 -->
 
-# CypherLite
+<p align="center">
+  <img src="../../assets/logo.png" alt="CypherLite Logo" width="180">
+</p>
 
-![CI](https://github.com/Epsilondelta-ai/CypherLite/actions/workflows/ci.yml/badge.svg)
-[![crates.io](https://img.shields.io/crates/v/cypherlite-query.svg)](https://crates.io/crates/cypherlite-query)
-[![docs.rs](https://docs.rs/cypherlite-query/badge.svg)](https://docs.rs/cypherlite-query)
-![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)
-![MSRV](https://img.shields.io/badge/MSRV-1.84-orange.svg)
+<h1 align="center">CypherLite</h1>
+
+<p align="center">
+  <img src="https://github.com/Epsilondelta-ai/CypherLite/actions/workflows/ci.yml/badge.svg" alt="CI">
+  <a href="https://crates.io/crates/cypherlite-query"><img src="https://img.shields.io/crates/v/cypherlite-query.svg" alt="crates.io"></a>
+  <a href="https://docs.rs/cypherlite-query"><img src="https://docs.rs/cypherlite-query/badge.svg" alt="docs.rs"></a>
+  <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License">
+  <img src="https://img.shields.io/badge/MSRV-1.84-orange.svg" alt="MSRV">
+</p>
+
+```
+        (\-.
+        / _`>  CypherLite
+       / /
+      / /      Lightweight Embedded
+     / /       Graph Database
+    / /
+   (,/
+    ``
+```
 
 > গ্রাফ ডেটাবেসের জন্য SQLite-এর মতো সরলতা।
 
