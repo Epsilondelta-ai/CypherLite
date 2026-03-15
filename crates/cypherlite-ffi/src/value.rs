@@ -401,9 +401,9 @@ mod tests {
 
     #[test]
     fn test_cyl_value_float64() {
-        let v = CylValue::from_float64(3.14);
+        let v = CylValue::from_float64(3.15);
         assert_eq!(v.tag, CylValueTag::Float64 as u8);
-        assert!((unsafe { v.payload.float64 } - 3.14).abs() < f64::EPSILON);
+        assert!((unsafe { v.payload.float64 } - 3.15).abs() < f64::EPSILON);
     }
 
     // -- cyl_value_to_rust tests -------------------------------------------
@@ -428,9 +428,9 @@ mod tests {
 
     #[test]
     fn test_cyl_value_to_rust_float64() {
-        let cv = CylValue::from_float64(2.718);
+        let cv = CylValue::from_float64(2.719);
         match cyl_value_to_rust(&cv) {
-            Value::Float64(f) => assert!((f - 2.718).abs() < f64::EPSILON),
+            Value::Float64(f) => assert!((f - 2.719).abs() < f64::EPSILON),
             other => panic!("expected Float64, got {other:?}"),
         }
     }
@@ -585,9 +585,9 @@ mod tests {
 
     #[test]
     fn test_cyl_param_float64_ffi() {
-        let v = cyl_param_float64(3.14);
+        let v = cyl_param_float64(3.15);
         match cyl_value_to_rust(&v) {
-            Value::Float64(f) => assert!((f - 3.14).abs() < f64::EPSILON),
+            Value::Float64(f) => assert!((f - 3.15).abs() < f64::EPSILON),
             other => panic!("expected Float64, got {other:?}"),
         }
     }
