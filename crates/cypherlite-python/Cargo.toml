@@ -1,0 +1,27 @@
+[package]
+name = "cypherlite-python"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.84"
+description = "Python bindings for CypherLite embedded graph database via PyO3"
+
+[lib]
+name = "_cypherlite"
+crate-type = ["cdylib"]
+
+[features]
+default = ["temporal-core"]
+temporal-core = ["cypherlite-query/temporal-core", "cypherlite-core/temporal-core"]
+temporal-edge = ["temporal-core", "cypherlite-query/temporal-edge", "cypherlite-core/temporal-edge"]
+subgraph = ["temporal-edge", "cypherlite-query/subgraph", "cypherlite-core/subgraph"]
+hypergraph = ["subgraph", "cypherlite-query/hypergraph", "cypherlite-core/hypergraph"]
+full-temporal = ["hypergraph", "cypherlite-query/full-temporal", "cypherlite-core/full-temporal"]
+plugin = ["cypherlite-query/plugin", "cypherlite-core/plugin"]
+
+[dependencies]
+pyo3 = { version = "0.24", features = ["abi3-py38", "extension-module"] }
+cypherlite-query = { path = "../cypherlite-query" }
+cypherlite-core = { path = "../cypherlite-core" }
+
+[dev-dependencies]
+tempfile = "3"
