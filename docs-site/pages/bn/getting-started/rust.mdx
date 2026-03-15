@@ -1,0 +1,142 @@
+---
+title: Rust দিয়ে শুরু করুন
+description: Cargo দিয়ে CypherLite Rust crate ইনস্টল এবং ব্যবহার করুন।
+---
+
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+# Rust দিয়ে শুরু করুন
+
+CypherLite একটি নেটিভ Rust লাইব্রেরি। এটি Cargo দিয়ে আপনার প্রজেক্টে যোগ করুন এবং কয়েক মিনিটের মধ্যে গ্রাফ ডেটা নিয়ে কাজ শুরু করুন।
+
+## ইনস্টলেশন
+
+<Steps>
+
+### ডিপেন্ডেন্সি যোগ করুন
+
+আপনার `Cargo.toml`-এ `cypherlite-query` যোগ করুন:
+
+```toml
+[dependencies]
+cypherlite-query = "1.2"
+```
+
+ঐচ্ছিক বৈশিষ্ট্য সক্রিয় করতে:
+
+```toml
+[dependencies]
+cypherlite-query = { version = "1.2", features = ["temporal-edge", "plugin"] }
+```
+
+### উপলব্ধ ফিচার ফ্ল্যাগ
+
+| Flag | Description |
+|------|-------------|
+| `temporal-core` | Temporal graph support (enabled by default) |
+| `temporal-edge` | Temporal edge attributes |
+| `subgraph` | Subgraph extraction |
+| `hypergraph` | Hypergraph support (requires `subgraph`) |
+| `full-temporal` | All temporal features |
+| `plugin` | Plugin system |
+
+### আপনার প্রজেক্ট বিল্ড করুন
+
+```bash
+cargo build
+```
+
+</Steps>
+
+## মৌলিক ব্যবহার
+
+### ডেটাবেস খুলুন
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Open or create a database file
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    // Use the database...
+
+    Ok(())
+}
+```
+
+<Callout type="info">
+CypherLite ডেটাবেস ফাইলটি না থাকলে স্বয়ংক্রিয়ভাবে তৈরি করে। ফাইলটি প্রচলিতভাবে `.cyl` এক্সটেনশন ব্যবহার করে।
+</Callout>
+
+### নোড এবং সম্পর্ক তৈরি করুন
+
+```rust
+// Create nodes with labels and properties
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+
+// Create a relationship between nodes
+db.execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+     CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+)?;
+```
+
+### ডেটা কোয়েরি করুন
+
+```rust
+let result = db.execute(
+    "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age ORDER BY p.age DESC"
+)?;
+
+for row in result {
+    let row = row?;
+    let name = row.get("p.name").unwrap();
+    let age = row.get("p.age").unwrap();
+    println!("{}: {}", name, age);
+}
+```
+
+### প্রপার্টি আপডেট করুন
+
+```rust
+db.execute(
+    "MATCH (p:Person {name: 'Alice'}) SET p.age = 31"
+)?;
+```
+
+### নোড এবং সম্পর্ক মুছুন
+
+```rust
+// Delete a relationship
+db.execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'}) DELETE r"
+)?;
+
+// Delete a node (must have no relationships)
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p")?;
+```
+
+## সমর্থিত Cypher অপারেশন
+
+CypherLite openCypher সাবসেট সমর্থন করে:
+
+- `MATCH` - Pattern matching for nodes and relationships
+- `CREATE` - Create nodes and relationships
+- `MERGE` - Create if not exists, match if exists
+- `SET` - Update properties
+- `DELETE` - Remove nodes and relationships
+- `RETURN` - Specify output columns
+- `WHERE` - Filter conditions
+- `WITH` - Chain query parts
+- `ORDER BY` - Sort results
+
+## API ডকুমেন্টেশন
+
+সম্পূর্ণ Rust API ডকুমেন্টেশন [docs.rs](https://docs.rs/cypherlite-query)-এ উপলব্ধ।
+
+## প্রয়োজনীয়তা
+
+- **Rust**: 1.84+ (MSRV)
+- **Platform**: Linux, macOS, Windows

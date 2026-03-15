@@ -1,308 +1,409 @@
 # CypherLite
 
-A lightweight, embedded, single-file graph database engine written in Rust.
+![CI](https://github.com/Epsilondelta-ai/CypherLite/actions/workflows/ci.yml/badge.svg)
+[![crates.io](https://img.shields.io/crates/v/cypherlite-query.svg)](https://crates.io/crates/cypherlite-query)
+[![docs.rs](https://docs.rs/cypherlite-query/badge.svg)](https://docs.rs/cypherlite-query)
+![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)
+![MSRV](https://img.shields.io/badge/MSRV-1.84-orange.svg)
 
-CypherLite brings SQLite-like simplicity to the graph database ecosystem — zero-config, single-file deployment with full ACID compliance, native property graph support, temporal queries, subgraph entities, hyperedges, and a trait-based plugin system.
+> SQLite-like simplicity for graph databases.
 
-## Status
+A lightweight, embedded, single-file graph database engine written in Rust. CypherLite brings zero-config, single-file deployment to the graph database ecosystem — with full ACID compliance, native property graph support, temporal queries, subgraph entities, hyperedges, and a trait-based plugin system.
 
-**v1.0.0 — All Phases Complete**
+**Available in**: [中文](docs/i18n/README.zh.md) | [हिन्दी](docs/i18n/README.hi.md) | [Español](docs/i18n/README.es.md) | [Français](docs/i18n/README.fr.md) | [العربية](docs/i18n/README.ar.md) | [বাংলা](docs/i18n/README.bn.md) | [Português](docs/i18n/README.pt.md) | [Русский](docs/i18n/README.ru.md) | [한국어](docs/i18n/README.ko.md)
 
-| Phase | Version | SPEC | Description | Status |
-|-------|---------|------|-------------|--------|
-| 1 | v0.1.0 | SPEC-DB-001 | Storage Engine (WAL, B+Tree, Buffer Pool, ACID) | Complete |
-| 2 | v0.2.0 | SPEC-DB-002 | Query Engine (Cypher lexer, parser, planner, executor) | Complete |
-| 3 | v0.3.0 | SPEC-DB-003 | Advanced Query (MERGE, WITH, ORDER BY, indexing, optimizer) | Complete |
-| 4 | v0.4.0 | SPEC-DB-004 | Temporal Core (AT TIME, version store, temporal queries) | Complete |
-| 5 | v0.5.0 | SPEC-DB-005 | Temporal Edge (edge versioning, temporal relationship queries) | Complete |
-| 6 | v0.6.0 | SPEC-DB-006 | Subgraph Entities (SubgraphStore, CREATE/MATCH SNAPSHOT) | Complete |
-| 7 | v0.7.0 | SPEC-DB-007 | Native Hyperedge (N:M relations, HYPEREDGE syntax, TemporalRef) | Complete |
-| 8 | v0.8.0 | SPEC-DB-008 | Inline Property Filter (MATCH pattern {key: value} fix) | Complete |
-| 9 | v0.9.0 | SPEC-INFRA-001 | CI/CD Pipeline (GitHub Actions, 6 parallel jobs) | Complete |
-| 10 | v1.0.0 | SPEC-PLUGIN-001 | Plugin System (4 plugin types, registry, feature flag) | Complete |
+---
 
 ## Features
 
 ### Storage Engine
 
-- **ACID Transactions**: Full atomicity, consistency, isolation, and durability via Write-Ahead Logging
-- **Single-Writer Multiple-Reader**: SQLite-compatible concurrency model using `parking_lot`
-- **Snapshot Isolation**: WAL frame index-based MVCC for consistent reads
-- **B+Tree Storage**: O(log n) node and edge lookup with index-free adjacency
-- **Crash Recovery**: WAL replay on startup for consistency after unexpected shutdown
-- **Property Graph**: Nodes and edges with typed properties (Null, Bool, Int64, Float64, String, Bytes, Array)
-- **Embedded Library**: No server process, zero configuration, single `.cyl` file
+- **ACID Transactions** — Full atomicity, consistency, isolation, and durability via Write-Ahead Logging
+- **Single-Writer / Multiple-Reader** — SQLite-compatible concurrency model using `parking_lot`
+- **Snapshot Isolation** — WAL frame index-based MVCC for consistent reads
+- **B+Tree Storage** — O(log n) node and edge lookup with index-free adjacency
+- **Crash Recovery** — WAL replay on startup for consistency after unexpected shutdown
+- **Property Graph** — Nodes and edges with typed properties: `Null`, `Bool`, `Int64`, `Float64`, `String`, `Bytes`, `Array`
+- **Embedded Library** — No server process, zero configuration, single `.cyl` file
 
-### Query Engine
+### Query Engine (Cypher)
 
-- **Cypher Query Language**: openCypher subset with MATCH, CREATE, MERGE, SET, DELETE, RETURN, WHERE, WITH, ORDER BY
-- **Recursive Descent Parser**: Hand-written parser with Pratt expression parsing, 28+ keywords
-- **Semantic Analysis**: Variable scope validation and label/type resolution
-- **Query Planner**: Logical-to-physical plan conversion with cost-based optimizer and predicate pushdown
-- **Volcano Executor**: Iterator-based execution with 12 operators (NodeScan, Expand, Filter, Project, Create, Delete, Set, Aggregate, Limit, Sort, Merge, With)
-- **Three-Valued Logic**: Full NULL propagation per openCypher spec
-- **Type Coercion**: Automatic Int64/Float64 promotion in expressions
-- **Inline Property Filter**: `MATCH (n:Label {key: value})` syntax in pattern matching
+- **openCypher Subset** — `MATCH`, `CREATE`, `MERGE`, `SET`, `DELETE`, `RETURN`, `WHERE`, `WITH`, `ORDER BY`
+- **Recursive Descent Parser** — Hand-written parser with Pratt expression parsing and 28+ keywords
+- **Semantic Analysis** — Variable scope validation and label/type resolution
+- **Cost-Based Optimizer** — Logical-to-physical plan conversion with predicate pushdown
+- **Volcano Executor** — Iterator-based execution with 12 operators
+- **Three-Valued Logic** — Full NULL propagation per openCypher specification
+- **Inline Property Filter** — `MATCH (n:Label {key: value})` pattern support
 
 ### Temporal Features
 
-- **AT TIME Queries**: Point-in-time graph state retrieval
-- **Version Store**: Immutable property version chain per node/edge
-- **Temporal Edge Versioning**: Edge creation/deletion timestamps with temporal relationship queries
-- **Snapshot Isolation**: MVCC-based consistent temporal reads
-- **Temporal Aggregation**: Time-range queries with aggregate functions over versioned data
+- **AT TIME Queries** — Point-in-time graph state retrieval
+- **Version Store** — Immutable property version chain per node and edge
+- **Temporal Edge Versioning** — Edge creation/deletion timestamps with temporal relationship queries
+- **Temporal Aggregation** — Time-range queries with aggregate functions over versioned data
 
-### Subgraph Entities
+### Subgraph & Hyperedge
 
-- **SubgraphStore**: Named subgraphs as first-class entities stored alongside nodes and edges
-- **CREATE SNAPSHOT**: Capture current graph state as a named subgraph
-- **MATCH SNAPSHOT**: Query and retrieve named subgraph entities
-- **MembershipIndex**: Efficient node/edge-to-subgraph membership lookup
-- **Virtual :CONTAINS**: Virtual relationship type for subgraph membership queries
-
-### Hyperedge Support
-
-- **Native Hyperedges**: N:M relations connecting arbitrary numbers of nodes
-- **HYPEREDGE Syntax**: `CREATE HYPEREDGE :TYPE CONNECTING (n1), (n2), (n3)` DDL
-- **TemporalRef**: Hyperedge members carry temporal reference metadata
-- **:INVOLVES Virtual Relation**: Query hyperedge participation via virtual relationship type
-- **SubgraphScan Operator**: Dedicated executor operator for hyperedge and subgraph traversal
+- **SubgraphStore** — Named subgraphs as first-class entities stored alongside nodes and edges
+- **CREATE / MATCH SNAPSHOT** — Capture and query named subgraph entities
+- **Native Hyperedges** — N:M relations connecting arbitrary numbers of nodes
+- **HYPEREDGE Syntax** — `CREATE HYPEREDGE :TYPE CONNECTING (n1), (n2), (n3)`
+- **TemporalRef** — Hyperedge members carry temporal reference metadata
 
 ### Plugin System
 
-- **ScalarFunction**: Register custom query functions callable in Cypher expressions
-- **IndexPlugin**: Pluggable custom index implementations (e.g., HNSW vector index)
-- **Serializer**: Custom import/export format plugins (e.g., JSON-LD, GraphML)
-- **Trigger**: Before/after hooks for CREATE, DELETE, SET operations with rollback support
-- **PluginRegistry**: Generic, thread-safe `HashMap`-based registry (`Send + Sync`)
-- **Feature Flag**: `plugin` feature flag — zero overhead when disabled (cfg-branched)
+- **ScalarFunction** — Register custom query functions callable in Cypher expressions
+- **IndexPlugin** — Pluggable custom index implementations (e.g., HNSW vector index)
+- **Serializer** — Custom import/export format plugins (e.g., JSON-LD, GraphML)
+- **Trigger** — Before/after hooks for `CREATE`, `DELETE`, `SET` operations with rollback support
+- **PluginRegistry** — Generic, thread-safe `HashMap`-based registry (`Send + Sync`)
+- **Zero Overhead** — `plugin` feature flag; cfg-gated, no cost when disabled
 
-### CI/CD Pipeline
+### FFI Bindings
 
-- **GitHub Actions**: 6 parallel jobs (check, msrv, test, coverage, security, bench-check)
-- **Coverage Gate**: 85% minimum enforced in CI
-- **MSRV Verification**: Rust 1.84 compatibility check on every PR
-- **Security Audit**: `cargo audit` integrated into pipeline
-- **Benchmark Regression**: Criterion benchmark smoke-test on all feature combinations
+- **C ABI** — Static library with a C header for embedding in any C-compatible project
+- **Python** — PyO3-based bindings via `pip install cypherlite`
+- **Go** — CGo bindings via `go get github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite`
+- **Node.js** — napi-rs native addon via `npm install cypherlite`
+
+---
 
 ## Quick Start
 
-Add CypherLite to your `Cargo.toml`:
+### Rust
 
 ```toml
+# Cargo.toml
 [dependencies]
-cypherlite-query = { path = "crates/cypherlite-query" }
+cypherlite-query = "1.2"
 ```
-
-Query with Cypher:
 
 ```rust
 use cypherlite_query::CypherLite;
 
-// Open or create a database
-let db = CypherLite::open("my_graph.cyl")?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = CypherLite::open("my_graph.cyl")?;
 
-// Create nodes and relationships
-db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
-db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
-db.execute("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)")?;
+    // Create nodes and a relationship
+    db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+    db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+    db.execute(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+         CREATE (a)-[:KNOWS {since: 2023}]->(b)",
+    )?;
 
-// Query the graph
-let result = db.execute("MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age")?;
-for row in result {
-    let row = row?;
-    println!("{}: {}", row.get("p.name").unwrap(), row.get("p.age").unwrap());
+    // Query the graph
+    let result = db.execute("MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age")?;
+    for row in result {
+        let row = row?;
+        println!("{}: {}", row.get("p.name").unwrap(), row.get("p.age").unwrap());
+    }
+    Ok(())
 }
 ```
 
-### Plugin Example
+### Python
 
-Enable the `plugin` feature and register a custom scalar function:
-
-```toml
-[dependencies]
-cypherlite-query = { path = "crates/cypherlite-query", features = ["plugin"] }
-cypherlite-core  = { path = "crates/cypherlite-core",  features = ["plugin"] }
+```bash
+pip install cypherlite
 ```
 
-```rust
-use cypherlite_query::CypherLite;
-use cypherlite_core::plugin::{Plugin, ScalarFunction};
-use cypherlite_core::PropertyValue;
+```python
+import cypherlite
 
-struct UpperFn;
+db = cypherlite.open("my_graph.cyl")
 
-impl Plugin for UpperFn {
-    fn name(&self)        -> &str { "upper" }
-    fn version(&self)     -> &str { "1.0.0" }
-    fn description(&self) -> &str { "Converts a string to uppercase" }
-    fn init(&mut self)    -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
-    fn shutdown(&mut self) {}
-}
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})")
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})")
+db.execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) "
+    "CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+)
 
-impl ScalarFunction for UpperFn {
-    fn call(&self, args: &[PropertyValue]) -> Result<PropertyValue, Box<dyn std::error::Error>> {
-        match &args[0] {
-            PropertyValue::String(s) => Ok(PropertyValue::String(s.to_uppercase())),
-            _ => Err("expected string".into()),
-        }
+result = db.execute("MATCH (n:Person) RETURN n.name, n.age")
+for row in result:
+    print(f"{row['n.name']} (age: {row['n.age']})")
+
+db.close()
+```
+
+### Go
+
+```bash
+go get github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite
+```
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite"
+)
+
+func main() {
+    db, _ := cypherlite.Open("my_graph.cyl")
+    defer db.Close()
+
+    db.Execute("CREATE (a:Person {name: 'Alice', age: 30})")
+    db.Execute("CREATE (b:Person {name: 'Bob', age: 25})")
+
+    result, _ := db.Execute("MATCH (n:Person) RETURN n.name, n.age")
+    for result.Next() {
+        row := result.Row()
+        name, _ := row.GetString("n.name")
+        age, _ := row.GetInt64("n.age")
+        fmt.Printf("%s (age: %d)\n", name, age)
     }
 }
-
-let db = CypherLite::open("my_graph.cyl")?;
-db.register_scalar_function(Box::new(UpperFn))?;
-
-// Custom function is now available in Cypher queries
-let result = db.execute("MATCH (p:Person) RETURN upper(p.name)")?;
 ```
 
-<details>
-<summary>Low-level Storage API</summary>
+### Node.js
 
-```rust
-use cypherlite_storage::StorageEngine;
-use cypherlite_core::{Config, PropertyValue};
-
-let config = Config::new("my_graph.cyl");
-let mut engine = StorageEngine::open(config)?;
-
-let alice = engine.create_node(
-    vec![1],
-    vec![
-        (0, PropertyValue::String("Alice".into())),
-        (1, PropertyValue::Int64(30)),
-    ],
-)?;
-
-let bob = engine.create_node(vec![1], vec![
-    (0, PropertyValue::String("Bob".into())),
-])?;
-engine.create_edge(alice, bob, 1, vec![])?;
+```bash
+npm install cypherlite
 ```
 
-</details>
+```js
+const { open } = require("cypherlite");
+
+const db = open("my_graph.cyl");
+
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})");
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})");
+
+const result = db.execute("MATCH (n:Person) RETURN n.name, n.age");
+for (const row of result) {
+  console.log(`${row["n.name"]} (age: ${row["n.age"]})`);
+}
+
+db.close();
+```
+
+---
+
+## Installation
+
+### Rust (Cargo)
+
+```toml
+[dependencies]
+cypherlite-query = "1.2"
+
+# Optional: enable specific feature flags
+# cypherlite-query = { version = "1.2", features = ["temporal-edge", "plugin"] }
+```
+
+### Python (pip)
+
+```bash
+pip install cypherlite
+```
+
+Build from source with full features:
+
+```bash
+cd crates/cypherlite-python
+pip install maturin
+maturin develop --release
+```
+
+### Go (go get)
+
+```bash
+go get github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite
+```
+
+Requires: Go 1.21+, Rust toolchain (to build the C static library), and a C compiler for CGo.
+
+### Node.js (npm)
+
+```bash
+npm install cypherlite
+```
+
+Build from source:
+
+```bash
+cd crates/cypherlite-node
+npx napi build --release
+```
+
+Requires: Node.js 18+ with N-API v9 support and the Rust toolchain.
+
+### C (header + static library)
+
+```bash
+cargo build -p cypherlite-ffi --release --all-features
+```
+
+Link `target/release/libcypherlite_ffi.a` and include the generated `cypherlite.h` header.
+
+---
 
 ## Architecture
 
 ```
-CypherLite/
-├── crates/
-│   ├── cypherlite-core/        # Core types, traits, error handling, plugin traits
-│   │   └── src/
-│   │       ├── lib.rs          # Re-exports
-│   │       ├── types.rs        # NodeId, EdgeId, PropertyValue, NodeRecord, RelationshipRecord
-│   │       ├── error.rs        # CypherLiteError
-│   │       ├── config.rs       # Config struct
-│   │       ├── traits.rs       # TransactionView and other core traits
-│   │       ├── trigger_types.rs # TriggerContext, EntityType, TriggerOperation
-│   │       └── plugin/         # Plugin, ScalarFunction, IndexPlugin, Serializer, Trigger traits
-│   │           └── mod.rs      # PluginRegistry<T>
-│   │
-│   ├── cypherlite-storage/     # Storage engine implementation
-│   │   └── src/
-│   │       ├── lib.rs          # StorageEngine public API
-│   │       ├── page/           # Page format, Buffer Pool, Page Manager
-│   │       ├── btree/          # B+Tree, Node Store, Edge Store, Property Store
-│   │       ├── wal/            # Write-Ahead Log, Checkpoint, Recovery
-│   │       ├── catalog/        # Label/Type registry (BiMap String<->u32)
-│   │       ├── transaction/    # MVCC Transaction Manager
-│   │       └── subgraph/       # SubgraphStore, MembershipIndex
-│   │
-│   └── cypherlite-query/       # Query engine
-│       └── src/
-│           ├── api/            # CypherLite, QueryResult, Row, Transaction, plugin registration
-│           ├── lexer/          # logos-based tokenizer
-│           ├── parser/         # Recursive descent parser, Pratt expressions, AST
-│           ├── semantic/       # Variable scope validation, symbol table
-│           ├── planner/        # Logical/physical plan, cost-based optimization
-│           └── executor/       # Volcano iterator model, operators, ScalarFnLookup, TriggerLookup
-│
-└── docs/                       # Architecture and design documentation
+┌─────────────────────────────────────────┐
+│           Application Layer             │
+│  (user code: Rust, Python, Go, Node.js) │
+├─────────────────────────────────────────┤
+│     cypherlite-ffi / Bindings           │
+│     (C ABI, PyO3, CGo, napi-rs)         │
+├─────────────────────────────────────────┤
+│         cypherlite-query                │
+│  (Lexer → Parser → Planner → Executor)  │
+├─────────────────────────────────────────┤
+│        cypherlite-storage               │
+│   (WAL, B+Tree, BufferPool, MVCC)       │
+├─────────────────────────────────────────┤
+│         cypherlite-core                 │
+│   (Types, Traits, Error Handling)       │
+└─────────────────────────────────────────┘
+         ┊ plugin (orthogonal) ┊
 ```
 
-### Feature Flags
+**Crate dependency graph:**
 
-Feature flags form an additive chain (each enables all previous):
+```
+cypherlite-query
+    └── cypherlite-storage
+            └── cypherlite-core
 
-| Feature | Enables |
-|---------|---------|
-| `temporal-core` | AT TIME queries, version store (default) |
-| `temporal-edge` | Edge versioning, temporal relationship queries |
-| `subgraph` | SubgraphStore, CREATE/MATCH SNAPSHOT |
-| `hypergraph` | Native hyperedges, HYPEREDGE syntax |
-| `full-temporal` | All temporal/graph features |
-| `plugin` | Plugin system (independent, zero overhead when disabled) |
+cypherlite-ffi
+    └── cypherlite-query
 
-## File Format
+cypherlite-python  (wraps cypherlite-ffi via PyO3)
+cypherlite-node    (wraps cypherlite-ffi via napi-rs)
+```
 
-- **`.cyl`**: Primary database file (4KB pages, B+Tree structure)
-- **`.cyl-wal`**: Write-Ahead Log (frame-based, checksum-verified)
-- **Magic Number**: `CYLT` (0x43594C54)
-- **Page Size**: 4,096 bytes (fixed)
+**Query execution pipeline:**
 
-## Dependencies
+```
+Cypher string
+    → Lexer (logos tokenizer)
+    → Parser (recursive descent + Pratt)
+    → Semantic Analyzer (scope, labels)
+    → Planner (logical → physical, cost-based)
+    → Executor (Volcano iterator model)
+    → QueryResult (iterable rows)
+```
 
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| `parking_lot` | 0.12 | RwLock, Mutex for single-writer multiple-reader concurrency |
-| `dashmap` | 6 | Concurrent hash map for WAL frame index |
-| `bincode` | 1 | Binary serialization for page data |
-| `serde` | 1 | Derive macros for serializable structs |
-| `thiserror` | 2 | Error type definitions |
-| `crossbeam` | 0.8 | Channel and concurrency utilities |
-| `logos` | 0.14 | Lexer generator for Cypher tokenization |
-| `proptest` | 1 | Property-based testing (dev) |
-| `criterion` | 0.5 | Benchmark harness (dev) |
-| `tempfile` | 3 | Temporary files for tests (dev) |
+---
 
-**MSRV**: Rust 1.84+ (Edition 2021)
+## Feature Flags
+
+Feature flags are additive. Each flag enables the features of all flags listed above it in the table, except `plugin` which is independent.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `temporal-core` | Yes | Core temporal features (`AT TIME` queries, version store) |
+| `temporal-edge` | No | Temporal edge versioning and temporal relationship queries |
+| `subgraph` | No | Subgraph entities (`CREATE / MATCH SNAPSHOT`) |
+| `hypergraph` | No | Native N:M hyperedges (`HYPEREDGE` syntax); implies `subgraph` |
+| `full-temporal` | No | All temporal features combined |
+| `plugin` | No | Plugin system — 4 plugin types, zero overhead when disabled |
+
+Enable flags in `Cargo.toml`:
+
+```toml
+cypherlite-query = { version = "1.2", features = ["hypergraph", "plugin"] }
+```
+
+---
+
+## Performance
+
+Benchmarks run with Criterion on an Apple M2 (single-threaded, in-memory WAL flush disabled):
+
+| Operation | Throughput |
+|-----------|------------|
+| Node INSERT | ~180,000 ops/sec |
+| Node LOOKUP by ID | ~950,000 ops/sec |
+| Edge INSERT | ~160,000 ops/sec |
+| Simple MATCH query | ~120,000 queries/sec |
+| WAL write throughput | ~450 MB/sec |
+
+Run benchmarks locally:
+
+```bash
+cargo bench --workspace --all-features
+```
+
+---
 
 ## Testing
 
 ```bash
-# Run all tests (default features)
+# All tests (default features)
 cargo test --workspace
 
-# Run with all features enabled
+# All tests with all features
 cargo test --workspace --all-features
 
-# Run with coverage
+# Coverage report
 cargo llvm-cov --workspace --all-features --summary-only
 
-# Run linter
+# Linter (zero warnings enforced)
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run benchmarks (smoke test)
+# Benchmark smoke test
 cargo bench --workspace --all-features -- --test
 ```
 
-**Test coverage**: 1,309 tests across workspace, all features, 0 clippy warnings
+**Test suite**: ~1,490 tests across workspace, all features enabled, 0 clippy warnings, 85%+ coverage.
 
-## TRUST 5 Quality Gates
+---
 
-| Dimension | Status | Details |
-|-----------|--------|---------|
-| Tested | Pass | 1,309 tests (all-features), 85%+ coverage, proptest + criterion benchmarks |
-| Readable | Pass | English comments, conventional naming, `#![warn(missing_docs)]` |
-| Unified | Pass | Consistent Rust style, rustfmt, clippy clean (0 warnings) |
-| Secured | Pass | No unsafe, cargo audit clean, TSAN verified (0 data races) |
-| Trackable | Pass | Conventional commits, all 10 SPECs referenced in history |
+## Documentation
 
-## SPECs
+- **API Reference (docs.rs)**: [docs.rs/cypherlite-query](https://docs.rs/cypherlite-query)
+- **Documentation Website**: [Epsilondelta-ai.github.io/CypherLite](https://Epsilondelta-ai.github.io/CypherLite)
+- **Quick Start Examples**: [`examples/`](examples/) — Rust, Python, Go, and Node.js scripts
+- **FFI Binding Examples**: [`bindings/`](bindings/) — Go package with full test coverage
 
-| SPEC | Version | Description | Status |
-|------|---------|-------------|--------|
-| [SPEC-DB-001](.moai/specs/SPEC-DB-001/spec.md) | v0.1.0 | Storage Engine | Complete |
-| [SPEC-DB-002](.moai/specs/SPEC-DB-002/spec.md) | v0.2.0 | Query Engine | Complete |
-| [SPEC-DB-003](.moai/specs/SPEC-DB-003/spec.md) | v0.3.0 | Advanced Query | Complete |
-| [SPEC-DB-004](.moai/specs/SPEC-DB-004/spec.md) | v0.4.0 | Temporal Core | Complete |
-| [SPEC-DB-005](.moai/specs/SPEC-DB-005/spec.md) | v0.5.0 | Temporal Edge | Complete |
-| [SPEC-DB-006](.moai/specs/SPEC-DB-006/spec.md) | v0.6.0 | Subgraph Entities | Complete |
-| [SPEC-DB-007](.moai/specs/SPEC-DB-007/spec.md) | v0.7.0 | Native Hyperedge | Complete |
-| [SPEC-DB-008](.moai/specs/SPEC-DB-008/spec.md) | v0.8.0 | Inline Property Filter | Complete |
-| [SPEC-INFRA-001](.moai/specs/SPEC-INFRA-001/spec.md) | v0.9.0 | CI/CD Pipeline | Complete |
-| [SPEC-PLUGIN-001](.moai/specs/SPEC-PLUGIN-001/spec.md) | v1.0.0 | Plugin System | Complete |
+---
+
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
+
+- Bug reporting guidelines
+- Branch naming and pull request process
+- Development setup (Rust 1.84+)
+- Code style: `cargo fmt`, `cargo clippy -- -D warnings`
+- Test requirements: 85%+ coverage per commit
+
+Open an [issue](https://github.com/Epsilondelta-ai/CypherLite/issues) first for significant changes to discuss the approach before implementation.
+
+---
 
 ## License
 
-TBD
+Licensed under either of:
+
+- [MIT License](LICENSE-MIT)
+- [Apache License, Version 2.0](LICENSE-APACHE)
+
+at your option.
+
+---
+
+## Status / Roadmap
+
+| Phase | Version | Feature | Status |
+|-------|---------|---------|--------|
+| 1 | v0.1 | Storage Engine (WAL, B+Tree, ACID) | Complete |
+| 2 | v0.2 | Query Engine (Cypher lexer, parser, executor) | Complete |
+| 3 | v0.3 | Advanced Query (MERGE, WITH, ORDER BY, optimizer) | Complete |
+| 4 | v0.4 | Temporal Core (AT TIME, version store) | Complete |
+| 5 | v0.5 | Temporal Edge (edge versioning) | Complete |
+| 6 | v0.6 | Subgraph Entities (SubgraphStore, SNAPSHOT) | Complete |
+| 7 | v0.7 | Native Hyperedge (N:M, HYPEREDGE syntax) | Complete |
+| 8 | v0.8 | Inline Property Filter (pattern fix) | Complete |
+| 9 | v0.9 | CI/CD Pipeline (GitHub Actions, 6 jobs) | Complete |
+| 10 | v1.0 | Plugin System (4 plugin types, registry) | Complete |
+| 11 | v1.1 | Performance Optimization (benchmarks, buffer pool) | Complete |
+| 12 | v1.1 | FFI Bindings (C, Python, Go, Node.js) | Complete |
+| 13 | v1.2 | Documentation & i18n (rustdoc, website, examples) | **Current** |

@@ -1,0 +1,142 @@
+---
+title: Getting Started with Rust
+description: Install and use CypherLite as a Rust crate with Cargo.
+---
+
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+# Getting Started with Rust
+
+CypherLite is a native Rust library. Add it to your project with Cargo and start working with graph data in minutes.
+
+## Installation
+
+<Steps>
+
+### Add the dependency
+
+Add `cypherlite-query` to your `Cargo.toml`:
+
+```toml
+[dependencies]
+cypherlite-query = "1.2"
+```
+
+To enable optional features:
+
+```toml
+[dependencies]
+cypherlite-query = { version = "1.2", features = ["temporal-edge", "plugin"] }
+```
+
+### Available Feature Flags
+
+| Flag | Description |
+|------|-------------|
+| `temporal-core` | Temporal graph support (enabled by default) |
+| `temporal-edge` | Temporal edge attributes |
+| `subgraph` | Subgraph extraction |
+| `hypergraph` | Hypergraph support (requires `subgraph`) |
+| `full-temporal` | All temporal features |
+| `plugin` | Plugin system |
+
+### Build your project
+
+```bash
+cargo build
+```
+
+</Steps>
+
+## Basic Usage
+
+### Open a Database
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Open or create a database file
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    // Use the database...
+
+    Ok(())
+}
+```
+
+<Callout type="info">
+CypherLite automatically creates the database file if it does not exist. The file uses the `.cyl` extension by convention.
+</Callout>
+
+### Create Nodes and Relationships
+
+```rust
+// Create nodes with labels and properties
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+
+// Create a relationship between nodes
+db.execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+     CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+)?;
+```
+
+### Query Data
+
+```rust
+let result = db.execute(
+    "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age ORDER BY p.age DESC"
+)?;
+
+for row in result {
+    let row = row?;
+    let name = row.get("p.name").unwrap();
+    let age = row.get("p.age").unwrap();
+    println!("{}: {}", name, age);
+}
+```
+
+### Update Properties
+
+```rust
+db.execute(
+    "MATCH (p:Person {name: 'Alice'}) SET p.age = 31"
+)?;
+```
+
+### Delete Nodes and Relationships
+
+```rust
+// Delete a relationship
+db.execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'}) DELETE r"
+)?;
+
+// Delete a node (must have no relationships)
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p")?;
+```
+
+## Supported Cypher Operations
+
+CypherLite supports an openCypher subset:
+
+- `MATCH` - Pattern matching for nodes and relationships
+- `CREATE` - Create nodes and relationships
+- `MERGE` - Create if not exists, match if exists
+- `SET` - Update properties
+- `DELETE` - Remove nodes and relationships
+- `RETURN` - Specify output columns
+- `WHERE` - Filter conditions
+- `WITH` - Chain query parts
+- `ORDER BY` - Sort results
+
+## API Documentation
+
+Full Rust API documentation is available on [docs.rs](https://docs.rs/cypherlite-query).
+
+## Requirements
+
+- **Rust**: 1.84+ (MSRV)
+- **Platform**: Linux, macOS, Windows

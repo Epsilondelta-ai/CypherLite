@@ -1,0 +1,200 @@
+---
+title: 插件系统
+description: 使用自定义函数、索引、序列化器和触发器扩展 CypherLite。
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# 插件系统
+
+CypherLite 的插件系统让您可以使用自定义功能扩展数据库引擎。提供四种插件类型，每种服务于不同的扩展点。
+
+<Callout type="info">
+插件系统需要 `plugin` 功能标志。它通过 cfg 门控，禁用时不会产生额外开销。
+</Callout>
+
+## 插件类型
+
+| 类型 | 用途 | 使用场景示例 |
+|------|---------|-----------------|
+| **ScalarFunction** | 可在 Cypher 表达式中调用的自定义查询函数 | 字符串操作、数学函数、哈希计算 |
+| **IndexPlugin** | 可插拔的自定义索引实现 | HNSW 向量索引、全文搜索、空间索引 |
+| **Serializer** | 自定义导入/导出格式插件 | JSON-LD 导出、GraphML 导入、CSV 批量加载 |
+| **Trigger** | CREATE、DELETE、SET 操作的前后钩子 | 审计日志、验证、级联操作 |
+
+## ScalarFunction
+
+注册可在 Cypher 查询中调用的自定义函数：
+
+```rust
+use cypherlite_core::plugin::{Plugin, ScalarFunction};
+use cypherlite_core::Value;
+
+struct UpperCase;
+
+impl Plugin for UpperCase {
+    fn name(&self) -> &str { "upper" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Converts a string to uppercase" }
+}
+
+impl ScalarFunction for UpperCase {
+    fn execute(&self, args: &[Value]) -> Result<Value, String> {
+        match &args[0] {
+            Value::String(s) => Ok(Value::String(s.to_uppercase())),
+            _ => Err("Expected a string argument".into()),
+        }
+    }
+}
+```
+
+注册后，在查询中使用：
+
+```cypher
+MATCH (p:Person)
+RETURN upper(p.name) AS upper_name
+```
+
+## IndexPlugin
+
+实现自定义索引以支持特定的查询模式：
+
+```rust
+use cypherlite_core::plugin::{Plugin, IndexPlugin};
+
+struct HnswIndex { /* ... */ }
+
+impl Plugin for HnswIndex {
+    fn name(&self) -> &str { "hnsw_vector" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "HNSW approximate nearest neighbor index" }
+}
+
+impl IndexPlugin for HnswIndex {
+    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<(), String> {
+        // Add vector to HNSW graph
+        Ok(())
+    }
+
+    fn search(&self, query: &[u8], limit: usize) -> Result<Vec<Vec<u8>>, String> {
+        // Find approximate nearest neighbors
+        Ok(vec![])
+    }
+}
+```
+
+## Serializer
+
+创建自定义导入/导出格式：
+
+```rust
+use cypherlite_core::plugin::{Plugin, Serializer};
+
+struct JsonLdExporter;
+
+impl Plugin for JsonLdExporter {
+    fn name(&self) -> &str { "jsonld" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Export graph data as JSON-LD" }
+}
+
+impl Serializer for JsonLdExporter {
+    fn serialize(&self, graph: &GraphData) -> Result<Vec<u8>, String> {
+        // Convert graph to JSON-LD format
+        Ok(vec![])
+    }
+
+    fn deserialize(&self, data: &[u8]) -> Result<GraphData, String> {
+        // Parse JSON-LD into graph data
+        Ok(GraphData::default())
+    }
+}
+```
+
+## Trigger
+
+为数据修改操作添加前后钩子：
+
+```rust
+use cypherlite_core::plugin::{Plugin, Trigger, TriggerEvent, TriggerTiming};
+
+struct AuditLogger;
+
+impl Plugin for AuditLogger {
+    fn name(&self) -> &str { "audit_log" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Logs all data modifications" }
+}
+
+impl Trigger for AuditLogger {
+    fn timing(&self) -> TriggerTiming {
+        TriggerTiming::After
+    }
+
+    fn events(&self) -> &[TriggerEvent] {
+        &[TriggerEvent::Create, TriggerEvent::Delete, TriggerEvent::Set]
+    }
+
+    fn execute(&self, event: &TriggerEvent, context: &TriggerContext) -> Result<(), String> {
+        println!("[AUDIT] {:?} on {:?}", event, context.target());
+        Ok(())
+    }
+}
+```
+
+<Callout type="warning">
+Before-trigger 可以通过返回 `Err` 来中止操作，这将触发当前事务的回滚。可用于验证逻辑。
+</Callout>
+
+## 插件注册表
+
+所有插件通过泛型 `PluginRegistry<T>` 管理：
+
+```rust
+use cypherlite_core::plugin::PluginRegistry;
+
+let mut registry = PluginRegistry::new();
+registry.register(Box::new(UpperCase));
+registry.register(Box::new(AuditLogger));
+
+// Look up a plugin by name
+if let Some(plugin) = registry.get("upper") {
+    println!("Found: {}", plugin.description());
+}
+```
+
+注册表是线程安全的（`Send + Sync`），内部使用 `HashMap` 实现按名称 O(1) 查找。
+
+## Trigger 查找
+
+对于 trigger，专门的 `TriggerLookup` trait 支持按事件类型高效查找：
+
+```rust
+// Find all triggers for CREATE events
+let triggers = registry.triggers_for(TriggerEvent::Create);
+for trigger in triggers {
+    trigger.execute(&event, &context)?;
+}
+```
+
+## 最佳实践
+
+<Steps>
+
+### 保持插件专注
+
+每个插件应该只做好一件事。优先使用多个小插件，而非一个大插件。
+
+### 优雅处理错误
+
+始终返回有意义的错误消息。插件错误会传播给调用者。
+
+### 独立测试插件
+
+为每个插件编写单元测试。插件 trait 的设计便于在无需完整数据库实例的情况下进行测试。
+
+### 使用功能标志
+
+`plugin` 功能标志确保在不需要插件时零开销。仅在需要插件支持的构建中启用它。
+
+</Steps>

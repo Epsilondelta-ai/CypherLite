@@ -1,0 +1,38 @@
+---
+title: المساهمة
+description: How to contribute to CypherLite.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# المساهمة
+
+شكراً لاهتمامك بالمساهمة في CypherLite. توفر هذه الصفحة ملخصاً لإرشادات المساهمة. للدليل الكامل، راجع [CONTRIBUTING.md](https://github.com/Epsilondelta-ai/CypherLite/blob/main/CONTRIBUTING.md) on GitHub.
+
+## Development Setup
+
+```bash
+git clone https://github.com/Epsilondelta-ai/CypherLite.git
+cd CypherLite
+cargo build --workspace
+cargo test --workspace --all-features
+```
+
+## Code Style
+
+- `cargo fmt`
+- `cargo clippy --all-features`
+- 85%+ test coverage
+
+## Commit Messages
+
+[Conventional Commits](https://www.conventionalcommits.org/):
+
+- `feat(core): add temporal aggregation support`
+- `fix(storage): resolve WAL replay edge case`
+- `docs: update architecture diagram`
+- `test(query): add parser edge case tests`
+
+## License
+
+MIT OR Apache-2.0

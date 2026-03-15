@@ -1,0 +1,115 @@
+---
+title: Getting Started with Node.js
+description: Install and use CypherLite Node.js bindings via napi-rs.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started with Node.js
+
+CypherLite provides Node.js bindings built with [napi-rs](https://napi.rs), offering a native N-API addon for high-performance graph database operations.
+
+## Installation
+
+<Steps>
+
+### Install from npm
+
+```bash
+npm install cypherlite
+```
+
+### Verify the installation
+
+```js
+const { open } = require("cypherlite");
+console.log("CypherLite loaded successfully");
+```
+
+</Steps>
+
+<Callout type="info">
+Pre-built native addons are available for Linux, macOS, and Windows. If no pre-built binary is available, npm will attempt to build from source (requires the Rust toolchain).
+</Callout>
+
+## Basic Usage
+
+### Open a Database
+
+```js
+const { open } = require("cypherlite");
+
+const db = open("my_graph.cyl");
+```
+
+### Create Nodes and Relationships
+
+```js
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})");
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})");
+db.execute(
+  "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) " +
+  "CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+);
+```
+
+### Query Data
+
+```js
+const result = db.execute("MATCH (n:Person) RETURN n.name, n.age");
+for (const row of result) {
+  console.log(`${row["n.name"]} (age: ${row["n.age"]})`);
+}
+```
+
+### Update and Delete
+
+```js
+// Update properties
+db.execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 31");
+
+// Delete a relationship
+db.execute(
+  "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b) DELETE r"
+);
+
+// Delete a node
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p");
+```
+
+### Close the Database
+
+```js
+db.close();
+```
+
+<Callout type="warning">
+Always call `db.close()` when finished to ensure all data is flushed to disk and native resources are released.
+</Callout>
+
+## ES Module Support
+
+CypherLite also works with ES modules:
+
+```js
+import { open } from "cypherlite";
+
+const db = open("my_graph.cyl");
+// ... use the database
+db.close();
+```
+
+## Building from Source
+
+If you need to build the native addon from source:
+
+```bash
+cd crates/cypherlite-node
+npx napi build --release
+```
+
+## Requirements
+
+- **Node.js**: 18+ (N-API v9)
+- **Platform**: Linux, macOS, Windows
+- **Build from source**: Requires the Rust 1.84+ toolchain

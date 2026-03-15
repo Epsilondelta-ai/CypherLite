@@ -1,0 +1,200 @@
+---
+title: Plugin System
+description: Extend CypherLite with custom functions, indexes, serializers, and triggers.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Plugin System
+
+CypherLite's plugin system lets you extend the database engine with custom functionality. Four plugin types are available, each serving a different extension point.
+
+<Callout type="info">
+The plugin system requires the `plugin` feature flag. It is cfg-gated and adds zero overhead when disabled.
+</Callout>
+
+## Plugin Types
+
+| Type | Purpose | Example Use Case |
+|------|---------|-----------------|
+| **ScalarFunction** | Custom query functions callable in Cypher expressions | String manipulation, math functions, hash computation |
+| **IndexPlugin** | Pluggable custom index implementations | HNSW vector index, full-text search, spatial index |
+| **Serializer** | Custom import/export format plugins | JSON-LD export, GraphML import, CSV bulk loader |
+| **Trigger** | Before/after hooks for CREATE, DELETE, SET operations | Audit logging, validation, cascade operations |
+
+## ScalarFunction
+
+Register a custom function that can be called in Cypher queries:
+
+```rust
+use cypherlite_core::plugin::{Plugin, ScalarFunction};
+use cypherlite_core::Value;
+
+struct UpperCase;
+
+impl Plugin for UpperCase {
+    fn name(&self) -> &str { "upper" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Converts a string to uppercase" }
+}
+
+impl ScalarFunction for UpperCase {
+    fn execute(&self, args: &[Value]) -> Result<Value, String> {
+        match &args[0] {
+            Value::String(s) => Ok(Value::String(s.to_uppercase())),
+            _ => Err("Expected a string argument".into()),
+        }
+    }
+}
+```
+
+After registering, use it in queries:
+
+```cypher
+MATCH (p:Person)
+RETURN upper(p.name) AS upper_name
+```
+
+## IndexPlugin
+
+Implement a custom index for specialized query patterns:
+
+```rust
+use cypherlite_core::plugin::{Plugin, IndexPlugin};
+
+struct HnswIndex { /* ... */ }
+
+impl Plugin for HnswIndex {
+    fn name(&self) -> &str { "hnsw_vector" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "HNSW approximate nearest neighbor index" }
+}
+
+impl IndexPlugin for HnswIndex {
+    fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<(), String> {
+        // Add vector to HNSW graph
+        Ok(())
+    }
+
+    fn search(&self, query: &[u8], limit: usize) -> Result<Vec<Vec<u8>>, String> {
+        // Find approximate nearest neighbors
+        Ok(vec![])
+    }
+}
+```
+
+## Serializer
+
+Create custom import/export formats:
+
+```rust
+use cypherlite_core::plugin::{Plugin, Serializer};
+
+struct JsonLdExporter;
+
+impl Plugin for JsonLdExporter {
+    fn name(&self) -> &str { "jsonld" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Export graph data as JSON-LD" }
+}
+
+impl Serializer for JsonLdExporter {
+    fn serialize(&self, graph: &GraphData) -> Result<Vec<u8>, String> {
+        // Convert graph to JSON-LD format
+        Ok(vec![])
+    }
+
+    fn deserialize(&self, data: &[u8]) -> Result<GraphData, String> {
+        // Parse JSON-LD into graph data
+        Ok(GraphData::default())
+    }
+}
+```
+
+## Trigger
+
+Add before/after hooks for data modification operations:
+
+```rust
+use cypherlite_core::plugin::{Plugin, Trigger, TriggerEvent, TriggerTiming};
+
+struct AuditLogger;
+
+impl Plugin for AuditLogger {
+    fn name(&self) -> &str { "audit_log" }
+    fn version(&self) -> &str { "1.0.0" }
+    fn description(&self) -> &str { "Logs all data modifications" }
+}
+
+impl Trigger for AuditLogger {
+    fn timing(&self) -> TriggerTiming {
+        TriggerTiming::After
+    }
+
+    fn events(&self) -> &[TriggerEvent] {
+        &[TriggerEvent::Create, TriggerEvent::Delete, TriggerEvent::Set]
+    }
+
+    fn execute(&self, event: &TriggerEvent, context: &TriggerContext) -> Result<(), String> {
+        println!("[AUDIT] {:?} on {:?}", event, context.target());
+        Ok(())
+    }
+}
+```
+
+<Callout type="warning">
+Before-triggers can abort an operation by returning an `Err`. This triggers a rollback of the current transaction. Use this for validation logic.
+</Callout>
+
+## Plugin Registry
+
+All plugins are managed through the generic `PluginRegistry<T>`:
+
+```rust
+use cypherlite_core::plugin::PluginRegistry;
+
+let mut registry = PluginRegistry::new();
+registry.register(Box::new(UpperCase));
+registry.register(Box::new(AuditLogger));
+
+// Look up a plugin by name
+if let Some(plugin) = registry.get("upper") {
+    println!("Found: {}", plugin.description());
+}
+```
+
+The registry is thread-safe (`Send + Sync`) and uses a `HashMap` internally for O(1) lookup by name.
+
+## Trigger Lookup
+
+For triggers, a specialized `TriggerLookup` trait enables efficient lookup by event type:
+
+```rust
+// Find all triggers for CREATE events
+let triggers = registry.triggers_for(TriggerEvent::Create);
+for trigger in triggers {
+    trigger.execute(&event, &context)?;
+}
+```
+
+## Best Practices
+
+<Steps>
+
+### Keep plugins focused
+
+Each plugin should do one thing well. Prefer multiple small plugins over one large plugin.
+
+### Handle errors gracefully
+
+Always return meaningful error messages. Plugin errors propagate to the caller.
+
+### Test plugins independently
+
+Write unit tests for each plugin. The plugin traits are designed for easy testing without a full database instance.
+
+### Use feature flags
+
+The `plugin` feature flag ensures zero overhead when plugins are not needed. Enable it only in builds that require plugin support.
+
+</Steps>

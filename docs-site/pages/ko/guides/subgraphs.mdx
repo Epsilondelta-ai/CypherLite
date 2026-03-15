@@ -1,0 +1,123 @@
+---
+title: 서브그래프
+description: CypherLite에서 일급 엔티티로 네임드 서브그래프를 생성, 쿼리, 관리합니다.
+---
+
+import { Callout } from 'nextra/components'
+
+# 서브그래프
+
+CypherLite는 서브그래프를 일급 엔티티로 취급합니다. 그래프의 일부를 스냅샷으로 캡처하고, 이름을 지정하고, 나중에 쿼리할 수 있습니다. 버전 관리, 분석, 그래프 영역 격리에 유용합니다.
+
+<Callout type="info">
+서브그래프는 `subgraph` 기능 플래그가 필요합니다.
+</Callout>
+
+## 개요
+
+서브그래프는 메인 그래프와 함께 저장되는 노드와 엣지의 네임드 컬렉션입니다. 서브그래프는 스냅샷 메커니즘을 통해 그래프의 현재 상태에서 생성됩니다.
+
+주요 개념:
+
+- **SubgraphStore**가 네임드 서브그래프를 일급 엔티티로 관리
+- **CREATE SNAPSHOT**이 매칭된 노드와 엣지의 현재 상태를 캡처
+- **MATCH SNAPSHOT**이 이전에 저장된 서브그래프를 쿼리
+- 서브그래프는 생성 후 불변
+
+## 서브그래프 생성
+
+`CREATE SNAPSHOT`을 사용하여 서브그래프를 캡처합니다:
+
+```cypher
+MATCH (p:Person)-[r:KNOWS]->(friend:Person)
+WHERE p.name = 'Alice'
+CREATE SNAPSHOT 'alice_network'
+```
+
+패턴에 매칭되는 모든 노드와 엣지를 `alice_network`라는 네임드 서브그래프로 캡처합니다.
+
+### 캡처되는 내용
+
+- 패턴에 매칭되는 모든 노드
+- 패턴에 매칭되는 모든 관계
+- 캡처 시점의 노드와 관계의 모든 프로퍼티
+- 스냅샷은 시점 복사본; 원본 노드에 대한 이후 변경은 스냅샷에 영향을 미치지 않음
+
+## 서브그래프 쿼리
+
+`MATCH SNAPSHOT`을 사용하여 저장된 서브그래프를 쿼리합니다:
+
+```cypher
+MATCH SNAPSHOT 'alice_network'
+(p:Person)-[r:KNOWS]->(friend:Person)
+RETURN p.name, friend.name, r.since
+```
+
+전체 그래프가 아닌 `alice_network` 서브그래프의 노드와 엣지에서만 패턴 매칭을 실행합니다.
+
+## 사용 사례
+
+### 그래프 버전 관리
+
+주요 마일스톤에서 스냅샷을 캡처하여 그래프 상태를 보존합니다:
+
+```cypher
+-- Before a batch import
+MATCH (n) CREATE SNAPSHOT 'pre_import_2024'
+
+-- After the import, compare
+MATCH SNAPSHOT 'pre_import_2024' (n:Person)
+RETURN count(n) AS before_count
+```
+
+### 분석 격리
+
+그래프의 특정 영역을 격리하여 집중 분석합니다:
+
+```cypher
+-- Capture the fraud-suspect subgraph
+MATCH (a:Account)-[t:TRANSFERRED]->(b:Account)
+WHERE t.amount > 10000
+CREATE SNAPSHOT 'high_value_transfers'
+
+-- Analyze the isolated subgraph
+MATCH SNAPSHOT 'high_value_transfers'
+(a:Account)-[t:TRANSFERRED]->(b:Account)
+RETURN a.id, b.id, sum(t.amount) AS total
+```
+
+### 비교
+
+서로 다른 시점의 동일 영역 스냅샷 두 개를 비교합니다:
+
+```cypher
+-- Snapshot from January
+MATCH SNAPSHOT 'network_jan' (p:Person)
+RETURN count(p) AS jan_count
+
+-- Snapshot from June
+MATCH SNAPSHOT 'network_jun' (p:Person)
+RETURN count(p) AS jun_count
+```
+
+## 스토리지
+
+서브그래프는 메인 노드 및 엣지 스토리지와 함께 `SubgraphStore`에 저장됩니다. 각 서브그래프 항목에는 다음이 포함됩니다:
+
+| 필드 | 설명 |
+|-------|-------------|
+| Name | 서브그래프의 고유 식별자 |
+| Node IDs | 스냅샷에 포함된 노드 ID 집합 |
+| Edge IDs | 스냅샷에 포함된 엣지 ID 집합 |
+| Properties | 캡처 시점의 스냅샷 프로퍼티 값 |
+| Created At | 스냅샷 생성 타임스탬프 |
+
+<Callout type="warning">
+서브그래프는 캡처된 노드와 엣지 수에 비례하는 추가 스토리지를 소비합니다. 매우 큰 스냅샷의 경우 데이터베이스 파일 크기를 모니터링하세요.
+</Callout>
+
+## 제한 사항
+
+- 서브그래프는 불변입니다; 기존 스냅샷에서 노드를 추가하거나 제거할 수 없음
+- 서브그래프를 삭제하면 스냅샷 메타데이터만 제거되며 원본 노드/엣지는 삭제되지 않음
+- 서브그래프 이름은 데이터베이스 내에서 고유해야 함

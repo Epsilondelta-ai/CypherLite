@@ -1,7 +1,11 @@
 // Parser module: recursive descent parser producing AST
+/// Abstract Syntax Tree node type definitions.
 pub mod ast;
+/// Clause-level parsers (MATCH, RETURN, CREATE, etc.).
 pub mod clause;
+/// Expression parser (Pratt/precedence-climbing).
 pub mod expression;
+/// Graph pattern parser (nodes and relationships).
 pub mod pattern;
 
 use crate::lexer::{lex, LexError, Span, Token};
@@ -140,10 +144,14 @@ pub fn parse_query(input: &str) -> Result<Query, ParseError> {
     Ok(Query { clauses })
 }
 
+/// Error produced during parsing, with source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
+    /// 1-based line number.
     pub line: usize,
+    /// 1-based column number.
     pub column: usize,
+    /// Human-readable error description.
     pub message: String,
 }
 
@@ -167,6 +175,7 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    /// Create a new parser over the given token slice and source text.
     pub fn new(tokens: &'a [(Token, Span)], input: &'a str) -> Self {
         Self {
             tokens,

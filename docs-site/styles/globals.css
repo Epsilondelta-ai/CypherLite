@@ -1,0 +1,62 @@
+/* CypherLite Documentation - Global Styles */
+
+/* RTL support for Arabic locale */
+[dir='rtl'] {
+  text-align: right;
+}
+
+[dir='rtl'] .nextra-sidebar-container {
+  border-right: none;
+  border-left: 1px solid var(--nextra-border-color);
+}
+
+[dir='rtl'] .nextra-toc {
+  border-left: none;
+  border-right: 1px solid var(--nextra-border-color);
+}
+
+/* Hero section styles */
+.hero-title {
+  font-size: 3rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+@media (min-width: 768px) {
+  .hero-title {
+    font-size: 4rem;
+  }
+}
+
+.hero-subtitle {
+  font-size: 1.25rem;
+  color: var(--nextra-colors-gray-500);
+  max-width: 36rem;
+  margin: 0 auto;
+}
+
+/* Feature card grid */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+
+.feature-card {
+  padding: 1.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--nextra-border-color);
+}
+
+.feature-card h3 {
+  margin-top: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+/* Code block language label */
+pre code {
+  font-size: 0.875rem;
+}

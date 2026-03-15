@@ -1,0 +1,163 @@
+---
+title: Architecture
+description: CypherLite internal architecture, crate structure, and query execution pipeline.
+---
+
+import { Callout } from 'nextra/components'
+
+# Architecture
+
+CypherLite is organized as a layered architecture with four Rust crates, each responsible for a distinct concern.
+
+## 5-Layer Architecture
+
+```
++--------------------------------------------------+
+|              Application Layer                    |
+|   Rust API  |  Python  |  Go  |  Node.js  |  C   |
++--------------------------------------------------+
+|              FFI Layer (cypherlite-ffi)           |
+|   C ABI  |  PyO3  |  CGo  |  napi-rs            |
++--------------------------------------------------+
+|           Query Engine (cypherlite-query)         |
+|   Parser  |  Analyzer  |  Optimizer  |  Executor  |
++--------------------------------------------------+
+|            Core Layer (cypherlite-core)           |
+|   Graph Model  |  Temporal  |  Plugin System      |
++--------------------------------------------------+
+|         Storage Engine (cypherlite-storage)       |
+|   B+Tree  |  WAL  |  BufferPool  |  PageManager   |
++--------------------------------------------------+
+```
+
+## Crate Dependency Graph
+
+```
+cypherlite-ffi
+    |
+    v
+cypherlite-query
+    |
+    v
+cypherlite-core
+    |
+    v
+cypherlite-storage
+```
+
+Each crate depends only on the layer directly below it, ensuring clean separation of concerns:
+
+| Crate | Responsibility |
+|-------|---------------|
+| **cypherlite-storage** | Disk I/O, page management, B+Tree index, WAL, buffer pool, crash recovery |
+| **cypherlite-core** | Graph data model, property types, temporal versioning, subgraphs, hyperedges, plugin traits |
+| **cypherlite-query** | Cypher parser, semantic analysis, cost-based optimizer, volcano executor |
+| **cypherlite-ffi** | C ABI exports, PyO3 bindings, CGo bridge, napi-rs addon |
+
+## Storage Engine
+
+The storage engine is responsible for durable persistence of all graph data.
+
+### B+Tree Index
+
+- O(log n) lookup for nodes and edges
+- Index-free adjacency for relationship traversal
+- Supports range scans for ordered property access
+
+### Write-Ahead Log (WAL)
+
+- All mutations are first written to the WAL before applying to data pages
+- Crash recovery replays uncommitted WAL frames on startup
+- Single-writer / multiple-reader concurrency model
+
+### Buffer Pool
+
+- LRU page cache sits between the query engine and disk
+- Dirty page tracking with batched writeback
+- Configurable cache size for memory vs. I/O tradeoff
+
+### Page Manager
+
+- Fixed-size page allocation and deallocation
+- Free-list management for space reuse
+- Page-level locking with `parking_lot`
+
+## Query Execution Pipeline
+
+A Cypher query goes through four stages before producing results:
+
+```
+Cypher String
+    |
+    v
++-------------------+
+|   1. Parser       |  Recursive descent with Pratt expression parsing
++-------------------+  Produces: Abstract Syntax Tree (AST)
+    |
+    v
++-------------------+
+|   2. Analyzer     |  Variable scope validation, label/type resolution
++-------------------+  Produces: Validated AST with semantic info
+    |
+    v
++-------------------+
+|   3. Optimizer    |  Logical-to-physical plan, predicate pushdown
++-------------------+  Produces: Physical execution plan
+    |
+    v
++-------------------+
+|   4. Executor     |  Volcano iterator model with 12 operators
++-------------------+  Produces: Result rows (streaming)
+```
+
+### Parser
+
+- Hand-written recursive descent parser (no parser generator)
+- Pratt parsing for expression precedence
+- Supports 28+ Cypher keywords
+- Inline property filter: `MATCH (n:Label {key: value})`
+
+### Semantic Analyzer
+
+- Variable scope validation across `WITH` boundaries
+- Label and relationship type resolution
+- Type checking for property comparisons
+
+### Cost-Based Optimizer
+
+- Logical-to-physical plan conversion
+- Predicate pushdown to reduce intermediate tuples
+- Index selection based on available B+Tree indexes
+- Join order optimization for multi-pattern MATCH
+
+### Volcano Executor
+
+- Iterator-based pull model (lazy evaluation)
+- 12 physical operators: Scan, IndexScan, Filter, Project, Sort, Limit, Join, Create, Delete, Set, Merge, Aggregate
+- Three-valued logic for NULL propagation per openCypher spec
+
+## Concurrency Model
+
+CypherLite uses a **single-writer / multiple-reader** model inspired by SQLite:
+
+- One write transaction at a time (serialized via mutex)
+- Multiple concurrent read transactions
+- WAL-based snapshot isolation ensures readers see a consistent view
+- No read blocking during writes (readers use WAL frame index)
+
+<Callout type="info">
+This concurrency model is ideal for embedded use cases where the database is accessed from a single process. For multi-process access, use file locking (OS-level).
+</Callout>
+
+## Feature Flags
+
+CypherLite uses Cargo feature flags to enable optional functionality at compile time:
+
+| Flag | Default | Crate | Description |
+|------|---------|-------|-------------|
+| `temporal-core` | Yes | core | Temporal graph support |
+| `temporal-edge` | No | core | Temporal edge attributes |
+| `subgraph` | No | core | Named subgraph entities |
+| `hypergraph` | No | core | N:M hyperedge relationships (requires `subgraph`) |
+| `full-temporal` | No | core | All temporal features |
+| `plugin` | No | core | Plugin system (ScalarFunction, IndexPlugin, Serializer, Trigger) |

@@ -1,0 +1,138 @@
+---
+title: CypherLite - Простота SQLite для графовых баз данных
+description: Легковесный встраиваемый однофайловый движок графовых баз данных, написанный на Rust с развертыванием без конфигурации и полной поддержкой ACID.
+---
+
+import { Cards, Callout, Steps } from 'nextra/components'
+
+<div style={{ textAlign: 'center', padding: '4rem 0 2rem' }}>
+
+<h1 className="hero-title">CypherLite</h1>
+
+<p className="hero-subtitle">
+Простота SQLite для графовых баз данных
+</p>
+
+<p style={{ marginTop: '1.5rem' }}>
+Легковесный встраиваемый однофайловый движок графовых баз данных, написанный на Rust.
+Развертывание без конфигурации, полная поддержка ACID и нативная поддержка графов свойств.
+</p>
+
+<div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+  <a
+    href="/ru/getting-started/rust"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      backgroundColor: 'var(--nextra-primary-hue)',
+      color: 'white',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    Начать
+  </a>
+  <a
+    href="https://github.com/Epsilondelta-ai/CypherLite"
+    target="_blank"
+    rel="noreferrer"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      border: '1px solid currentColor',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    GitHub
+  </a>
+</div>
+
+</div>
+
+---
+
+## Почему CypherLite?
+
+<div className="feature-grid">
+
+<div className="feature-card">
+### Без конфигурации
+Откройте файл и начните выполнять запросы. Без серверного процесса, без установки, без файлов конфигурации. Только один файл `.cyl`.
+</div>
+
+<div className="feature-card">
+### Однофайловая база данных
+Все данные графа хранятся в одном переносимом файле. Копируйте, создавайте резервные копии или делитесь всей графовой базой данных одной операцией.
+</div>
+
+<div className="feature-card">
+### Совместимость с ACID
+Полная транзакционная безопасность с журналом упреждающей записи, изоляцией снимков и восстановлением после сбоев. Ваши данные всегда согласованы.
+</div>
+
+<div className="feature-card">
+### Встраиваемая библиотека
+Подключите CypherLite непосредственно к вашему приложению. Доступен как крейт Rust, пакет Python, модуль Go, аддон Node.js и библиотека C.
+</div>
+
+<div className="feature-card">
+### Расширяемая система плагинов
+Четыре типа плагинов (ScalarFunction, IndexPlugin, Serializer, Trigger) позволяют расширять CypherLite под ваши потребности.
+</div>
+
+<div className="feature-card">
+### Временные запросы
+Запрашивайте граф в любой момент времени. Встроенное версионирование отслеживает каждое изменение узлов, ребер и свойств.
+</div>
+
+</div>
+
+## Быстрый пример
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+    db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+    db.execute(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+         CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+    )?;
+
+    let result = db.execute(
+        "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age"
+    )?;
+    for row in result {
+        let row = row?;
+        println!("{}: {}", row.get("p.name").unwrap(), row.get("p.age").unwrap());
+    }
+    Ok(())
+}
+```
+
+## Доступные привязки
+
+<Cards>
+  <Cards.Card title="Rust" href="/ru/getting-started/rust" />
+  <Cards.Card title="Python" href="/ru/getting-started/python" />
+  <Cards.Card title="Go" href="/ru/getting-started/go" />
+  <Cards.Card title="Node.js" href="/ru/getting-started/nodejs" />
+</Cards>
+
+## Основные возможности
+
+| Возможность | Описание |
+|---------|-------------|
+| **Property Graph** | Nodes and edges with typed properties (Null, Bool, Int64, Float64, String, Bytes, Array) |
+| **Cypher Queries** | openCypher subset with MATCH, CREATE, MERGE, SET, DELETE, RETURN, WHERE |
+| **Temporal Versioning** | AT TIME queries, version store, temporal edge versioning |
+| **Subgraphs** | Named subgraphs as first-class entities with CREATE/MATCH SNAPSHOT |
+| **Hyperedges** | N:M relationships connecting arbitrary numbers of nodes |
+| **Plugin System** | ScalarFunction, IndexPlugin, Serializer, Trigger plugin types |
+| **FFI Bindings** | C ABI, Python (PyO3), Go (CGo), Node.js (napi-rs) |

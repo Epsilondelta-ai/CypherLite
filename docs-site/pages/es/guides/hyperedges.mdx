@@ -1,0 +1,143 @@
+---
+title: Hyperedges
+description: Model N:M relationships connecting arbitrary numbers of nodes with CypherLite hyperedges.
+---
+
+import { Callout } from 'nextra/components'
+
+# Hyperedges
+
+Standard graph edges connect exactly two nodes (source and target). CypherLite's hyperedges extend this to connect **any number of nodes** in a single relationship, enabling N:M relationship modeling.
+
+<Callout type="info">
+Hyperedges require the `hypergraph` feature flag, which also requires the `subgraph` flag:
+```toml
+cypherlite-query = { version = "1.2", features = ["hypergraph"] }
+```
+</Callout>
+
+## Overview
+
+A hyperedge is a relationship that connects an arbitrary set of nodes. Instead of a single source and target, a hyperedge has a **member set** of participating nodes.
+
+Key concepts:
+
+- **N:M relationships** connecting 2 or more nodes
+- **HYPEREDGE syntax** for creation and querying
+- **TemporalRef** metadata on each member
+- Properties on hyperedges, just like regular edges
+
+## Creating Hyperedges
+
+Use the `CREATE HYPEREDGE` syntax:
+
+```cypher
+CREATE HYPEREDGE :MEETING CONNECTING
+  (a:Person {name: 'Alice'}),
+  (b:Person {name: 'Bob'}),
+  (c:Person {name: 'Charlie'})
+SET _.date = '2024-03-15', _.topic = 'Q1 Review'
+```
+
+This creates a single `MEETING` hyperedge that connects three `Person` nodes.
+
+### Hyperedge Properties
+
+Hyperedges support the same property types as regular edges:
+
+```cypher
+CREATE HYPEREDGE :COLLABORATION CONNECTING
+  (a:Researcher {name: 'Dr. Smith'}),
+  (b:Researcher {name: 'Dr. Jones'}),
+  (c:Institution {name: 'MIT'})
+SET _.paper = 'Graph Theory', _.year = 2024
+```
+
+## Querying Hyperedges
+
+Match nodes connected by a hyperedge:
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE h.topic = 'Q1 Review'
+RETURN p.name, h.date
+```
+
+### Filter by Member Count
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE size(members(h)) >= 3
+RETURN h.topic, count(p) AS attendees
+```
+
+## Use Cases
+
+### Group Events
+
+Model events involving multiple participants:
+
+```cypher
+CREATE HYPEREDGE :TRANSACTION CONNECTING
+  (buyer:Account {id: 'A001'}),
+  (seller:Account {id: 'A002'}),
+  (broker:Account {id: 'A003'})
+SET _.amount = 50000, _.currency = 'USD'
+```
+
+### Co-authorship
+
+Model papers with multiple authors:
+
+```cypher
+CREATE HYPEREDGE :AUTHORED CONNECTING
+  (a1:Author {name: 'Alice'}),
+  (a2:Author {name: 'Bob'}),
+  (p:Paper {title: 'Graph Databases'})
+SET _.role_a1 = 'lead', _.role_a2 = 'contributor'
+```
+
+### Supply Chain
+
+Model multi-party supply chain relationships:
+
+```cypher
+CREATE HYPEREDGE :SHIPMENT CONNECTING
+  (supplier:Company {name: 'SupplyCo'}),
+  (carrier:Company {name: 'LogiCorp'}),
+  (warehouse:Location {name: 'Warehouse A'}),
+  (customer:Company {name: 'RetailInc'})
+SET _.tracking_id = 'SH-2024-001'
+```
+
+## TemporalRef
+
+Each member of a hyperedge carries a `TemporalRef` with metadata about when it joined or left the hyperedge:
+
+| Field | Description |
+|-------|-------------|
+| `node_id` | ID of the participating node |
+| `joined_at` | Timestamp when the node was added to the hyperedge |
+| `left_at` | Timestamp when the node was removed (null if still active) |
+
+This enables temporal queries over hyperedge membership:
+
+```cypher
+MATCH HYPEREDGE h:MEETING CONNECTING (p:Person)
+WHERE p._joined_at > '2024-01-01'
+RETURN h.topic, p.name
+```
+
+## Hyperedge vs. Regular Edge
+
+| Feature | Regular Edge | Hyperedge |
+|---------|-------------|-----------|
+| Members | Exactly 2 (source, target) | 2 or more (N:M) |
+| Direction | Directed (source -> target) | Undirected (member set) |
+| Syntax | `CREATE (a)-[:TYPE]->(b)` | `CREATE HYPEREDGE :TYPE CONNECTING (a), (b), (c)` |
+| Temporal | Edge-level timestamps | Per-member TemporalRef |
+| Feature flag | None (always available) | `hypergraph` (requires `subgraph`) |
+
+<Callout type="warning">
+Hyperedges add storage overhead compared to regular edges because each member has its own TemporalRef metadata. Use regular edges when binary relationships are sufficient.
+</Callout>

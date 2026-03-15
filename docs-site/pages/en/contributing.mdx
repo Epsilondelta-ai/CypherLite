@@ -1,0 +1,93 @@
+---
+title: Contributing
+description: How to contribute to the CypherLite project.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Contributing
+
+Thank you for your interest in contributing to CypherLite. This page provides a summary of the contribution guidelines. For the full guide, see [CONTRIBUTING.md](https://github.com/Epsilondelta-ai/CypherLite/blob/main/CONTRIBUTING.md) on GitHub.
+
+## Reporting Bugs
+
+Please use [GitHub Issues](https://github.com/Epsilondelta-ai/CypherLite/issues) to report bugs. Include:
+
+- A clear description of the problem
+- Steps to reproduce
+- Expected vs. actual behavior
+- Your Rust version (`rustc --version`) and OS
+
+## Submitting Changes
+
+<Steps>
+
+### Fork the repository
+
+Fork [CypherLite](https://github.com/Epsilondelta-ai/CypherLite) and create a branch from `main`.
+
+### Name your branch
+
+Use descriptive branch names: `feat/my-feature` or `fix/issue-123`.
+
+### Make your changes
+
+Follow the code style and testing guidelines below.
+
+### Open a Pull Request
+
+Open a PR against `main` with a clear description of the changes.
+
+</Steps>
+
+<Callout type="info">
+For significant changes, open an issue first to discuss the approach before investing time in implementation.
+</Callout>
+
+## Development Setup
+
+**Requirements:**
+
+- Rust 1.84 or later (MSRV)
+- The standard Rust toolchain via [rustup](https://rustup.rs/)
+
+**Setup:**
+
+```bash
+git clone https://github.com/Epsilondelta-ai/CypherLite.git
+cd CypherLite
+cargo build --workspace
+cargo test --workspace --all-features
+```
+
+## Feature Flags
+
+| Flag | Description |
+|------|-------------|
+| `temporal-core` | Temporal graph support (default) |
+| `temporal-edge` | Temporal edge attributes |
+| `subgraph` | Subgraph extraction |
+| `hypergraph` | Hypergraph support (requires `subgraph`) |
+| `full-temporal` | All temporal features |
+| `plugin` | Plugin system |
+
+## Code Style
+
+- Run `cargo fmt` before committing
+- Run `cargo clippy --all-features` and fix all warnings
+- Write tests for all new functionality
+- Maintain at least 85% test coverage per package
+- Use `cargo test --workspace --all-features` to verify
+
+## Commit Messages
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+- `feat(core): add temporal aggregation support`
+- `fix(storage): resolve WAL replay edge case`
+- `docs: update architecture diagram`
+- `test(query): add parser edge case tests`
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the MIT OR Apache-2.0 dual license.

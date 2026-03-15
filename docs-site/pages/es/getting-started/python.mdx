@@ -1,0 +1,103 @@
+---
+title: Getting Started with Python
+description: Install and use CypherLite Python bindings via PyO3.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started with Python
+
+CypherLite provides Python bindings built with [PyO3](https://pyo3.rs), offering a native Python API for graph database operations.
+
+## Installation
+
+<Steps>
+
+### Install from pip
+
+```bash
+pip install cypherlite
+```
+
+### Verify the installation
+
+```python
+import cypherlite
+print(cypherlite.__version__)
+```
+
+</Steps>
+
+<Callout type="info">
+Pre-built wheels are available for Linux, macOS, and Windows. If no wheel is available for your platform, pip will build from source (requires the Rust toolchain).
+</Callout>
+
+## Basic Usage
+
+### Open a Database
+
+```python
+import cypherlite
+
+db = cypherlite.open("my_graph.cyl")
+```
+
+### Create Nodes and Relationships
+
+```python
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})")
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})")
+db.execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) "
+    "CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+)
+```
+
+### Query Data
+
+```python
+result = db.execute("MATCH (n:Person) RETURN n.name, n.age")
+for row in result:
+    print(f"{row['n.name']} (age: {row['n.age']})")
+```
+
+### Update and Delete
+
+```python
+# Update properties
+db.execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 31")
+
+# Delete a relationship
+db.execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b) DELETE r"
+)
+
+# Delete a node
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p")
+```
+
+### Close the Database
+
+```python
+db.close()
+```
+
+<Callout type="warning">
+Always call `db.close()` when you are done to ensure all data is flushed to disk. Alternatively, use a context manager (if supported by your version).
+</Callout>
+
+## Building from Source
+
+If you need to build from source with all features enabled:
+
+```bash
+cd crates/cypherlite-python
+pip install maturin
+maturin develop --release
+```
+
+## Requirements
+
+- **Python**: 3.8+
+- **Platform**: Linux, macOS, Windows
+- **Build from source**: Requires the Rust 1.84+ toolchain

@@ -1,5 +1,7 @@
 // Executor: Volcano/Iterator model physical operators
+/// Expression evaluator for the executor.
 pub mod eval;
+/// Physical operator implementations (scan, expand, filter, etc.).
 pub mod operators;
 
 use crate::parser::ast::*;
@@ -230,14 +232,23 @@ impl ScalarFnLookup
 /// Runtime value in query execution. Extends PropertyValue with graph entity references.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// Null value.
     Null,
+    /// Boolean value.
     Bool(bool),
+    /// 64-bit integer value.
     Int64(i64),
+    /// 64-bit floating-point value.
     Float64(f64),
+    /// UTF-8 string value.
     String(String),
+    /// Raw byte array value.
     Bytes(Vec<u8>),
+    /// Ordered list of values.
     List(Vec<Value>),
+    /// A node entity reference.
     Node(NodeId),
+    /// An edge entity reference.
     Edge(EdgeId),
     /// DateTime as milliseconds since Unix epoch.
     DateTime(i64),
@@ -307,6 +318,7 @@ pub type Params = HashMap<String, Value>;
 /// Execution error.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionError {
+    /// Human-readable error description.
     pub message: String,
 }
 

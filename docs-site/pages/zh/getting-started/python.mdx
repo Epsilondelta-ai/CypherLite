@@ -1,0 +1,103 @@
+---
+title: Python 快速入门
+description: 通过 PyO3 安装并使用 CypherLite Python 绑定。
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Python 快速入门
+
+CypherLite 提供基于 [PyO3](https://pyo3.rs) 构建的 Python 绑定，为图数据库操作提供原生 Python API。
+
+## 安装
+
+<Steps>
+
+### 通过 pip 安装
+
+```bash
+pip install cypherlite
+```
+
+### 验证安装
+
+```python
+import cypherlite
+print(cypherlite.__version__)
+```
+
+</Steps>
+
+<Callout type="info">
+预编译的 wheel 包适用于 Linux、macOS 和 Windows。如果您的平台没有可用的 wheel 包，pip 将从源代码构建（需要 Rust 工具链）。
+</Callout>
+
+## 基本用法
+
+### 打开数据库
+
+```python
+import cypherlite
+
+db = cypherlite.open("my_graph.cyl")
+```
+
+### 创建节点和关系
+
+```python
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})")
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})")
+db.execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) "
+    "CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+)
+```
+
+### 查询数据
+
+```python
+result = db.execute("MATCH (n:Person) RETURN n.name, n.age")
+for row in result:
+    print(f"{row['n.name']} (age: {row['n.age']})")
+```
+
+### 更新和删除
+
+```python
+# Update properties
+db.execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 31")
+
+# Delete a relationship
+db.execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b) DELETE r"
+)
+
+# Delete a node
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p")
+```
+
+### 关闭数据库
+
+```python
+db.close()
+```
+
+<Callout type="warning">
+使用完毕后请务必调用 `db.close()` 以确保所有数据已刷新到磁盘。或者使用上下文管理器（如果您的版本支持）。
+</Callout>
+
+## 从源代码构建
+
+如果您需要启用所有功能从源代码构建：
+
+```bash
+cd crates/cypherlite-python
+pip install maturin
+maturin develop --release
+```
+
+## 系统要求
+
+- **Python**：3.8+
+- **平台**：Linux、macOS、Windows
+- **从源代码构建**：需要 Rust 1.84+ 工具链

@@ -1,0 +1,123 @@
+---
+title: 子图
+description: 在 CypherLite 中创建、查询和管理作为一等实体的命名子图。
+---
+
+import { Callout } from 'nextra/components'
+
+# 子图
+
+CypherLite 将子图视为一等实体。您可以捕获图的一部分快照，为其命名，并在之后进行查询。这对于版本控制、分析和隔离图区域非常有用。
+
+<Callout type="info">
+子图需要 `subgraph` 功能标志。
+</Callout>
+
+## 概述
+
+子图是与主图一起存储的节点和边的命名集合。子图通过快照机制从图的当前状态创建。
+
+关键概念：
+
+- **SubgraphStore** 将命名子图作为一等实体管理
+- **CREATE SNAPSHOT** 捕获匹配节点和边的当前状态
+- **MATCH SNAPSHOT** 查询之前保存的子图
+- 子图一旦创建即不可变
+
+## 创建子图
+
+使用 `CREATE SNAPSHOT` 捕获子图：
+
+```cypher
+MATCH (p:Person)-[r:KNOWS]->(friend:Person)
+WHERE p.name = 'Alice'
+CREATE SNAPSHOT 'alice_network'
+```
+
+此操作将所有匹配模式的节点和边捕获到名为 `alice_network` 的命名子图中。
+
+### 捕获内容
+
+- 所有匹配模式的节点
+- 所有匹配模式的关系
+- 捕获时这些节点和关系上的所有属性
+- 快照是时间点副本；之后对原始节点的更改不会影响快照
+
+## 查询子图
+
+使用 `MATCH SNAPSHOT` 查询已保存的子图：
+
+```cypher
+MATCH SNAPSHOT 'alice_network'
+(p:Person)-[r:KNOWS]->(friend:Person)
+RETURN p.name, friend.name, r.since
+```
+
+此操作仅在 `alice_network` 子图中的节点和边上运行模式匹配，而非完整的图。
+
+## 使用场景
+
+### 图版本控制
+
+在关键里程碑处捕获快照以保存图状态：
+
+```cypher
+-- Before a batch import
+MATCH (n) CREATE SNAPSHOT 'pre_import_2024'
+
+-- After the import, compare
+MATCH SNAPSHOT 'pre_import_2024' (n:Person)
+RETURN count(n) AS before_count
+```
+
+### 分析隔离
+
+隔离图的某个区域进行专注分析：
+
+```cypher
+-- Capture the fraud-suspect subgraph
+MATCH (a:Account)-[t:TRANSFERRED]->(b:Account)
+WHERE t.amount > 10000
+CREATE SNAPSHOT 'high_value_transfers'
+
+-- Analyze the isolated subgraph
+MATCH SNAPSHOT 'high_value_transfers'
+(a:Account)-[t:TRANSFERRED]->(b:Account)
+RETURN a.id, b.id, sum(t.amount) AS total
+```
+
+### 对比
+
+比较同一区域在不同时间的两个快照：
+
+```cypher
+-- Snapshot from January
+MATCH SNAPSHOT 'network_jan' (p:Person)
+RETURN count(p) AS jan_count
+
+-- Snapshot from June
+MATCH SNAPSHOT 'network_jun' (p:Person)
+RETURN count(p) AS jun_count
+```
+
+## 存储
+
+子图存储在 `SubgraphStore` 中，与主节点和边存储并列。每个子图条目包含：
+
+| 字段 | 描述 |
+|-------|-------------|
+| Name | 子图的唯一标识符 |
+| Node IDs | 快照中包含的节点 ID 集合 |
+| Edge IDs | 快照中包含的边 ID 集合 |
+| Properties | 捕获时的快照属性值 |
+| Created At | 快照创建时间戳 |
+
+<Callout type="warning">
+子图会消耗与捕获的节点和边数量成正比的额外存储空间。对于非常大的快照，请监控数据库文件大小。
+</Callout>
+
+## 限制
+
+- 子图不可变；您不能从现有快照中添加或删除节点
+- 删除子图仅删除快照元数据，不会删除原始节点/边
+- 子图名称在数据库中必须唯一

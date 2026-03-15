@@ -1,8 +1,8 @@
 //! Plugin system core types and traits.
 //!
-//! Defines the base [`Plugin`] trait, four extension traits
-//! ([`ScalarFunction`], [`IndexPlugin`], [`Serializer`], [`Trigger`]),
-//! and a generic [`PluginRegistry`] for managing plugin instances.
+//! Defines the base `Plugin` trait, four extension traits
+//! (`ScalarFunction`, `IndexPlugin`, `Serializer`, `Trigger`),
+//! and a generic `PluginRegistry` for managing plugin instances.
 
 use std::collections::HashMap;
 

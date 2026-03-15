@@ -1,0 +1,138 @@
+---
+title: CypherLite - 그래프 데이터베이스를 위한 SQLite 수준의 간결함
+description: Rust로 작성된 경량 임베디드 단일 파일 그래프 데이터베이스 엔진. 제로 설정 배포, 완전한 ACID 지원.
+---
+
+import { Cards, Callout, Steps } from 'nextra/components'
+
+<div style={{ textAlign: 'center', padding: '4rem 0 2rem' }}>
+
+<h1 className="hero-title">CypherLite</h1>
+
+<p className="hero-subtitle">
+그래프 데이터베이스를 위한 SQLite 수준의 간결함
+</p>
+
+<p style={{ marginTop: '1.5rem' }}>
+Rust로 작성된 경량 임베디드 단일 파일 그래프 데이터베이스 엔진.
+제로 설정 배포, 완전한 ACID 지원, 네이티브 프로퍼티 그래프 지원.
+</p>
+
+<div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+  <a
+    href="/ko/getting-started/rust"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      backgroundColor: 'var(--nextra-primary-hue)',
+      color: 'white',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    시작하기
+  </a>
+  <a
+    href="https://github.com/Epsilondelta-ai/CypherLite"
+    target="_blank"
+    rel="noreferrer"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      border: '1px solid currentColor',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    GitHub
+  </a>
+</div>
+
+</div>
+
+---
+
+## 왜 CypherLite인가?
+
+<div className="feature-grid">
+
+<div className="feature-card">
+### 제로 설정
+파일을 열고 바로 쿼리를 시작하세요. 서버 프로세스, 설치, 설정 파일이 필요 없습니다. 단일 `.cyl` 파일만 있으면 됩니다.
+</div>
+
+<div className="feature-card">
+### 단일 파일 데이터베이스
+모든 그래프 데이터가 하나의 이동 가능한 파일에 저장됩니다. 단일 파일 작업으로 전체 그래프 데이터베이스를 복사, 백업 또는 공유할 수 있습니다.
+</div>
+
+<div className="feature-card">
+### ACID 호환
+Write-Ahead Logging, 스냅샷 격리, 크래시 복구를 통한 완전한 트랜잭션 안전성. 데이터는 항상 일관성을 유지합니다.
+</div>
+
+<div className="feature-card">
+### 임베디드 라이브러리
+CypherLite를 애플리케이션에 직접 링크하세요. Rust crate, Python 패키지, Go 모듈, Node.js 애드온, C 라이브러리로 사용 가능합니다.
+</div>
+
+<div className="feature-card">
+### 확장 가능한 플러그인 시스템
+네 가지 플러그인 타입(ScalarFunction, IndexPlugin, Serializer, Trigger)으로 필요에 맞게 CypherLite를 확장할 수 있습니다.
+</div>
+
+<div className="feature-card">
+### 시간 여행 쿼리
+그래프의 과거 어느 시점이든 쿼리할 수 있습니다. 내장 버전 관리가 노드, 엣지, 프로퍼티의 모든 변경을 추적합니다.
+</div>
+
+</div>
+
+## 빠른 예제
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+    db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+    db.execute(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+         CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+    )?;
+
+    let result = db.execute(
+        "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age"
+    )?;
+    for row in result {
+        let row = row?;
+        println!("{}: {}", row.get("p.name").unwrap(), row.get("p.age").unwrap());
+    }
+    Ok(())
+}
+```
+
+## 사용 가능한 바인딩
+
+<Cards>
+  <Cards.Card title="Rust" href="/ko/getting-started/rust" />
+  <Cards.Card title="Python" href="/ko/getting-started/python" />
+  <Cards.Card title="Go" href="/ko/getting-started/go" />
+  <Cards.Card title="Node.js" href="/ko/getting-started/nodejs" />
+</Cards>
+
+## 주요 기능
+
+| 기능 | 설명 |
+|---------|-------------|
+| **프로퍼티 그래프** | 타입화된 프로퍼티를 가진 노드와 엣지 (Null, Bool, Int64, Float64, String, Bytes, Array) |
+| **Cypher 쿼리** | openCypher 서브셋 지원 - MATCH, CREATE, MERGE, SET, DELETE, RETURN, WHERE |
+| **시간 여행 버전 관리** | AT TIME 쿼리, 버전 저장소, 시간 여행 엣지 버전 관리 |
+| **서브그래프** | 일급 엔티티로서의 네임드 서브그래프, CREATE/MATCH SNAPSHOT 지원 |
+| **하이퍼엣지** | 임의 수의 노드를 연결하는 N:M 관계 |
+| **플러그인 시스템** | ScalarFunction, IndexPlugin, Serializer, Trigger 플러그인 타입 |
+| **FFI 바인딩** | C ABI, Python (PyO3), Go (CGo), Node.js (napi-rs) |

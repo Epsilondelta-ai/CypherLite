@@ -1,0 +1,116 @@
+---
+title: Temporal Queries
+description: Query your graph at any point in time with CypherLite's temporal versioning system.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Temporal Queries
+
+CypherLite tracks every change to nodes, edges, and properties over time. You can query the graph as it existed at any point in the past using temporal query syntax.
+
+## Overview
+
+The temporal system maintains an immutable version chain for every property change. When you update a property, the old value is preserved in the version store with a timestamp. This enables:
+
+- **Point-in-time queries** with `AT TIME`
+- **Range queries** with `BETWEEN TIME`
+- **Temporal edge versioning** with creation/deletion timestamps
+- **Temporal aggregation** over versioned data
+
+<Callout type="info">
+Temporal features require the `temporal-core` feature flag (enabled by default). For temporal edge attributes, also enable `temporal-edge`.
+</Callout>
+
+## AT TIME Queries
+
+Retrieve the state of the graph at a specific point in time:
+
+```cypher
+MATCH (p:Person {name: 'Alice'})
+AT TIME '2024-01-01T00:00:00Z'
+RETURN p.name, p.age
+```
+
+This returns Alice's properties as they were on January 1, 2024, regardless of any changes made after that date.
+
+### How It Works
+
+1. The query engine identifies the target timestamp
+2. For each matched node/edge, it walks the version chain
+3. It finds the version that was active at the requested time
+4. Properties are resolved from that version
+
+## BETWEEN TIME Queries
+
+Query property changes over a time range:
+
+```cypher
+MATCH (p:Person {name: 'Alice'})
+BETWEEN TIME '2024-01-01T00:00:00Z' AND '2024-12-31T23:59:59Z'
+RETURN p.name, p.age, p._version_timestamp
+```
+
+This returns all versions of Alice's properties that were active during 2024.
+
+## Temporal Edge Versioning
+
+<Callout type="warning">
+Temporal edge versioning requires the `temporal-edge` feature flag.
+</Callout>
+
+Edges also carry temporal metadata. You can query when relationships were created or deleted:
+
+```cypher
+MATCH (a:Person)-[r:KNOWS]->(b:Person)
+WHERE r._created_at > '2024-06-01T00:00:00Z'
+RETURN a.name, b.name, r._created_at
+```
+
+### Edge Temporal Properties
+
+| Property | Description |
+|----------|-------------|
+| `r._created_at` | Timestamp when the relationship was created |
+| `r._deleted_at` | Timestamp when the relationship was deleted (null if active) |
+
+## Temporal Aggregation
+
+Combine temporal queries with aggregate functions:
+
+```cypher
+MATCH (p:Person)
+BETWEEN TIME '2024-01-01' AND '2024-12-31'
+RETURN count(p) AS person_count, avg(p.age) AS avg_age
+```
+
+## Version Store Architecture
+
+The version store is implemented as an immutable chain per property:
+
+```
+Current Value --> Version N --> Version N-1 --> ... --> Version 1
+                (timestamp)    (timestamp)            (timestamp)
+```
+
+- Each version records the property value and the timestamp of the change
+- The chain is append-only (previous versions are never modified)
+- Storage overhead is proportional to the number of changes, not the total data size
+
+## Best Practices
+
+<Steps>
+
+### Use timestamps in ISO 8601 format
+
+CypherLite parses timestamps in ISO 8601 format. Always include timezone information to avoid ambiguity.
+
+### Enable only the temporal features you need
+
+`temporal-core` (default) provides node-level versioning. Enable `temporal-edge` only if you need edge creation/deletion timestamps, as it adds storage overhead per edge.
+
+### Consider storage growth
+
+Every property change creates a new version entry. For write-heavy workloads, monitor database file size and plan for periodic compaction if needed.
+
+</Steps>

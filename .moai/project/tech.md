@@ -48,8 +48,22 @@
 |---------|------|-----------|
 | `cbindgen` | Rust → C 헤더 자동 생성 | 빌드 스크립트 통합, 안전한 FFI (구현 완료) |
 | `libc` | C 타입 및 플랫폼 추상화 | `size_t`, `c_char` 등 플랫폼 이식 가능한 FFI 타입 |
-| `PyO3` | Python 바인딩 (계획됨) | Rust-Python 바인딩 사실상 표준 |
-| `neon` | Node.js 바인딩 (계획됨) | N-API 기반 Node.js 네이티브 모듈 |
+| `PyO3` | Python 바인딩 | Rust-Python 바인딩 사실상 표준 (구현 완료) |
+| `napi` + `napi-derive` | Node.js 바인딩 | N-API 기반 Node.js 네이티브 모듈 (구현 완료) |
+| CGo | Go 바인딩 | cypherlite-ffi C ABI 위에서 CGo로 Go 바인딩 제공 (구현 완료) |
+
+### 문서화 기술 스택 (Phase 13, v1.2.0)
+
+| 항목 | 선택 | 버전 | 선택 이유 |
+|------|------|------|-----------|
+| **문서 프레임워크** | Nextra | 3.x | Next.js 기반, built-in i18n, MDX, 전문 검색, Dark mode |
+| **런타임** | Node.js | 18+ | Next.js 최소 요구사항 |
+| **기반 프레임워크** | Next.js | 14 | React 기반 정적 사이트 생성 |
+| **테마** | nextra-theme-docs | (Nextra 내장) | 문서 사이트 최적화 테마 |
+| **검색** | Flexsearch | (Nextra 내장) | 클라이언트 사이드 전문 검색 |
+| **콘텐츠 형식** | MDX | - | Markdown + JSX 컴포넌트 통합 |
+| **i18n** | Nextra built-in i18n | - | 10개 언어 locale 라우팅 |
+| **배포** | GitHub Pages | - | 무료 정적 호스팅, 자동 배포 워크플로우 |
 
 ### 테스트 및 품질 크레이트
 
@@ -472,6 +486,33 @@ MATCH (n) BETWEEN TIME '2024-01-01' AND '2024-12-31' RETURN n
 **생성 파일**: 9개 신규 파일 (Cargo.toml, cbindgen.toml, src/ 7개 모듈), include/cypherlite.h
 
 **테스트 결과**: 115 TDD 테스트 통과 (워크스페이스 전체 1,450 테스트)
+
+---
+
+### Phase 13 - v1.2.0: Documentation, i18n & Static Website (완료)
+
+**목표**: 전문적인 문서화, 10개 언어 i18n 지원, 정적 문서 사이트 구축으로 v1.2.0 최종 릴리즈 준비
+
+**구현 항목**:
+- 전체 워크스페이스 크레이트 v1.2.0 버전 범프
+- README.md 전면 개편 (배지, 4개 언어 Quick Start, 아키텍처 다이어그램)
+- CHANGELOG.md 생성 (Keep a Changelog 형식, v0.1~v1.2.0)
+- CONTRIBUTING.md 생성
+- MIT OR Apache-2.0 dual license 파일 추가
+- crates.io 게시 메타데이터 완비 (description, license, keywords, categories)
+- Rustdoc 강화 (cargo doc 0 warnings)
+- Nextra 3.x 기반 정적 문서 사이트 (`docs-site/`, Next.js 14)
+- 10개 언어 i18n (en, zh, hi, es, fr, ar, bn, pt, ru, ko)
+- GitHub Pages 배포 워크플로우 (`.github/workflows/docs.yml`)
+- 9개 언어 README 번역 (`docs/i18n/`)
+- 예제 파일 (`examples/`: basic_crud.rs, knowledge_graph.rs + FFI quickstart)
+
+**기술 스택 추가**:
+- Nextra 3.x, Next.js 14, nextra-theme-docs
+- Node.js 18+ (문서 사이트 빌드 환경)
+- MDX (Markdown + JSX)
+
+**생성 파일**: 30+ 신규 파일 (docs-site/, docs/i18n/, examples/, LICENSE 파일, CHANGELOG, CONTRIBUTING)
 
 ---
 

@@ -1,8 +1,15 @@
 [package]
 name = "cypherlite-core"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.84"
+description = "Core types, traits, and error handling for CypherLite graph database"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Epsilondelta-ai/CypherLite"
+homepage = "https://github.com/Epsilondelta-ai/CypherLite"
+keywords = ["graph", "database", "embedded", "cypher", "property-graph"]
+categories = ["database-implementations", "data-structures"]
+readme = "../../README.md"
 
 [dependencies]
 thiserror = "2"
@@ -17,6 +24,10 @@ subgraph = ["temporal-edge"]
 hypergraph = ["subgraph"]
 full-temporal = ["hypergraph"]
 plugin = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 proptest = "1"

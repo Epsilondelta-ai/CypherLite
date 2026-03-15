@@ -1,4 +1,5 @@
 // Query planner: rule-based logical plan + physical plan conversion
+/// Rule-based optimizer that rewrites logical plans for better performance.
 pub mod optimize;
 
 use crate::parser::ast::*;
@@ -10,174 +11,268 @@ pub enum LogicalPlan {
     /// Scan all nodes, optionally filtered by label ID.
     /// If `limit` is Some, stop after that many nodes (for LIMIT pushdown optimization).
     NodeScan {
+        /// Variable name to bind matched nodes.
         variable: String,
+        /// Optional label ID filter.
         label_id: Option<u32>,
+        /// Optional row limit (pushdown optimization).
         limit: Option<usize>,
     },
     /// Expand from a source variable along edges of given type.
     Expand {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Source node variable.
         src_var: String,
+        /// Optional relationship variable binding.
         rel_var: Option<String>,
+        /// Target node variable.
         target_var: String,
+        /// Optional relationship type ID filter.
         rel_type_id: Option<u32>,
+        /// Edge traversal direction.
         direction: RelDirection,
+        /// Optional temporal validity filter for edges.
         temporal_filter: Option<TemporalFilterPlan>,
     },
     /// Filter rows by a predicate expression.
     Filter {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Boolean predicate expression.
         predicate: Expression,
     },
     /// Project specific expressions (RETURN clause).
     Project {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Expressions to project.
         items: Vec<ReturnItem>,
+        /// Whether DISTINCT was specified.
         distinct: bool,
     },
     /// Sort rows (ORDER BY).
     Sort {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Sort keys and directions.
         items: Vec<OrderItem>,
     },
     /// Skip N rows.
     Skip {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Number of rows to skip.
         count: Expression,
     },
     /// Limit to N rows.
     Limit {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Maximum number of rows to emit.
         count: Expression,
     },
     /// Aggregate (GROUP BY equivalent via function calls like count).
     Aggregate {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Grouping key expressions.
         group_keys: Vec<Expression>,
+        /// Aggregate functions with output column names.
         aggregates: Vec<(String, AggregateFunc)>,
     },
     /// Create nodes/edges.
     CreateOp {
+        /// Optional input plan (None for standalone CREATE).
         source: Option<Box<LogicalPlan>>,
+        /// Pattern describing entities to create.
         pattern: Pattern,
     },
     /// Delete nodes/edges.
     DeleteOp {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Expressions identifying entities to delete.
         exprs: Vec<Expression>,
+        /// Whether DETACH DELETE (also removes relationships).
         detach: bool,
     },
     /// Set properties.
     SetOp {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Property assignments.
         items: Vec<SetItem>,
     },
     /// Remove properties/labels.
     RemoveOp {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Items to remove.
         items: Vec<RemoveItem>,
     },
     /// WITH clause: intermediate projection (scope reset).
     With {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Projected items.
         items: Vec<ReturnItem>,
+        /// Optional WHERE filter.
         where_clause: Option<Expression>,
+        /// Whether DISTINCT was specified.
         distinct: bool,
     },
     /// UNWIND clause: flatten a list into rows.
     Unwind {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// List expression to unwind.
         expr: Expression,
+        /// Variable name bound to each element.
         variable: String,
     },
     /// OPTIONAL MATCH expand: left join semantics.
     /// If no matching edges found, emit one record with NULL for new variables.
     OptionalExpand {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Source node variable.
         src_var: String,
+        /// Optional relationship variable binding.
         rel_var: Option<String>,
+        /// Target node variable.
         target_var: String,
+        /// Optional relationship type ID filter.
         rel_type_id: Option<u32>,
+        /// Edge traversal direction.
         direction: RelDirection,
     },
     /// MERGE: match-or-create pattern with optional ON MATCH/ON CREATE SET.
     MergeOp {
+        /// Optional input plan (None for standalone MERGE).
         source: Option<Box<LogicalPlan>>,
+        /// Pattern to match or create.
         pattern: Pattern,
+        /// SET items for ON MATCH.
         on_match: Vec<SetItem>,
+        /// SET items for ON CREATE.
         on_create: Vec<SetItem>,
     },
     /// Empty source (produces one empty row).
     EmptySource,
     /// CREATE INDEX DDL operation (node label index).
     CreateIndex {
+        /// Optional index name.
         name: Option<String>,
+        /// Target label name.
         label: String,
+        /// Target property name.
         property: String,
     },
     /// CREATE EDGE INDEX DDL operation (relationship type index).
     CreateEdgeIndex {
+        /// Optional index name.
         name: Option<String>,
+        /// Target relationship type name.
         rel_type: String,
+        /// Target property name.
         property: String,
     },
     /// DROP INDEX DDL operation.
-    DropIndex { name: String },
+    DropIndex {
+        /// Index name to drop.
+        name: String,
+    },
     /// Variable-length path expansion (BFS/DFS traversal with depth bounds).
     VarLengthExpand {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Source node variable.
         src_var: String,
+        /// Optional relationship variable binding.
         rel_var: Option<String>,
+        /// Target node variable.
         target_var: String,
+        /// Optional relationship type ID filter.
         rel_type_id: Option<u32>,
+        /// Edge traversal direction.
         direction: RelDirection,
+        /// Minimum traversal depth.
         min_hops: u32,
+        /// Maximum traversal depth.
         max_hops: u32,
+        /// Optional temporal validity filter for edges.
         temporal_filter: Option<TemporalFilterPlan>,
     },
     /// Index-based scan: look up nodes by label + property value using an index.
     /// The executor checks at runtime whether an index actually exists.
     /// If no index is available, falls back to label scan + filter.
     IndexScan {
+        /// Variable name to bind matched nodes.
         variable: String,
+        /// Label ID for the index lookup.
         label_id: u32,
+        /// Property key name.
         prop_key: String,
+        /// Value to look up in the index.
         lookup_value: Expression,
     },
     /// AT TIME query: find node/edge versions at a specific point in time.
     AsOfScan {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Timestamp expression to evaluate.
         timestamp_expr: Expression,
     },
     /// BETWEEN TIME query: find all versions within a time range.
     TemporalRangeScan {
+        /// Input plan.
         source: Box<LogicalPlan>,
+        /// Start of the time range.
         start_expr: Expression,
+        /// End of the time range.
         end_expr: Expression,
     },
     /// Scan all subgraph entities. Used when MATCH pattern has label "Subgraph".
     #[cfg(feature = "subgraph")]
-    SubgraphScan { variable: String },
+    SubgraphScan {
+        /// Variable name to bind matched subgraphs.
+        variable: String,
+    },
     /// Scan all hyperedge entities.
     #[cfg(feature = "hypergraph")]
-    HyperEdgeScan { variable: String },
+    HyperEdgeScan {
+        /// Variable name to bind matched hyperedges.
+        variable: String,
+    },
     /// Create a hyperedge connecting multiple sources to multiple targets.
     #[cfg(feature = "hypergraph")]
     CreateHyperedgeOp {
+        /// Optional input plan.
         source: Option<Box<LogicalPlan>>,
+        /// Optional variable binding for the new hyperedge.
         variable: Option<String>,
+        /// Labels for the hyperedge.
         labels: Vec<String>,
+        /// Source participant expressions.
         sources: Vec<Expression>,
+        /// Target participant expressions.
         targets: Vec<Expression>,
     },
     /// CREATE SNAPSHOT: execute a sub-query and materialize results into a subgraph.
     #[cfg(feature = "subgraph")]
     CreateSnapshotOp {
+        /// Optional variable binding for the new subgraph.
         variable: Option<String>,
+        /// Labels for the subgraph.
         labels: Vec<String>,
+        /// Properties to set on the subgraph.
         properties: Option<MapLiteral>,
+        /// Optional temporal anchor expression.
         temporal_anchor: Option<Expression>,
+        /// Inner query plan to execute.
         sub_plan: Box<LogicalPlan>,
+        /// Variable names to collect from the inner query.
         return_vars: Vec<String>,
     },
 }
@@ -195,13 +290,19 @@ pub enum TemporalFilterPlan {
 /// Supported aggregate functions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateFunc {
-    Count { distinct: bool },
+    /// `count(expr)` or `count(DISTINCT expr)`.
+    Count {
+        /// Whether DISTINCT was specified.
+        distinct: bool,
+    },
+    /// `count(*)`.
     CountStar,
 }
 
 /// Error type for plan construction failures.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanError {
+    /// Human-readable error description.
     pub message: String,
 }
 
@@ -282,6 +383,7 @@ pub struct LogicalPlanner<'a> {
 }
 
 impl<'a> LogicalPlanner<'a> {
+    /// Create a new planner backed by the given label/type registry.
     pub fn new(registry: &'a mut dyn LabelRegistry) -> Self {
         Self { registry }
     }

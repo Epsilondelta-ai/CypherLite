@@ -15,20 +15,33 @@ use std::ffi::CStr;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CylValueTag {
+    /// Null value (tag 0).
     Null = 0,
+    /// Boolean value (tag 1).
     Bool = 1,
+    /// 64-bit signed integer (tag 2).
     Int64 = 2,
+    /// 64-bit floating point (tag 3).
     Float64 = 3,
+    /// Null-terminated UTF-8 string (tag 4).
     String = 4,
+    /// Raw byte array (tag 5).
     Bytes = 5,
+    /// Ordered list of values (tag 6).
     List = 6,
+    /// Node entity ID (tag 7).
     Node = 7,
+    /// Edge entity ID (tag 8).
     Edge = 8,
+    /// DateTime as millis since epoch (tag 9).
     DateTime = 9,
+    /// Subgraph entity ID (tag 10, requires subgraph feature).
     #[cfg(feature = "subgraph")]
     Subgraph = 10,
+    /// Hyperedge entity ID (tag 11, requires hypergraph feature).
     #[cfg(feature = "hypergraph")]
     Hyperedge = 11,
+    /// Temporal node reference: node ID + timestamp (tag 12, requires hypergraph feature).
     #[cfg(feature = "hypergraph")]
     TemporalNode = 12,
 }
@@ -70,7 +83,9 @@ pub union CylValuePayload {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CylBytes {
+    /// Pointer to the byte data.
     pub data: *const u8,
+    /// Number of bytes.
     pub len: u32,
 }
 
@@ -78,7 +93,9 @@ pub struct CylBytes {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CylList {
+    /// Pointer to the first element.
     pub items: *const CylValue,
+    /// Number of elements.
     pub len: u32,
 }
 
@@ -87,7 +104,9 @@ pub struct CylList {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CylTemporalNode {
+    /// Node entity ID.
     pub node_id: u64,
+    /// Timestamp in milliseconds since Unix epoch.
     pub timestamp_ms: i64,
 }
 
@@ -98,7 +117,9 @@ pub struct CylTemporalNode {
 /// A tagged union representing a single query value for FFI.
 #[repr(C)]
 pub struct CylValue {
+    /// Discriminant tag (see [`CylValueTag`]).
     pub tag: u8,
+    /// Value payload (interpret according to `tag`).
     pub payload: CylValuePayload,
 }
 
@@ -143,7 +164,7 @@ impl CylValue {
 /// Convert a CylValue (from C caller) to a Rust Value.
 ///
 /// For String parameters, the C string is copied into a Rust String.
-/// For Bytes, the data is copied into a Vec<u8>.
+/// For Bytes, the data is copied into a `Vec<u8>`.
 ///
 /// # Safety
 ///

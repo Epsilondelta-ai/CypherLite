@@ -10,7 +10,9 @@ use std::fmt;
 /// Byte-offset span in the source input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
+    /// Byte offset of the first character in the token.
     pub start: usize,
+    /// Byte offset one past the last character in the token.
     pub end: usize,
 }
 
@@ -51,97 +53,136 @@ impl std::error::Error for LexError {}
 #[logos(skip r"[ \t\r\n]+")]
 pub enum Token {
     // -- P0 Keywords (case-insensitive) ------------------------------------
+    /// `MATCH` keyword.
     #[regex("(?i)match", priority = 10)]
     Match,
+    /// `RETURN` keyword.
     #[regex("(?i)return", priority = 10)]
     Return,
+    /// `CREATE` keyword.
     #[regex("(?i)create", priority = 10)]
     Create,
+    /// `AS` keyword (alias).
     #[regex("(?i)as", priority = 10)]
     As,
+    /// `DISTINCT` keyword.
     #[regex("(?i)distinct", priority = 10)]
     Distinct,
+    /// Boolean literal `true`.
     #[regex("(?i)true", priority = 10)]
     True,
+    /// Boolean literal `false`.
     #[regex("(?i)false", priority = 10)]
     False,
+    /// `NULL` literal.
     #[regex("(?i)null", priority = 10)]
     Null,
+    /// Logical `AND` operator.
     #[regex("(?i)and", priority = 10)]
     And,
+    /// Logical `OR` operator.
     #[regex("(?i)or", priority = 10)]
     Or,
+    /// Logical `NOT` operator.
     #[regex("(?i)not", priority = 10)]
     Not,
+    /// `IS` keyword (used in `IS NULL` / `IS NOT NULL`).
     #[regex("(?i)is", priority = 10)]
     Is,
+    /// `COUNT` aggregate function keyword.
     #[regex("(?i)count", priority = 10)]
     Count,
 
     // -- P1 Keywords -------------------------------------------------------
+    /// `WHERE` clause keyword.
     #[regex("(?i)where", priority = 10)]
     Where,
+    /// `SET` clause keyword.
     #[regex("(?i)set", priority = 10)]
     Set,
+    /// `REMOVE` clause keyword.
     #[regex("(?i)remove", priority = 10)]
     Remove,
+    /// `DELETE` clause keyword.
     #[regex("(?i)delete", priority = 10)]
     Delete,
+    /// `DETACH` modifier for `DELETE`.
     #[regex("(?i)detach", priority = 10)]
     Detach,
+    /// `OPTIONAL` modifier for `MATCH`.
     #[regex("(?i)optional", priority = 10)]
     Optional,
 
     // -- P2 Keywords -------------------------------------------------------
+    /// `MERGE` clause keyword.
     #[regex("(?i)merge", priority = 10)]
     Merge,
+    /// `WITH` clause keyword.
     #[regex("(?i)with", priority = 10)]
     With,
+    /// `ORDER` keyword (part of `ORDER BY`).
     #[regex("(?i)order", priority = 10)]
     Order,
+    /// `BY` keyword (part of `ORDER BY`).
     #[regex("(?i)by", priority = 10)]
     By,
+    /// `LIMIT` clause keyword.
     #[regex("(?i)limit", priority = 10)]
     Limit,
+    /// `SKIP` clause keyword.
     #[regex("(?i)skip", priority = 10)]
     Skip,
+    /// `ASC` sort direction.
     #[regex("(?i)asc", priority = 10)]
     Asc,
+    /// `DESC` sort direction.
     #[regex("(?i)desc", priority = 10)]
     Desc,
+    /// `ON` keyword (used in `CREATE INDEX ... ON`).
     #[regex("(?i)on", priority = 10)]
     On,
 
     // -- P3 Keywords -------------------------------------------------------
+    /// `UNWIND` clause keyword.
     #[regex("(?i)unwind", priority = 10)]
     Unwind,
+    /// `INDEX` keyword.
     #[regex("(?i)index", priority = 10)]
     Index,
+    /// `DROP` keyword.
     #[regex("(?i)drop", priority = 10)]
     Drop,
 
     // -- P5 Keywords (Edge Indexes) ------------------------------------------
+    /// `EDGE` keyword (part of `CREATE EDGE INDEX`).
     #[regex("(?i)edge", priority = 10)]
     Edge,
 
     // -- P6 Keywords (Subgraph/Snapshot) ------------------------------------
+    /// `SNAPSHOT` keyword (part of `CREATE SNAPSHOT`).
     #[regex("(?i)snapshot", priority = 10)]
     Snapshot,
+    /// `FROM` keyword (part of `CREATE SNAPSHOT ... FROM`).
     #[regex("(?i)from", priority = 10)]
     From,
 
     // -- P7 Keywords (Hypergraph) --------------------------------------------
+    /// `HYPEREDGE` keyword for hypergraph queries.
     #[cfg(feature = "hypergraph")]
     #[regex("(?i)hyperedge", priority = 10)]
     Hyperedge,
 
     // -- P4 Keywords (Temporal) ---------------------------------------------
+    /// `AT` keyword (part of `AT TIME`).
     #[regex("(?i)at", priority = 10)]
     At,
+    /// `TIME` keyword (part of `AT TIME` / `BETWEEN TIME`).
     #[regex("(?i)time", priority = 10)]
     Time,
+    /// `BETWEEN` keyword (part of `BETWEEN TIME`).
     #[regex("(?i)between", priority = 10)]
     Between,
+    /// `HISTORY` keyword for version history queries.
     #[regex("(?i)history", priority = 10)]
     History,
 
@@ -172,60 +213,86 @@ pub enum Token {
     Parameter(String),
 
     // -- Operators ---------------------------------------------------------
+    /// `<>` not-equal operator.
     #[token("<>")]
     NotEqual,
+    /// `!=` not-equal operator (alias).
     #[token("!=")]
     BangEqual,
+    /// `<=` less-than-or-equal operator.
     #[token("<=")]
     LessEqual,
+    /// `>=` greater-than-or-equal operator.
     #[token(">=")]
     GreaterEqual,
+    /// `=` equality / assignment operator.
     #[token("=")]
     Eq,
+    /// `<` less-than operator.
     #[token("<")]
     Less,
+    /// `>` greater-than operator.
     #[token(">")]
     Greater,
+    /// `+` addition operator.
     #[token("+")]
     Plus,
+    /// `-` subtraction / negation operator.
     #[token("-")]
     Minus,
+    /// `*` multiplication / wildcard operator.
     #[token("*")]
     Star,
+    /// `/` division operator.
     #[token("/")]
     Slash,
+    /// `%` modulus operator.
     #[token("%")]
     Percent,
 
     // -- Arrow tokens ------------------------------------------------------
+    /// `->` right-directed relationship arrow.
     #[token("->")]
     ArrowRight,
+    /// `<-` left-directed relationship arrow.
     #[token("<-")]
     ArrowLeft,
+    /// `--` undirected relationship connector.
     #[token("--")]
     DoubleDash,
 
     // -- Punctuation -------------------------------------------------------
+    /// `(` left parenthesis.
     #[token("(")]
     LParen,
+    /// `)` right parenthesis.
     #[token(")")]
     RParen,
+    /// `[` left bracket.
     #[token("[")]
     LBracket,
+    /// `]` right bracket.
     #[token("]")]
     RBracket,
+    /// `{` left brace.
     #[token("{")]
     LBrace,
+    /// `}` right brace.
     #[token("}")]
     RBrace,
+    /// `:` colon (label separator, property key separator).
     #[token(":")]
     Colon,
+    /// `..` range separator for variable-length paths.
     #[token("..")]
     DoubleDot,
+    /// `.` property access operator.
     #[token(".")]
     Dot,
+    /// `,` comma separator.
     #[token(",")]
     Comma,
+    /// `|` pipe separator (used in relationship type alternatives).
     #[token("|")]
     Pipe,
 }

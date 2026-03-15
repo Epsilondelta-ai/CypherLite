@@ -1,0 +1,138 @@
+---
+title: CypherLite - ग्राफ डेटाबेस के लिए SQLite जैसी सरलता
+description: Rust में लिखा गया एक हल्का, एम्बेडेड, सिंगल-फाइल ग्राफ डेटाबेस इंजन। शून्य-कॉन्फ़िगरेशन डिप्लॉयमेंट और पूर्ण ACID अनुपालन।
+---
+
+import { Cards, Callout, Steps } from 'nextra/components'
+
+<div style={{ textAlign: 'center', padding: '4rem 0 2rem' }}>
+
+<h1 className="hero-title">CypherLite</h1>
+
+<p className="hero-subtitle">
+ग्राफ डेटाबेस के लिए SQLite जैसी सरलता
+</p>
+
+<p style={{ marginTop: '1.5rem' }}>
+Rust में लिखा गया एक हल्का, एम्बेडेड, सिंगल-फाइल ग्राफ डेटाबेस इंजन।
+शून्य-कॉन्फ़िगरेशन डिप्लॉयमेंट, पूर्ण ACID अनुपालन और नेटिव प्रॉपर्टी ग्राफ सपोर्ट।
+</p>
+
+<div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+  <a
+    href="/hi/getting-started/rust"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      backgroundColor: 'var(--nextra-primary-hue)',
+      color: 'white',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    शुरू करें
+  </a>
+  <a
+    href="https://github.com/Epsilondelta-ai/CypherLite"
+    target="_blank"
+    rel="noreferrer"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      border: '1px solid currentColor',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    GitHub
+  </a>
+</div>
+
+</div>
+
+---
+
+## CypherLite क्यों?
+
+<div className="feature-grid">
+
+<div className="feature-card">
+### शून्य कॉन्फ़िगरेशन
+एक फाइल खोलें और क्वेरी शुरू करें। कोई सर्वर प्रोसेस नहीं, कोई सेटअप नहीं, कोई कॉन्फ़िगरेशन फाइल नहीं। बस एक `.cyl` फाइल।
+</div>
+
+<div className="feature-card">
+### सिंगल-फाइल डेटाबेस
+सारा ग्राफ डेटा एक पोर्टेबल फाइल में रहता है। एक फाइल ऑपरेशन से अपने पूरे ग्राफ डेटाबेस को कॉपी, बैकअप या शेयर करें।
+</div>
+
+<div className="feature-card">
+### ACID अनुपालन
+Write-Ahead Logging, स्नैपशॉट आइसोलेशन और क्रैश रिकवरी के साथ पूर्ण ट्रांजेक्शनल सुरक्षा। आपका डेटा हमेशा सुसंगत रहता है।
+</div>
+
+<div className="feature-card">
+### एम्बेडेड लाइब्रेरी
+CypherLite को सीधे अपने एप्लिकेशन में लिंक करें। Rust crate, Python पैकेज, Go मॉड्यूल, Node.js एडऑन और C लाइब्रेरी के रूप में उपलब्ध।
+</div>
+
+<div className="feature-card">
+### विस्तारयोग्य प्लगइन सिस्टम
+चार प्लगइन प्रकार (ScalarFunction, IndexPlugin, Serializer, Trigger) आपको CypherLite को अपनी आवश्यकताओं के अनुसार विस्तारित करने देते हैं।
+</div>
+
+<div className="feature-card">
+### टेम्पोरल क्वेरी
+किसी भी समय बिंदु पर अपने ग्राफ को क्वेरी करें। बिल्ट-इन वर्जनिंग नोड्स, एज और प्रॉपर्टीज में हर बदलाव को ट्रैक करता है।
+</div>
+
+</div>
+
+## त्वरित उदाहरण
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+    db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+    db.execute(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+         CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+    )?;
+
+    let result = db.execute(
+        "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age"
+    )?;
+    for row in result {
+        let row = row?;
+        println!("{}: {}", row.get("p.name").unwrap(), row.get("p.age").unwrap());
+    }
+    Ok(())
+}
+```
+
+## उपलब्ध बाइंडिंग
+
+<Cards>
+  <Cards.Card title="Rust" href="/hi/getting-started/rust" />
+  <Cards.Card title="Python" href="/hi/getting-started/python" />
+  <Cards.Card title="Go" href="/hi/getting-started/go" />
+  <Cards.Card title="Node.js" href="/hi/getting-started/nodejs" />
+</Cards>
+
+## मुख्य विशेषताएं
+
+| विशेषता | विवरण |
+|---------|-------------|
+| **Property Graph** | Nodes and edges with typed properties (Null, Bool, Int64, Float64, String, Bytes, Array) |
+| **Cypher Queries** | openCypher subset with MATCH, CREATE, MERGE, SET, DELETE, RETURN, WHERE |
+| **Temporal Versioning** | AT TIME queries, version store, temporal edge versioning |
+| **Subgraphs** | Named subgraphs as first-class entities with CREATE/MATCH SNAPSHOT |
+| **Hyperedges** | N:M relationships connecting arbitrary numbers of nodes |
+| **Plugin System** | ScalarFunction, IndexPlugin, Serializer, Trigger plugin types |
+| **FFI Bindings** | C ABI, Python (PyO3), Go (CGo), Node.js (napi-rs) |

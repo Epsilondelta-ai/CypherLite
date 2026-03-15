@@ -1,0 +1,107 @@
+---
+title: Go 快速入门
+description: 通过 CGo 安装并使用 CypherLite Go 绑定。
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Go 快速入门
+
+CypherLite 通过 CGo 提供 Go 绑定，封装 C ABI 静态库以便在 Go 应用程序中使用。
+
+## 安装
+
+<Steps>
+
+### 使用 go get 安装
+
+```bash
+go get github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite
+```
+
+### 前置条件
+
+- Go 1.21 或更高版本
+- Rust 工具链（用于构建 C 静态库）
+- CGo 所需的 C 编译器（gcc 或 clang）
+
+</Steps>
+
+<Callout type="info">
+Go 绑定使用 CGo 链接 CypherLite C 静态库。如果您的平台没有预编译二进制文件，该库将在 `go get` 过程中自动构建。
+</Callout>
+
+## 基本用法
+
+### 打开数据库
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/Epsilondelta-ai/CypherLite/bindings/go/cypherlite"
+)
+
+func main() {
+    db, err := cypherlite.Open("my_graph.cyl")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+}
+```
+
+### 创建节点和关系
+
+```go
+db.Execute("CREATE (a:Person {name: 'Alice', age: 30})")
+db.Execute("CREATE (b:Person {name: 'Bob', age: 25})")
+db.Execute(
+    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) " +
+    "CREATE (a)-[:KNOWS {since: 2023}]->(b)",
+)
+```
+
+### 查询数据
+
+```go
+result, err := db.Execute("MATCH (n:Person) RETURN n.name, n.age")
+if err != nil {
+    log.Fatal(err)
+}
+
+for result.Next() {
+    row := result.Row()
+    name, _ := row.GetString("n.name")
+    age, _ := row.GetInt64("n.age")
+    fmt.Printf("%s (age: %d)\n", name, age)
+}
+```
+
+### 更新和删除
+
+```go
+// Update properties
+db.Execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 31")
+
+// Delete a relationship
+db.Execute(
+    "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b) DELETE r",
+)
+
+// Delete a node
+db.Execute("MATCH (p:Person {name: 'Bob'}) DELETE p")
+```
+
+<Callout type="warning">
+请务必使用 `defer db.Close()` 以确保资源被正确释放并将数据刷新到磁盘。
+</Callout>
+
+## 系统要求
+
+- **Go**：1.21+
+- **构建**：Rust 1.84+ 工具链和 C 编译器（用于 CGo）
+- **平台**：Linux、macOS、Windows

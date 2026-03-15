@@ -1,0 +1,115 @@
+---
+title: Node.js 시작하기
+description: napi-rs를 통해 CypherLite Node.js 바인딩을 설치하고 사용합니다.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Node.js 시작하기
+
+CypherLite는 [napi-rs](https://napi.rs)로 빌드된 Node.js 바인딩을 제공하며, 고성능 그래프 데이터베이스 작업을 위한 네이티브 N-API 애드온을 제공합니다.
+
+## 설치
+
+<Steps>
+
+### npm으로 설치
+
+```bash
+npm install cypherlite
+```
+
+### 설치 확인
+
+```js
+const { open } = require("cypherlite");
+console.log("CypherLite loaded successfully");
+```
+
+</Steps>
+
+<Callout type="info">
+Linux, macOS, Windows용 사전 빌드 네이티브 애드온이 제공됩니다. 사전 빌드 바이너리가 없는 경우 npm이 소스에서 빌드를 시도합니다(Rust 툴체인 필요).
+</Callout>
+
+## 기본 사용법
+
+### 데이터베이스 열기
+
+```js
+const { open } = require("cypherlite");
+
+const db = open("my_graph.cyl");
+```
+
+### 노드와 관계 생성
+
+```js
+db.execute("CREATE (a:Person {name: 'Alice', age: 30})");
+db.execute("CREATE (b:Person {name: 'Bob', age: 25})");
+db.execute(
+  "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) " +
+  "CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+);
+```
+
+### 데이터 조회
+
+```js
+const result = db.execute("MATCH (n:Person) RETURN n.name, n.age");
+for (const row of result) {
+  console.log(`${row["n.name"]} (age: ${row["n.age"]})`);
+}
+```
+
+### 업데이트 및 삭제
+
+```js
+// Update properties
+db.execute("MATCH (p:Person {name: 'Alice'}) SET p.age = 31");
+
+// Delete a relationship
+db.execute(
+  "MATCH (a:Person {name: 'Alice'})-[r:KNOWS]->(b) DELETE r"
+);
+
+// Delete a node
+db.execute("MATCH (p:Person {name: 'Bob'}) DELETE p");
+```
+
+### 데이터베이스 닫기
+
+```js
+db.close();
+```
+
+<Callout type="warning">
+사용이 끝나면 반드시 `db.close()`를 호출하여 모든 데이터가 디스크에 기록되고 네이티브 리소스가 해제되도록 하세요.
+</Callout>
+
+## ES 모듈 지원
+
+CypherLite는 ES 모듈도 지원합니다:
+
+```js
+import { open } from "cypherlite";
+
+const db = open("my_graph.cyl");
+// ... use the database
+db.close();
+```
+
+## 소스에서 빌드
+
+네이티브 애드온을 소스에서 빌드하려면:
+
+```bash
+cd crates/cypherlite-node
+npx napi build --release
+```
+
+## 시스템 요구사항
+
+- **Node.js**: 18+ (N-API v9)
+- **플랫폼**: Linux, macOS, Windows
+- **소스 빌드**: Rust 1.84+ 툴체인 필요

@@ -1,0 +1,138 @@
+---
+title: CypherLite - بساطة SQLite لقواعد بيانات الرسوم البيانية
+description: محرك قاعدة بيانات رسوم بيانية خفيف الوزن ومضمن وأحادي الملف مكتوب بلغة Rust مع نشر بدون تكوين وتوافق كامل مع ACID.
+---
+
+import { Cards, Callout, Steps } from 'nextra/components'
+
+<div style={{ textAlign: 'center', padding: '4rem 0 2rem' }}>
+
+<h1 className="hero-title">CypherLite</h1>
+
+<p className="hero-subtitle">
+بساطة SQLite لقواعد بيانات الرسوم البيانية
+</p>
+
+<p style={{ marginTop: '1.5rem' }}>
+محرك قاعدة بيانات رسوم بيانية خفيف الوزن ومضمن وأحادي الملف مكتوب بلغة Rust.
+نشر بدون تكوين، توافق كامل مع ACID، ودعم أصلي لرسوم الخصائص البيانية.
+</p>
+
+<div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+  <a
+    href="/ar/getting-started/rust"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      backgroundColor: 'var(--nextra-primary-hue)',
+      color: 'white',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    ابدأ
+  </a>
+  <a
+    href="https://github.com/Epsilondelta-ai/CypherLite"
+    target="_blank"
+    rel="noreferrer"
+    style={{
+      display: 'inline-block',
+      padding: '0.75rem 2rem',
+      borderRadius: '0.5rem',
+      border: '1px solid currentColor',
+      fontWeight: 600,
+      textDecoration: 'none',
+    }}
+  >
+    GitHub
+  </a>
+</div>
+
+</div>
+
+---
+
+## لماذا CypherLite؟
+
+<div className="feature-grid">
+
+<div className="feature-card">
+### بدون تكوين
+افتح ملفاً وابدأ الاستعلام. لا حاجة لعملية خادم أو إعداد أو ملفات تكوين. مجرد ملف `.cyl` واحد.
+</div>
+
+<div className="feature-card">
+### قاعدة بيانات أحادية الملف
+جميع بيانات الرسم البياني في ملف واحد قابل للنقل. انسخ أو احفظ أو شارك قاعدة بيانات الرسوم البيانية بالكامل بعملية ملف واحدة.
+</div>
+
+<div className="feature-card">
+### متوافق مع ACID
+أمان كامل للمعاملات مع Write-Ahead Logging وعزل اللقطات واستعادة الأعطال. بياناتك دائماً متسقة.
+</div>
+
+<div className="feature-card">
+### مكتبة مضمنة
+اربط CypherLite مباشرة في تطبيقك. متاح كصندوق Rust وحزمة Python ووحدة Go وإضافة Node.js ومكتبة C.
+</div>
+
+<div className="feature-card">
+### نظام إضافات قابل للتوسيع
+أربعة أنواع من الإضافات (ScalarFunction، IndexPlugin، Serializer، Trigger) تتيح لك توسيع CypherLite حسب احتياجاتك.
+</div>
+
+<div className="feature-card">
+### الاستعلامات الزمنية
+استعلم عن الرسم البياني في أي نقطة زمنية. التتبع المدمج يسجل كل تغيير في العقد والحواف والخصائص.
+</div>
+
+</div>
+
+## مثال سريع
+
+```rust
+use cypherlite_query::CypherLite;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = CypherLite::open("my_graph.cyl")?;
+
+    db.execute("CREATE (a:Person {name: 'Alice', age: 30})")?;
+    db.execute("CREATE (b:Person {name: 'Bob', age: 25})")?;
+    db.execute(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+         CREATE (a)-[:KNOWS {since: 2023}]->(b)"
+    )?;
+
+    let result = db.execute(
+        "MATCH (p:Person) WHERE p.age > 20 RETURN p.name, p.age"
+    )?;
+    for row in result {
+        let row = row?;
+        println!("{}: {}", row.get("p.name").unwrap(), row.get("p.age").unwrap());
+    }
+    Ok(())
+}
+```
+
+## الربطات المتاحة
+
+<Cards>
+  <Cards.Card title="Rust" href="/ar/getting-started/rust" />
+  <Cards.Card title="Python" href="/ar/getting-started/python" />
+  <Cards.Card title="Go" href="/ar/getting-started/go" />
+  <Cards.Card title="Node.js" href="/ar/getting-started/nodejs" />
+</Cards>
+
+## أبرز الميزات
+
+| الميزة | الوصف |
+|---------|-------------|
+| **Property Graph** | Nodes and edges with typed properties (Null, Bool, Int64, Float64, String, Bytes, Array) |
+| **Cypher Queries** | openCypher subset with MATCH, CREATE, MERGE, SET, DELETE, RETURN, WHERE |
+| **Temporal Versioning** | AT TIME queries, version store, temporal edge versioning |
+| **Subgraphs** | Named subgraphs as first-class entities with CREATE/MATCH SNAPSHOT |
+| **Hyperedges** | N:M relationships connecting arbitrary numbers of nodes |
+| **Plugin System** | ScalarFunction, IndexPlugin, Serializer, Trigger plugin types |
+| **FFI Bindings** | C ABI, Python (PyO3), Go (CGo), Node.js (napi-rs) |
