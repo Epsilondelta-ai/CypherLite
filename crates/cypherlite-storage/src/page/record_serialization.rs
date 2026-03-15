@@ -4,12 +4,12 @@
 // SubgraphRecord, HyperEdgeRecord, and VersionRecord,
 // plus a DataPageHeader for slotted data pages.
 
+use crate::version::VersionRecord;
 use cypherlite_core::{Direction, EdgeId, NodeId, NodeRecord, RelationshipRecord};
-#[cfg(feature = "subgraph")]
-use cypherlite_core::{SubgraphId, SubgraphRecord};
 #[cfg(feature = "hypergraph")]
 use cypherlite_core::{GraphEntity, HyperEdgeId, HyperEdgeRecord};
-use crate::version::VersionRecord;
+#[cfg(feature = "subgraph")]
+use cypherlite_core::{SubgraphId, SubgraphRecord};
 
 use super::PAGE_SIZE;
 use crate::btree::property_store::PropertyStore;
@@ -365,8 +365,7 @@ pub fn read_records_from_page(page: &[u8; PAGE_SIZE]) -> Vec<(usize, usize)> {
         if offset + 2 > PAGE_SIZE {
             break;
         }
-        let record_len =
-            u16::from_le_bytes([page[offset], page[offset + 1]]) as usize;
+        let record_len = u16::from_le_bytes([page[offset], page[offset + 1]]) as usize;
         offset += 2;
 
         if offset + record_len > PAGE_SIZE {
@@ -515,8 +514,7 @@ pub fn deserialize_subgraph_record(
     if data.len() < offset + 2 {
         return None;
     }
-    let member_count =
-        u16::from_le_bytes(data[offset..offset + 2].try_into().ok()?) as usize;
+    let member_count = u16::from_le_bytes(data[offset..offset + 2].try_into().ok()?) as usize;
     offset += 2;
 
     // members: [u64; N]
@@ -600,10 +598,7 @@ fn deserialize_graph_entity(data: &[u8]) -> Option<(GraphEntity, usize)> {
                 return None;
             }
             let sid = u64::from_le_bytes(data[1..9].try_into().ok()?);
-            Some((
-                GraphEntity::Subgraph(cypherlite_core::SubgraphId(sid)),
-                9,
-            ))
+            Some((GraphEntity::Subgraph(cypherlite_core::SubgraphId(sid)), 9))
         }
         2 => {
             // HyperEdge(u64)
@@ -824,9 +819,7 @@ pub fn serialize_version_record(
 /// Deserialize a `VersionRecord` with its composite key from bytes.
 ///
 /// Returns `(entity_id, version_seq, VersionRecord, bytes_consumed)`.
-pub fn deserialize_version_record(
-    data: &[u8],
-) -> Option<(u64, u64, VersionRecord, usize)> {
+pub fn deserialize_version_record(data: &[u8]) -> Option<(u64, u64, VersionRecord, usize)> {
     let mut offset = 0;
 
     // entity_id: u64
@@ -937,7 +930,7 @@ mod tests {
 
     #[test]
     fn test_database_header_persist_fields_v_migration() {
-        use crate::page::{DatabaseHeader, MAGIC, FIRST_DATA_PAGE, FORMAT_VERSION};
+        use crate::page::{DatabaseHeader, FIRST_DATA_PAGE, FORMAT_VERSION, MAGIC};
         // Simulate opening a database from the previous format version
         // (no persist fields) -- they should default to 0
         let mut page = [0u8; PAGE_SIZE];
@@ -1054,10 +1047,7 @@ mod tests {
         let record = NodeRecord {
             node_id: NodeId(99),
             labels: vec![10, 20],
-            properties: vec![
-                (5, PropertyValue::Float64(1.5)),
-                (6, PropertyValue::Null),
-            ],
+            properties: vec![(5, PropertyValue::Float64(1.5)), (6, PropertyValue::Null)],
             next_edge_id: None,
             overflow_page: None,
         };
@@ -1387,8 +1377,7 @@ mod tests {
                 ],
             };
             let bytes = serialize_subgraph_record(&record, &[], false);
-            let (decoded, _, _, _) =
-                deserialize_subgraph_record(&bytes).expect("deserialize");
+            let (decoded, _, _, _) = deserialize_subgraph_record(&bytes).expect("deserialize");
             assert_eq!(decoded.subgraph_id, SubgraphId(42));
             assert_eq!(decoded.temporal_anchor, Some(1_700_000_000_000));
             assert_eq!(decoded.properties, record.properties);
@@ -1417,8 +1406,7 @@ mod tests {
                 properties: vec![],
             };
             let bytes = serialize_subgraph_record(&record, &[], true);
-            let (_, _, deleted, _) =
-                deserialize_subgraph_record(&bytes).expect("deserialize");
+            let (_, _, deleted, _) = deserialize_subgraph_record(&bytes).expect("deserialize");
             assert!(deleted);
         }
 
@@ -1478,8 +1466,7 @@ mod tests {
                 ],
             };
             let bytes = serialize_hyperedge_record(&record, false);
-            let (decoded, _, _) =
-                deserialize_hyperedge_record(&bytes).expect("deserialize");
+            let (decoded, _, _) = deserialize_hyperedge_record(&bytes).expect("deserialize");
             assert_eq!(decoded.id, HyperEdgeId(42));
             assert_eq!(decoded.rel_type_id, 5);
             assert_eq!(decoded.sources, record.sources);
@@ -1497,8 +1484,7 @@ mod tests {
                 properties: vec![],
             };
             let bytes = serialize_hyperedge_record(&record, true);
-            let (_, deleted, _) =
-                deserialize_hyperedge_record(&bytes).expect("deserialize");
+            let (_, deleted, _) = deserialize_hyperedge_record(&bytes).expect("deserialize");
             assert!(deleted);
         }
 

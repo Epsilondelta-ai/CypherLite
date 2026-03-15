@@ -28,9 +28,9 @@ use cypherlite_core::{
     CypherLiteError, DatabaseConfig, EdgeId, LabelRegistry, NodeId, NodeRecord, PageId,
     PropertyValue, RelationshipRecord, Result,
 };
-use fs2::FileExt;
 #[cfg(feature = "subgraph")]
 use cypherlite_core::{SubgraphId, SubgraphRecord};
+use fs2::FileExt;
 
 use btree::edge_store::EdgeStore;
 use btree::node_store::NodeStore;
@@ -126,9 +126,9 @@ impl StorageEngine {
             .open(&lock_path)
             .map_err(CypherLiteError::IoError)?;
 
-        lock_file.try_lock_exclusive().map_err(|_| {
-            CypherLiteError::DatabaseLocked(config.path.display().to_string())
-        })?;
+        lock_file
+            .try_lock_exclusive()
+            .map_err(|_| CypherLiteError::DatabaseLocked(config.path.display().to_string()))?;
 
         // Try to open existing database, or create a new one
         let mut page_manager = if db_exists {
@@ -877,10 +877,7 @@ impl StorageEngine {
     }
 
     /// Returns the version chain for a given entity (oldest to newest).
-    pub fn version_chain(
-        &self,
-        entity_id: u64,
-    ) -> Vec<(u64, &version::VersionRecord)> {
+    pub fn version_chain(&self, entity_id: u64) -> Vec<(u64, &version::VersionRecord)> {
         self.version_store.get_version_chain(entity_id)
     }
 
@@ -956,7 +953,9 @@ impl StorageEngine {
     /// R-PERSIST-031: After WAL recovery, all node data pages MUST be read and
     /// deserialized into NodeStore.
     fn load_nodes_from_pages(&mut self) -> Result<()> {
-        use page::record_serialization::{read_records_from_page, deserialize_node_record, DataPageHeader};
+        use page::record_serialization::{
+            deserialize_node_record, read_records_from_page, DataPageHeader,
+        };
 
         let root_page = self.page_manager.header().node_data_root_page;
         if root_page == 0 {
@@ -1003,7 +1002,9 @@ impl StorageEngine {
     /// R-PERSIST-032: After WAL recovery, all edge data pages MUST be read and
     /// deserialized into EdgeStore.
     fn load_edges_from_pages(&mut self) -> Result<()> {
-        use page::record_serialization::{read_records_from_page, deserialize_edge_record, DataPageHeader};
+        use page::record_serialization::{
+            deserialize_edge_record, read_records_from_page, DataPageHeader,
+        };
 
         let root_page = self.page_manager.header().edge_data_root_page;
         if root_page == 0 {
@@ -1078,7 +1079,8 @@ impl StorageEngine {
                 prev_header.write_to(prev_buf);
                 // Write previous page through WAL
                 let db_size = self.page_manager.header().page_count;
-                self.wal_writer.write_frame(PageId(prev_id), db_size, prev_buf)?;
+                self.wal_writer
+                    .write_frame(PageId(prev_id), db_size, prev_buf)?;
             }
 
             prev_page = Some((new_page_id.0, page_buf));
@@ -1087,7 +1089,8 @@ impl StorageEngine {
         // Write the last page
         if let Some((last_id, ref last_buf)) = prev_page {
             let db_size = self.page_manager.header().page_count;
-            self.wal_writer.write_frame(PageId(last_id), db_size, last_buf)?;
+            self.wal_writer
+                .write_frame(PageId(last_id), db_size, last_buf)?;
             self.wal_writer.commit()?;
         }
 
@@ -1139,7 +1142,7 @@ impl StorageEngine {
     /// Persist a node record to a data page and write through WAL.
     fn persist_node(&mut self, node_id: NodeId, record: &NodeRecord, deleted: bool) -> Result<()> {
         use page::record_serialization::{
-            serialize_node_record, pack_record_into_page, DataPageHeader,
+            pack_record_into_page, serialize_node_record, DataPageHeader,
         };
         use page::PageType;
 
@@ -1150,7 +1153,8 @@ impl StorageEngine {
             if pack_record_into_page(page_buf, &record_bytes) {
                 // Write the page through WAL
                 let db_size = self.page_manager.header().page_count;
-                self.wal_writer.write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
                 self.wal_writer.commit()?;
                 self.node_page_map.insert(node_id.0, page_id);
                 return Ok(());
@@ -1171,7 +1175,8 @@ impl StorageEngine {
             old_header.write_to(old_buf);
             // Write old page with updated chain pointer
             let db_size = self.page_manager.header().page_count;
-            self.wal_writer.write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
             self.wal_writer.commit()?;
         }
 
@@ -1181,7 +1186,8 @@ impl StorageEngine {
 
         // Write new page through WAL
         let db_size = self.page_manager.header().page_count;
-        self.wal_writer.write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
         self.wal_writer.commit()?;
 
         // Update header if this is the first node data page
@@ -1204,7 +1210,7 @@ impl StorageEngine {
         deleted: bool,
     ) -> Result<()> {
         use page::record_serialization::{
-            serialize_edge_record, pack_record_into_page, DataPageHeader,
+            pack_record_into_page, serialize_edge_record, DataPageHeader,
         };
         use page::PageType;
 
@@ -1214,7 +1220,8 @@ impl StorageEngine {
         if let Some((page_id, ref mut page_buf)) = self.current_edge_data_page {
             if pack_record_into_page(page_buf, &record_bytes) {
                 let db_size = self.page_manager.header().page_count;
-                self.wal_writer.write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
                 self.wal_writer.commit()?;
                 self.edge_page_map.insert(edge_id.0, page_id);
                 return Ok(());
@@ -1233,7 +1240,8 @@ impl StorageEngine {
             old_header.next_page = new_page_id.0;
             old_header.write_to(old_buf);
             let db_size = self.page_manager.header().page_count;
-            self.wal_writer.write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
             self.wal_writer.commit()?;
         }
 
@@ -1241,7 +1249,8 @@ impl StorageEngine {
         debug_assert!(packed, "fresh page should always have space for a record");
 
         let db_size = self.page_manager.header().page_count;
-        self.wal_writer.write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
         self.wal_writer.commit()?;
 
         if self.page_manager.header().edge_data_root_page == 0 {
@@ -1264,8 +1273,8 @@ impl StorageEngine {
         deleted: bool,
     ) -> Result<()> {
         use page::record_serialization::{
-            serialize_node_record, deserialize_node_record, pack_record_into_page,
-            read_records_from_page, DataPageHeader,
+            deserialize_node_record, pack_record_into_page, read_records_from_page,
+            serialize_node_record, DataPageHeader,
         };
 
         let page_id = match self.node_page_map.get(&node_id.0) {
@@ -1303,7 +1312,8 @@ impl StorageEngine {
 
         // Write updated page through WAL
         let db_size = self.page_manager.header().page_count;
-        self.wal_writer.write_frame(PageId(page_id), db_size, &new_page)?;
+        self.wal_writer
+            .write_frame(PageId(page_id), db_size, &new_page)?;
         self.wal_writer.commit()?;
 
         // Update cached page if it matches
@@ -1324,8 +1334,8 @@ impl StorageEngine {
         deleted: bool,
     ) -> Result<()> {
         use page::record_serialization::{
-            serialize_edge_record, deserialize_edge_record, pack_record_into_page,
-            read_records_from_page, DataPageHeader,
+            deserialize_edge_record, pack_record_into_page, read_records_from_page,
+            serialize_edge_record, DataPageHeader,
         };
 
         let page_id = match self.edge_page_map.get(&edge_id.0) {
@@ -1358,7 +1368,8 @@ impl StorageEngine {
         }
 
         let db_size = self.page_manager.header().page_count;
-        self.wal_writer.write_frame(PageId(page_id), db_size, &new_page)?;
+        self.wal_writer
+            .write_frame(PageId(page_id), db_size, &new_page)?;
         self.wal_writer.commit()?;
 
         if let Some((cached_pid, ref mut cached_buf)) = self.current_edge_data_page {
@@ -1379,7 +1390,7 @@ impl StorageEngine {
     #[cfg(feature = "subgraph")]
     fn load_subgraphs_from_pages(&mut self) -> Result<()> {
         use page::record_serialization::{
-            read_records_from_page, deserialize_subgraph_record, DataPageHeader,
+            deserialize_subgraph_record, read_records_from_page, DataPageHeader,
         };
 
         let root_page = self.page_manager.header().subgraph_data_root_page;
@@ -1428,7 +1439,7 @@ impl StorageEngine {
         deleted: bool,
     ) -> Result<()> {
         use page::record_serialization::{
-            serialize_subgraph_record, pack_record_into_page, DataPageHeader,
+            pack_record_into_page, serialize_subgraph_record, DataPageHeader,
         };
         use page::PageType;
 
@@ -1438,7 +1449,8 @@ impl StorageEngine {
         if let Some((page_id, ref mut page_buf)) = self.current_subgraph_data_page {
             if pack_record_into_page(page_buf, &record_bytes) {
                 let db_size = self.page_manager.header().page_count;
-                self.wal_writer.write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
                 self.wal_writer.commit()?;
                 return Ok(());
             }
@@ -1456,7 +1468,8 @@ impl StorageEngine {
             old_header.next_page = new_page_id.0;
             old_header.write_to(old_buf);
             let db_size = self.page_manager.header().page_count;
-            self.wal_writer.write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
             self.wal_writer.commit()?;
         }
 
@@ -1464,7 +1477,8 @@ impl StorageEngine {
         debug_assert!(packed, "fresh page should always have space for a record");
 
         let db_size = self.page_manager.header().page_count;
-        self.wal_writer.write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
         self.wal_writer.commit()?;
 
         if self.page_manager.header().subgraph_data_root_page == 0 {
@@ -1486,7 +1500,7 @@ impl StorageEngine {
     #[cfg(feature = "hypergraph")]
     fn load_hyperedges_from_pages(&mut self) -> Result<()> {
         use page::record_serialization::{
-            read_records_from_page, deserialize_hyperedge_record, DataPageHeader,
+            deserialize_hyperedge_record, read_records_from_page, DataPageHeader,
         };
 
         let root_page = self.page_manager.header().hyperedge_data_root_page;
@@ -1540,7 +1554,7 @@ impl StorageEngine {
         deleted: bool,
     ) -> Result<()> {
         use page::record_serialization::{
-            serialize_hyperedge_record, pack_record_into_page, DataPageHeader,
+            pack_record_into_page, serialize_hyperedge_record, DataPageHeader,
         };
         use page::PageType;
 
@@ -1550,7 +1564,8 @@ impl StorageEngine {
         if let Some((page_id, ref mut page_buf)) = self.current_hyperedge_data_page {
             if pack_record_into_page(page_buf, &record_bytes) {
                 let db_size = self.page_manager.header().page_count;
-                self.wal_writer.write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
                 self.wal_writer.commit()?;
                 return Ok(());
             }
@@ -1568,7 +1583,8 @@ impl StorageEngine {
             old_header.next_page = new_page_id.0;
             old_header.write_to(old_buf);
             let db_size = self.page_manager.header().page_count;
-            self.wal_writer.write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
             self.wal_writer.commit()?;
         }
 
@@ -1576,7 +1592,8 @@ impl StorageEngine {
         debug_assert!(packed, "fresh page should always have space for a record");
 
         let db_size = self.page_manager.header().page_count;
-        self.wal_writer.write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
         self.wal_writer.commit()?;
 
         if self.page_manager.header().hyperedge_data_root_page == 0 {
@@ -1597,7 +1614,7 @@ impl StorageEngine {
     /// VersionStore.
     fn load_versions_from_pages(&mut self) -> Result<()> {
         use page::record_serialization::{
-            read_records_from_page, deserialize_version_record, DataPageHeader,
+            deserialize_version_record, read_records_from_page, DataPageHeader,
         };
 
         let root_page = self.page_manager.header().version_data_root_page;
@@ -1638,7 +1655,7 @@ impl StorageEngine {
         record: &version::VersionRecord,
     ) -> Result<()> {
         use page::record_serialization::{
-            serialize_version_record, pack_record_into_page, DataPageHeader,
+            pack_record_into_page, serialize_version_record, DataPageHeader,
         };
         use page::PageType;
 
@@ -1648,7 +1665,8 @@ impl StorageEngine {
         if let Some((page_id, ref mut page_buf)) = self.current_version_data_page {
             if pack_record_into_page(page_buf, &record_bytes) {
                 let db_size = self.page_manager.header().page_count;
-                self.wal_writer.write_frame(PageId(page_id), db_size, page_buf)?;
+                self.wal_writer
+                    .write_frame(PageId(page_id), db_size, page_buf)?;
                 self.wal_writer.commit()?;
                 return Ok(());
             }
@@ -1666,7 +1684,8 @@ impl StorageEngine {
             old_header.next_page = new_page_id.0;
             old_header.write_to(old_buf);
             let db_size = self.page_manager.header().page_count;
-            self.wal_writer.write_frame(PageId(old_page_id), db_size, old_buf)?;
+            self.wal_writer
+                .write_frame(PageId(old_page_id), db_size, old_buf)?;
             self.wal_writer.commit()?;
         }
 
@@ -1674,7 +1693,8 @@ impl StorageEngine {
         debug_assert!(packed, "fresh page should always have space for a record");
 
         let db_size = self.page_manager.header().page_count;
-        self.wal_writer.write_frame(new_page_id, db_size, &new_page)?;
+        self.wal_writer
+            .write_frame(new_page_id, db_size, &new_page)?;
         self.wal_writer.commit()?;
 
         if self.page_manager.header().version_data_root_page == 0 {
@@ -2742,7 +2762,10 @@ mod tests {
         let result = StorageEngine::open(config2);
         match result {
             Err(CypherLiteError::DatabaseLocked(ref msg)) => {
-                assert!(msg.contains("lock_test.cyl"), "error should contain file path: {msg}");
+                assert!(
+                    msg.contains("lock_test.cyl"),
+                    "error should contain file path: {msg}"
+                );
             }
             Err(other) => panic!("expected DatabaseLocked, got: {other}"),
             Ok(_) => panic!("expected DatabaseLocked error, but open succeeded"),
@@ -2788,10 +2811,7 @@ mod tests {
     fn test_create_node_data_page_contains_record() {
         let dir = tempdir().expect("tempdir");
         let mut engine = test_engine(dir.path());
-        let id = engine.create_node(
-            vec![1, 2],
-            vec![(1, PropertyValue::String("Alice".into()))],
-        );
+        let id = engine.create_node(vec![1, 2], vec![(1, PropertyValue::String("Alice".into()))]);
         // Read back the data page and verify the node is in it
         let page_id = engine.node_data_root_page();
         assert_ne!(page_id, 0);
@@ -2814,10 +2834,7 @@ mod tests {
         let mut engine = test_engine(dir.path());
         let mut ids = vec![];
         for i in 0..5u64 {
-            let id = engine.create_node(
-                vec![1],
-                vec![(1, PropertyValue::Int64(i as i64))],
-            );
+            let id = engine.create_node(vec![1], vec![(1, PropertyValue::Int64(i as i64))]);
             ids.push(id);
         }
         // All nodes should be in data pages
@@ -2919,7 +2936,10 @@ mod tests {
                 tombstone_found = true;
             }
         }
-        assert!(tombstone_found, "deleted node should have a tombstone record");
+        assert!(
+            tombstone_found,
+            "deleted node should have a tombstone record"
+        );
     }
 
     #[test]
@@ -2942,7 +2962,10 @@ mod tests {
                 tombstone_found = true;
             }
         }
-        assert!(tombstone_found, "deleted edge should have a tombstone record");
+        assert!(
+            tombstone_found,
+            "deleted edge should have a tombstone record"
+        );
     }
 
     // ======================================================================
@@ -2955,7 +2978,10 @@ mod tests {
         let mut engine = test_engine(dir.path());
         engine.create_node(vec![1], vec![(1, PropertyValue::Int64(42))]);
         // WAL should have at least 1 committed frame (the data page write)
-        assert!(engine.wal_frame_count() > 0, "WAL should have committed frames");
+        assert!(
+            engine.wal_frame_count() > 0,
+            "WAL should have committed frames"
+        );
     }
 
     #[test]
@@ -2974,7 +3000,10 @@ mod tests {
             );
         }
         // Should have allocated more than one data page
-        assert!(engine.node_data_page_count() > 1, "should use multiple data pages");
+        assert!(
+            engine.node_data_page_count() > 1,
+            "should use multiple data pages"
+        );
     }
 
     // ======================================================================
@@ -3010,7 +3039,11 @@ mod tests {
         // Phase 2: Reopen and verify all nodes are present
         {
             let engine = StorageEngine::open(config).expect("reopen");
-            assert_eq!(engine.node_count(), 3, "all nodes should be loaded from disk");
+            assert_eq!(
+                engine.node_count(),
+                3,
+                "all nodes should be loaded from disk"
+            );
 
             // Verify node 1 (NodeId(1))
             let n1 = engine.get_node(NodeId(1)).expect("node 1 should exist");
@@ -3053,9 +3086,7 @@ mod tests {
             engine
                 .create_edge(n1, n2, 10, vec![(1, PropertyValue::String("since".into()))])
                 .expect("edge1");
-            engine
-                .create_edge(n2, n3, 20, vec![])
-                .expect("edge2");
+            engine.create_edge(n2, n3, 20, vec![]).expect("edge2");
             assert_eq!(engine.node_count(), 3);
             assert_eq!(engine.edge_count(), 2);
         }
@@ -3072,10 +3103,7 @@ mod tests {
             assert_eq!(e1.end_node, NodeId(2));
             assert_eq!(e1.rel_type_id, 10);
             assert_eq!(e1.properties.len(), 1);
-            assert_eq!(
-                e1.properties[0],
-                (1, PropertyValue::String("since".into()))
-            );
+            assert_eq!(e1.properties[0], (1, PropertyValue::String("since".into())));
 
             // Verify edge 2
             let e2 = engine.get_edge(EdgeId(2)).expect("edge 2 should exist");
@@ -3355,7 +3383,10 @@ mod tests {
         {
             let mut engine = StorageEngine::open(config).expect("reopen");
             let new_id = engine.get_or_create_label("City");
-            assert_eq!(new_id, 2, "new label after reopen should continue ID sequence");
+            assert_eq!(
+                new_id, 2,
+                "new label after reopen should continue ID sequence"
+            );
             // Existing labels still accessible
             assert_eq!(engine.label_id("Person"), Some(0));
             assert_eq!(engine.label_id("Company"), Some(1));
@@ -3574,10 +3605,8 @@ mod tests {
         // Phase 1: Create nodes, update them to create version snapshots
         {
             let mut engine = StorageEngine::open(config.clone()).expect("open");
-            let n1 = engine.create_node(
-                vec![1],
-                vec![(1, PropertyValue::String("Alice-v1".into()))],
-            );
+            let n1 =
+                engine.create_node(vec![1], vec![(1, PropertyValue::String("Alice-v1".into()))]);
             // Update node to create a version snapshot
             engine
                 .update_node(n1, vec![(1, PropertyValue::String("Alice-v2".into()))])
