@@ -7,6 +7,7 @@ const withNextra = nextra({
 
 export default withNextra({
   output: 'export',
+  basePath: '/CypherLite',
   trailingSlash: true,
   images: {
     unoptimized: true,
