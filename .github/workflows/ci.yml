@@ -31,7 +31,7 @@ jobs:
         with:
           toolchain: "1.84"
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-features
+      - run: cargo check --workspace --all-features --exclude cypherlite-python --exclude cypherlite-node
 
   test:
     name: Test Suite

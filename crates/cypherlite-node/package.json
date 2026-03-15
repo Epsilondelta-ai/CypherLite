@@ -1,0 +1,21 @@
+{
+  "name": "cypherlite",
+  "version": "1.0.0",
+  "description": "Node.js bindings for CypherLite embedded graph database",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "cypherlite",
+    "triples": {}
+  },
+  "scripts": {
+    "build": "napi build --release",
+    "build:debug": "napi build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "MIT"
+}
