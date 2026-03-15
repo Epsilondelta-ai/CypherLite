@@ -21,13 +21,22 @@
     "graph-database",
     "napi-rs"
   ],
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "*.node"
+  ],
   "napi": {
     "name": "cypherlite",
-    "triples": {}
+    "triples": {
+      "defaults": true,
+      "additional": ["aarch64-unknown-linux-gnu"]
+    }
   },
   "scripts": {
-    "build": "napi build --release",
-    "build:debug": "napi build",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
     "test": "vitest run"
   },
   "devDependencies": {
