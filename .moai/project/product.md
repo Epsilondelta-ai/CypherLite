@@ -8,9 +8,11 @@
 
 **CypherLite**는 경량 임베디드 단일 파일 그래프 데이터베이스 라이브러리입니다. SQLite가 관계형 데이터베이스를 민주화한 것처럼, CypherLite는 그래프 데이터베이스를 누구나 쉽게 사용할 수 있도록 설계되었습니다.
 
-- **현재 상태**: 활성 개발 단계 (v1.0.0)
-- **주요 언어**: Rust 1.92+ (2024 edition)
+- **현재 상태**: 활성 개발 단계 (v1.2.0)
+- **주요 언어**: Rust 1.84+ (2024 edition, MSRV 1.84)
 - **파일 확장자**: `.cyl` (CypherLite 고유 형식)
+- **라이선스**: MIT OR Apache-2.0 (dual license)
+- **문서 웹사이트**: `docs-site/` (Nextra 3.x, 10개 언어 i18n)
 
 ---
 
@@ -138,9 +140,19 @@
 - `cypherlite-core` 크레이트 내 `plugin/` 모듈로 통합 제공
 
 **FFI 바인딩**
-- C 헤더 자동 생성 (cbindgen)
-- Python 바인딩 (PyO3)
-- Node.js 바인딩 (neon)
+- C 헤더 자동 생성 (cbindgen) - 구현 완료
+- Go 바인딩 (CGo) - 구현 완료
+- Python 바인딩 (PyO3) - 구현 완료
+- Node.js 바인딩 (napi-rs) - 구현 완료
+
+**문서화 및 배포 (v1.2.0)**
+- 전면 개편된 README.md (배지, Quick Start 4개 언어, 아키텍처)
+- CHANGELOG.md (v0.1~v1.2.0 전체 이력, Keep a Changelog 형식)
+- Nextra 3.x 기반 정적 문서 사이트 (`docs-site/`)
+- 10개 언어 i18n 지원 (en, zh, hi, es, fr, ar, bn, pt, ru, ko)
+- GitHub Pages 자동 배포 워크플로우
+- crates.io 게시 메타데이터 완비 (MIT OR Apache-2.0)
+- 빠른 시작 예제 (`examples/` 디렉토리: Rust + FFI 언어별 quickstart)
 
 ### 가치 제안
 
@@ -182,4 +194,18 @@
 - **채택**: LLM 에이전트 프레임워크 3개 이상에서 CypherLite 통합
 - **안정성**: v1.0 릴리즈 후 6개월간 크리티컬 버그 0건
 - **생태계**: 커뮤니티 기여 플러그인 5개 이상
-- **문서화**: 신규 개발자가 30분 내 첫 그래프 쿼리 실행 가능
+- **문서화**: 신규 개발자가 30분 내 첫 그래프 쿼리 실행 가능 (문서 사이트 기준)
+- **국제화**: 10개 언어 문서 제공으로 글로벌 개발자 접근성 확보
+
+---
+
+## 완료된 Phase (v1.2.0 기준)
+
+| Phase | 버전 | 주요 내용 | SPEC |
+|-------|------|-----------|------|
+| Phase 1-8 | v0.1~v0.8 | 스토리지, 쿼리, 시간, 서브그래프, 하이퍼엣지, 인라인 필터 | SPEC-DB-001~008 |
+| Phase 9 | v0.9 | CI/CD Pipeline (GitHub Actions) | SPEC-INFRA-001 |
+| Phase 10 | v1.0 | Plugin System (4가지 타입) | SPEC-PLUGIN-001 |
+| Phase 11 | v1.1 | Performance Optimization | SPEC-PERF-001 |
+| Phase 12 | v1.1 | FFI Bindings (C, Go, Python, Node.js) | SPEC-FFI-001~004 |
+| Phase 13 | v1.2 | Documentation, i18n & Static Website | SPEC-DOC-001 |

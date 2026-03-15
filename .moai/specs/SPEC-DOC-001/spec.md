@@ -5,7 +5,7 @@
 | **SPEC ID** | SPEC-DOC-001 |
 | **제목** | Documentation, Multi-Language i18n & Static Website (v1.2.0) |
 | **생성일** | 2026-03-15 |
-| **상태** | Planned |
+| **상태** | Completed |
 | **우선순위** | High |
 | **Phase** | 13 (Final) |
 | **대상 버전** | v1.2.0 |

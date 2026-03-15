@@ -10,31 +10,78 @@
 CypherLite/
 ├── Cargo.toml                    # 워크스페이스 루트 (멤버 크레이트 목록)
 ├── Cargo.lock                    # 의존성 잠금 파일 (버전 재현성 보장)
-├── README.md                     # 프로젝트 소개 및 빠른 시작 가이드
-├── LICENSE                       # 오픈소스 라이센스
+├── README.md                     # 프로젝트 소개 및 빠른 시작 가이드 (English, v1.2.0)
+├── CHANGELOG.md                  # 전체 버전 이력 (Keep a Changelog 형식, v0.1~v1.2.0)
+├── CONTRIBUTING.md               # 기여 가이드라인
+├── LICENSE-MIT                   # MIT 라이선스
+├── LICENSE-APACHE                # Apache-2.0 라이선스
 │
 ├── .github/
 │   ├── workflows/
-│   │   └── ci.yml                # CI/CD 파이프라인 (6 병렬 Job)
+│   │   ├── ci.yml                # CI/CD 파이프라인 (6 병렬 Job)
+│   │   └── docs.yml              # 문서 사이트 자동 배포 워크플로우 (GitHub Pages)
 │   └── dependabot.yml            # 의존성 자동 업데이트
 │
 ├── crates/                       # 멀티 크레이트 워크스페이스
 │   ├── cypherlite-core/          # 공통 타입, 에러 처리, 설정, 플러그인 시스템
 │   ├── cypherlite-storage/       # 파일 형식, 페이지 관리, WAL, B-트리
-│   └── cypherlite-query/         # 렉서, 파서, AST, 플래너, 실행기
+│   ├── cypherlite-query/         # 렉서, 파서, AST, 플래너, 실행기
+│   ├── cypherlite-ffi/           # C ABI FFI 바인딩 (cbindgen)
+│   ├── cypherlite-python/        # Python 바인딩 (PyO3)
+│   └── cypherlite-node/          # Node.js 바인딩 (napi-rs)
 │
-├── docs/                         # 설계 문서 및 연구 자료
+├── bindings/
+│   └── go/cypherlite/            # Go 바인딩 (CGo)
+│
+├── docs/                         # 설계 문서 및 다국어 번역
 │   ├── INDEX.md                  # 문서 목차 및 탐색 가이드
 │   ├── 00_master_overview.md     # 전체 아키텍처 마스터 문서
 │   ├── research/                 # 기술 조사 및 배경 연구
 │   │   ├── 01_existing_technologies.md
 │   │   ├── 02_cypher_rdf_temporal.md
 │   │   └── 03_graphrag_agent_usecases.md
-│   └── design/                   # 구현 설계 문서
-│       ├── 01_core_architecture.md
-│       ├── 02_storage_engine.md
-│       ├── 03_query_engine.md
-│       └── 04_plugin_architecture.md
+│   ├── design/                   # 구현 설계 문서
+│   │   ├── 01_core_architecture.md
+│   │   ├── 02_storage_engine.md
+│   │   ├── 03_query_engine.md
+│   │   └── 04_plugin_architecture.md
+│   └── i18n/                     # 다국어 README 번역 (9개 언어)
+│       ├── TRANSLATING.md        # 번역 기여 가이드
+│       ├── README.zh.md          # 中文
+│       ├── README.hi.md          # हिन्दी
+│       ├── README.es.md          # Español
+│       ├── README.fr.md          # Français
+│       ├── README.ar.md          # العربية (RTL 지원)
+│       ├── README.bn.md          # বাংলা
+│       ├── README.pt.md          # Português
+│       ├── README.ru.md          # Русский
+│       └── README.ko.md          # 한국어
+│
+├── docs-site/                    # Nextra 3.x 정적 문서 사이트
+│   ├── package.json              # Node.js 의존성 및 빌드 스크립트
+│   ├── next.config.mjs           # Next.js + i18n 설정 (10개 locale)
+│   ├── theme.config.tsx          # Nextra 테마 설정
+│   ├── tsconfig.json             # TypeScript 설정
+│   ├── pages/                    # MDX 문서 페이지
+│   │   ├── _meta.json            # 네비게이션 구조
+│   │   ├── index.mdx             # Landing page
+│   │   ├── getting-started/      # 언어별 빠른 시작 (Rust, Python, Go, Node.js)
+│   │   ├── api-reference/        # API 레퍼런스 (docs.rs 링크 + 바인딩 개요)
+│   │   ├── architecture/         # 5-Layer 아키텍처 개요
+│   │   ├── guides/               # Feature 가이드 (Temporal, Plugin, Subgraph, Hyperedge)
+│   │   ├── changelog.mdx         # CHANGELOG 렌더링
+│   │   └── contributing.mdx      # CONTRIBUTING 렌더링
+│   ├── public/
+│   │   └── og-image.png          # Open Graph 이미지
+│   └── styles/
+│       └── globals.css
+│
+├── examples/                     # 빠른 시작 예제
+│   ├── basic_crud.rs             # Rust 기본 CRUD 예제
+│   ├── knowledge_graph.rs        # GraphRAG 지식 그래프 예제
+│   ├── python_quickstart.py      # Python 바인딩 quickstart
+│   ├── go_quickstart.go          # Go 바인딩 quickstart
+│   └── node_quickstart.js        # Node.js 바인딩 quickstart
 │
 ├── tests/                        # 통합 테스트 (크레이트 경계 초월)
 │   ├── integration/
@@ -43,16 +90,10 @@ CypherLite/
 │   │   └── concurrency.rs        # 동시성 안전성 테스트
 │   └── fixtures/                 # 테스트용 데이터 파일
 │
-├── benches/                      # criterion 벤치마크
-│   ├── storage_bench.rs          # 스토리지 성능 측정
-│   ├── query_bench.rs            # 쿼리 처리 성능 측정
-│   └── concurrent_bench.rs       # 동시성 처리량 측정
-│
-└── examples/                     # 사용 예제
-    ├── basic_crud.rs             # 기본 CRUD 예제
-    ├── knowledge_graph.rs        # 지식 그래프 구축 예제
-    ├── temporal_queries.rs       # 시간 인식 쿼리 예제
-    └── agent_memory.rs           # LLM 에이전트 메모리 활용 예제
+└── benches/                      # criterion 벤치마크
+    ├── storage_bench.rs          # 스토리지 성능 측정
+    ├── query_bench.rs            # 쿼리 처리 성능 측정
+    └── concurrent_bench.rs       # 동시성 처리량 측정
 ```
 
 ---
@@ -230,19 +271,23 @@ crates/cypherlite-ffi/
 
 ---
 
-### cypherlite-python (Python 바인딩, 계획됨)
+### cypherlite-python (Python 바인딩, 완료)
 
 **역할**: PyO3를 통한 Python 네이티브 모듈 제공
 
-> 현재 미구현. cypherlite-ffi 완성 이후 Phase 12에서 구현 예정.
+**의존 크레이트**: `cypherlite-query`, `cypherlite-core`, `pyo3`
+
+**구현 완료**: SPEC-FFI-003 (Phase 12)
 
 ---
 
-### cypherlite-node (Node.js 바인딩, 계획됨)
+### cypherlite-node (Node.js 바인딩, 완료)
 
-**역할**: neon을 통한 Node.js 네이티브 모듈 제공
+**역할**: napi-rs를 통한 Node.js 네이티브 모듈 제공
 
-> 현재 미구현. cypherlite-ffi 완성 이후 Phase 12에서 구현 예정.
+**의존 크레이트**: `cypherlite-query`, `cypherlite-core`, `napi`, `napi-derive`
+
+**구현 완료**: SPEC-FFI-004 (Phase 12)
 
 ---
 
@@ -313,13 +358,19 @@ cypherlite-query ──→ cypherlite-storage ──→ cypherlite-core
   (query도 storage를 직접 참조)
 ```
 
-계획된 크레이트 (Phase 12 이후):
+추가 바인딩 크레이트 (Phase 12, 완료):
 
 ```
 cypherlite-node ──────────────────────────────────┐
 cypherlite-python ────────────────────────────────┤
                                                    ↓
                         cypherlite-query ──→ cypherlite-storage ──→ cypherlite-core
+```
+
+Go 바인딩 (`bindings/go/cypherlite/`):
+
+```
+bindings/go/cypherlite ──→ (CGo) ──→ cypherlite-ffi ──→ cypherlite-query ──→ ...
 ```
 
 **규칙**:
@@ -391,3 +442,65 @@ crates/cypherlite-ffi/
 | 에러 메시지 | 스레드 로컬 `RefCell<Option<CString>>` | 각 스레드가 독립적인 에러 컨텍스트 유지 |
 
 **테스트 결과**: 115 TDD 테스트 통과 (워크스페이스 전체 1,450 테스트)
+
+---
+
+## Phase 13 - Documentation, i18n & Static Website (v1.2.0, 완료)
+
+Phase 13에서 생성된 문서화 파일들 (SPEC-DOC-001):
+
+```
+CypherLite/
+├── README.md                             # 전면 개편 (배지, Quick Start 4개 언어, 아키텍처)
+├── CHANGELOG.md                          # Keep a Changelog 형식 (v0.1~v1.2.0)
+├── CONTRIBUTING.md                       # 기여 가이드라인
+├── LICENSE-MIT                           # MIT 라이선스
+├── LICENSE-APACHE                        # Apache-2.0 라이선스
+│
+├── .github/workflows/
+│   └── docs.yml                          # 문서 사이트 GitHub Pages 배포
+│
+├── docs/i18n/
+│   ├── TRANSLATING.md                    # 번역 기여 가이드
+│   ├── README.zh.md                      # 中文 번역
+│   ├── README.hi.md                      # हिन्दी 번역
+│   ├── README.es.md                      # Español 번역
+│   ├── README.fr.md                      # Français 번역
+│   ├── README.ar.md                      # العربية 번역 (RTL)
+│   ├── README.bn.md                      # বাংলা 번역
+│   ├── README.pt.md                      # Português 번역
+│   ├── README.ru.md                      # Русский 번역
+│   └── README.ko.md                      # 한국어 번역
+│
+├── docs-site/                            # Nextra 3.x 정적 문서 사이트
+│   ├── package.json
+│   ├── next.config.mjs                   # i18n 10개 locale 설정
+│   ├── theme.config.tsx
+│   ├── pages/
+│   │   ├── index.mdx                     # Landing page
+│   │   ├── getting-started/{rust,python,go,nodejs}.mdx
+│   │   ├── api-reference/index.mdx
+│   │   ├── architecture/index.mdx
+│   │   ├── guides/{temporal-queries,plugin-system,subgraphs,hyperedges}.mdx
+│   │   ├── changelog.mdx
+│   │   └── contributing.mdx
+│   └── public/og-image.png
+│
+└── examples/
+    ├── basic_crud.rs                     # Rust CRUD 예제
+    ├── knowledge_graph.rs                # GraphRAG 지식 그래프 예제
+    ├── python_quickstart.py              # Python 바인딩 quickstart
+    ├── go_quickstart.go                  # Go 바인딩 quickstart
+    └── node_quickstart.js                # Node.js 바인딩 quickstart
+```
+
+**핵심 변경 사항**:
+
+| 항목 | 이전 | 이후 |
+|------|------|------|
+| 버전 | 1.0.0 (각 크레이트) | 1.2.0 (전체 통일) |
+| 라이선스 | 미결정 | MIT OR Apache-2.0 |
+| README | 기본 구조 | 전면 개편 (배지, 4개 언어 Quick Start) |
+| 다국어 지원 | 없음 | 10개 언어 (README + 문서 사이트) |
+| 문서 사이트 | 없음 | Nextra 3.x (docs-site/) |
+| 예제 | 미완성 | Rust + Python/Go/Node.js quickstart |
