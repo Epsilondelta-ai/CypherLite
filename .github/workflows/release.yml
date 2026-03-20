@@ -101,7 +101,7 @@ jobs:
           manylinux: ${{ matrix.manylinux || 'auto' }}
 
       - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-wheel-${{ matrix.target }}
           path: dist/*.whl
@@ -181,7 +181,7 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
 
       - name: Upload addon artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: node-addon-${{ matrix.target }}
           path: crates/cypherlite-node/*.node
@@ -290,7 +290,7 @@ jobs:
           Compress-Archive -Path staging/* -DestinationPath ${{ matrix.archive }}
 
       - name: Upload archive artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-lib-${{ matrix.target }}
           path: ${{ matrix.archive }}
