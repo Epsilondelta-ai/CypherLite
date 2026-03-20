@@ -14,7 +14,7 @@ readme = "../../README.md"
 [dependencies]
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-bincode = "1"
+bincode = "3"
 
 [features]
 default = ["temporal-core"]
