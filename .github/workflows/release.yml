@@ -112,7 +112,7 @@ jobs:
     needs: python-build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: python-wheel-*
           merge-multiple: true
@@ -200,7 +200,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Download all addon artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: node-addon-*
           merge-multiple: true
@@ -331,7 +331,7 @@ jobs:
           echo "$NOTES" > release_notes.md
 
       - name: Download Go static library archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: go-lib-*
           merge-multiple: true
